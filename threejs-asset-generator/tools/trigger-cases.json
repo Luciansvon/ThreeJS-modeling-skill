@@ -1,0 +1,40 @@
+{
+  "min": 1.0,
+  "decoys": [
+    {
+      "name": "gltf-model-loader",
+      "description": "Load, inspect and display existing glTF and GLB model files in Three.js with GLTFLoader, Draco and KTX2 compression, embedded animation clips and the materials stored in the file."
+    },
+    {
+      "name": "threejs-blender-bridge",
+      "description": "Drive Blender through its Python API to model, UV unwrap, bake textures and export GLB assets for Three.js, with headless renders for review."
+    },
+    {
+      "name": "three-scene-ui",
+      "description": "Set up Three.js scenes around existing meshes: cameras, OrbitControls, lights, shadows, postprocessing and bloom, a React Three Fiber canvas and a settings panel."
+    },
+    {
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults."
+    },
+    {
+      "name": "xlsx",
+      "description": "Use this skill any time a spreadsheet file is the primary input or output: open, read, edit or fix an xlsx or csv file, compute formulas, format, chart and clean messy tabular data."
+    }
+  ],
+  "cases": [
+    { "prompt": "Write a low-poly procedural tree generator in Three.js with a seed slider", "expect": "$self" },
+    { "prompt": "I need a rigged low poly humanoid biped with a walk animation made from code", "expect": "$self" },
+    { "prompt": "Generate a flat-shaded vertex color dragon with mirrored wings, deterministic from a seed", "expect": "$self" },
+    { "prompt": "Here is a reference image of a robot, build it as a procedural low-poly mesh that matches the silhouette", "expect": "$self" },
+    { "prompt": "Export my procedural asset as standalone Three.js code that gives the same mesh", "expect": "$self" },
+    { "prompt": "Compose a village from generated houses and trees with deterministic placement", "expect": "$self" },
+    { "prompt": "Load a .glb model with GLTFLoader and play its embedded animation", "expect": "gltf-model-loader" },
+    { "prompt": "Open Blender, bake the textures and export a GLB for Three.js", "expect": "threejs-blender-bridge" },
+    { "prompt": "Add OrbitControls, bloom postprocessing and soft shadows to my existing scene", "expect": "three-scene-ui" },
+    { "prompt": "Design a landing page with a distinctive typographic style", "expect": "frontend-design" },
+    { "prompt": "Summarize the monthly totals in this spreadsheet and fix the formulas", "expect": "xlsx" },
+    { "prompt": "What is the weather like in Jakarta today", "expect": null },
+    { "prompt": "Translate this paragraph into French", "expect": null }
+  ]
+}

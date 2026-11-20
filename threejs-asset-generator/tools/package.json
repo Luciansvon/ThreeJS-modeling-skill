@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "check": "tsx check.ts",
+    "validate": "tsx validate-skills.ts",
+    "trigger": "tsx trigger-check.ts",
+    "test": "tsx run-tests.ts"
+  }
+}
