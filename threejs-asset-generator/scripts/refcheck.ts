@@ -51,14 +51,68 @@ export function silhouette(t: Tris, view: View, res = RES) {
   return frameMask({ w: S, h: S, data }, res);
 }
 
-/** Foreground mask from RGBA bytes. Transparent image: alpha. Opaque image: pixels that differ from the corner background colour by more than tol (RGB distance). */
-export function maskFromRGBA(rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, o: { tol?: number; alphaCut?: number } = {}): Mask {
+/** Crops a sub-rectangle out of an RGBA image (used for multi-view turnaround sheets). */
+export function cropRgba(rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, x0: number, y0: number, cw: number, ch: number) {
+  const out = new Uint8Array(cw * ch * 4);
+  for (let y = 0; y < ch; y++) {
+    const sy = Math.min(h - 1, Math.max(0, y0 + y));
+    for (let x = 0; x < cw; x++) {
+      const sx = Math.min(w - 1, Math.max(0, x0 + x));
+      const si = (sy * w + sx) * 4, di = (y * cw + x) * 4;
+      out[di] = rgba[si]; out[di + 1] = rgba[si + 1]; out[di + 2] = rgba[si + 2]; out[di + 3] = rgba[si + 3];
+    }
+  }
+  return { rgba: out, w: cw, h: ch };
+}
+
+/** Splits an even cols x rows turnaround sheet into row-major RGBA tiles. */
+export function splitGridSheet(rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, cols: number, rows: number) {
+  const tw = Math.floor(w / cols), th = Math.floor(h / rows);
+  const tiles: { rgba: Uint8Array; w: number; h: number }[] = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) tiles.push(cropRgba(rgba, w, h, c * tw, r * th, tw, th));
+  return tiles;
+}
+
+/** Downsamples an RGBA buffer to fit inside maxDim x maxDim (nearest-neighbor; preserves crisp edges). */
+export function fitRgba(rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, maxDim = 512) {
+  if (w <= maxDim && h <= maxDim) return { rgba: rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba), w, h };
+  const s = maxDim / Math.max(w, h), ow = Math.max(1, Math.round(w * s)), oh = Math.max(1, Math.round(h * s));
+  const out = new Uint8Array(ow * oh * 4);
+  for (let y = 0; y < oh; y++) {
+    const sy = Math.min(h - 1, Math.floor((y + 0.5) / s));
+    for (let x = 0; x < ow; x++) {
+      const sx = Math.min(w - 1, Math.floor((x + 0.5) / s));
+      const si = (sy * w + sx) * 4, di = (y * ow + x) * 4;
+      out[di] = rgba[si]; out[di + 1] = rgba[si + 1]; out[di + 2] = rgba[si + 2]; out[di + 3] = rgba[si + 3];
+    }
+  }
+  return { rgba: out, w: ow, h: oh };
+}
+
+/** Foreground mask from RGBA bytes. Transparent image: alpha. Opaque image: border flood-fill from median border colour (prevents light interior patches from poking holes), or flat threshold when flood=false. */
+export function maskFromRGBA(rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, o: { tol?: number; alphaCut?: number; flood?: boolean } = {}): Mask {
   const data = new Uint8Array(w * h), tol = o.tol ?? 40, border: number[] = [];
   for (let x = 0; x < w; x++) border.push(x, (h - 1) * w + x);                      // background = per-channel median of the whole border,
   for (let y = 1; y < h - 1; y++) border.push(y * w, y * w + w - 1);               // so one stray corner pixel or a watermark cannot skew it
   const med = (k: number) => { const v = border.map((p) => rgba[p * 4 + k]).sort((a, b) => a - b); return v[v.length >> 1]; };
   const transparent = med(3) < 250, bg = [med(0), med(1), med(2)];
-  for (let i = 0; i < w * h; i++) data[i] = transparent ? (rgba[i * 4 + 3] >= (o.alphaCut ?? 128) ? 1 : 0) : dist([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]], bg) > tol ? 1 : 0;
+  if (transparent || o.flood === false) {
+    for (let i = 0; i < w * h; i++) data[i] = transparent ? (rgba[i * 4 + 3] >= (o.alphaCut ?? 128) ? 1 : 0) : dist([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]], bg) > tol ? 1 : 0;
+    return keepLargest({ w, h, data });
+  }
+  // Border flood-fill: mark exterior pixels close to bg; everything enclosed stays foreground (solid silhouette even with cream bellies/faces)
+  const isBg = new Uint8Array(w * h), q = new Int32Array(w * h);
+  let head = 0, tail = 0;
+  const nearBg = (p: number) => dist([rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2]], bg) <= tol;
+  for (const p of border) if (!isBg[p] && nearBg(p)) { isBg[p] = 1; q[tail++] = p; }
+  while (head < tail) {
+    const p = q[head++], x = p % w, y = (p - x) / w;
+    if (x > 0 && !isBg[p - 1] && nearBg(p - 1)) { isBg[p - 1] = 1; q[tail++] = p - 1; }
+    if (x + 1 < w && !isBg[p + 1] && nearBg(p + 1)) { isBg[p + 1] = 1; q[tail++] = p + 1; }
+    if (y > 0 && !isBg[p - w] && nearBg(p - w)) { isBg[p - w] = 1; q[tail++] = p - w; }
+    if (y + 1 < h && !isBg[p + w] && nearBg(p + w)) { isBg[p + w] = 1; q[tail++] = p + w; }
+  }
+  for (let i = 0; i < w * h; i++) data[i] = isBg[i] ? 0 : 1;
   return keepLargest({ w, h, data });
 }
 /** Drops specks: keeps only the biggest 8-connected blob (a shadow or watermark will not stretch the frame). */

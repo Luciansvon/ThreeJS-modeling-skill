@@ -2,11 +2,11 @@
 // THE one command: validate-skills + trigger-check + run-tests, then one combined verdict.
 // --strict is passed to run-tests: a test that is skipped because `three` is not installed counts as a failure.
 // Exit 0 = everything ran and passed (skips are reported as UNVERIFIED), 2 = something failed, 1 = a tool broke the output contract.
-import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
-import { emit, MARKER, parseResult, type Gate, type Result } from '../scripts/result';
+import { fileURLToPath } from 'node:url';
+import { emit, MARKER, parseResult, spawnTsx, type Gate, type Result } from '../scripts/result';
 
-const here = dirname(new URL(import.meta.url).pathname), root = resolve(here, '..');
+const here = dirname(fileURLToPath(import.meta.url)), root = resolve(here, '..');
 const strict = process.argv.includes('--strict');
 const steps: { name: string; file: string; args: string[] }[] = [
   { name: 'validate-skills', file: 'validate-skills.ts', args: [root] },
@@ -18,7 +18,7 @@ const gates: Gate[] = [], results: Record<string, Result | null> = {};
 let broken = false;
 for (const s of steps) {
   console.log(`\n=== ${s.name} ===`);
-  const r = spawnSync('tsx', [join(here, s.file), ...s.args], { cwd: here, encoding: 'utf8', timeout: 600_000 });
+  const r = spawnTsx(join(here, s.file), s.args, { cwd: here, timeout: 600_000 });
   process.stdout.write((r.stdout ?? '').split('\n').filter((l) => !l.startsWith(MARKER)).join('\n'));
   if (r.stderr) process.stderr.write(r.stderr);
   const res = parseResult(r.stdout ?? '');

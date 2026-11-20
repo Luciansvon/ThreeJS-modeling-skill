@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createPRNG } from './prng';
 import { resolveParams } from './params';
 import { dragonParameters, buildDragonKernel } from './dragonKernel';
-import { detailParam, lodLevel, lodPick } from './lod';
+import { detailParam, lodLevel, lodPick, lodRadiusScale } from './lod';
 import { qaGates, normalizeParts, type Parts } from '../scripts/qacheck';
 
 // 0. the helpers: detail 0 is a real level (?? not ||), junk falls back to full detail
@@ -40,4 +40,13 @@ assert.deepEqual(dragon(7, { hasSpikes: false, detail: 1 }).wingL, dragon(7).win
 // 4. spikes follow the ring count (7, 4, 2 spikes of 16 triangles), legs lose their knee only at the lowest level
 assert.deepEqual([2, 1, 0].map((d) => (stats(dragon(7, { detail: d })).parts as Record<string, number>).spikes), [112, 64, 32]);
 assert.deepEqual([2, 1, 0].map((d) => (stats(dragon(7, { detail: d })).parts as Record<string, number>).legs), [60, 48, 24]);
+// 5. lodRadiusScale keeps polygon bounding extents identical across 8 -> 6 -> 4 sides (and is 1,1 at refSides)
+assert.deepEqual(lodRadiusScale(8, 8), { rx: 1, rz: 1 }, 'identity at refSides');
+for (const sides of [6, 4]) {
+  const sc = lodRadiusScale(sides, 8);
+  let mx = 0, mz = 0;
+  for (let j = 0; j < sides; j++) { const th = (j / sides) * Math.PI * 2 + Math.PI / sides; mx = Math.max(mx, Math.abs(Math.sin(th) * sc.rx)); mz = Math.max(mx, Math.abs(Math.cos(th) * sc.rz)); }
+  const ref = Math.cos(Math.PI / 8);
+  assert.ok(Math.abs(mx - ref) < 1e-9 && Math.abs(mz - ref) < 1e-9, `${sides}-gon compensated bounds match 8-gon`);
+}
 console.log('LOD OK');

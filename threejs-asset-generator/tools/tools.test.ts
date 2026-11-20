@@ -2,17 +2,17 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { MARKER, resultLine, parseResult } from '../scripts/result';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MARKER, resultLine, parseResult, spawnTsx } from '../scripts/result';
 import { parseFrontmatter, validateSkill, mentions, tokensOf, findSkills } from './validate-skills';
 import { tokenize, stem, rank, pick } from './trigger-check';
 import { missingThree } from './run-tests';
 
-const here = new URL('.', import.meta.url).pathname;
+const here = dirname(fileURLToPath(import.meta.url));
 const tmp = () => mkdtempSync(join(tmpdir(), 'tools-test-'));
 const put = (root: string, rel: string, text: string) => { const p = join(root, rel); mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, text); };
-const tsx = (file: string, args: string[], cwd = here) => spawnSync('tsx', [join(here, file), ...args], { cwd, encoding: 'utf8' });
+const tsx = (file: string, args: string[], cwd = here) => spawnTsx(join(here, file), args, { cwd });
 
 // ---- output contract
 {

@@ -5,6 +5,7 @@
 // Tokens are estimated as bytes / 4, the same rough count as HANDOFF.md.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { emit, type Gate } from '../scripts/result';
 
 export type Issue = { level: 'error' | 'warn'; check: string; file: string; msg: string };
@@ -105,7 +106,7 @@ export function validateSkill(dir: string, limits: Limits = DEFAULT_LIMITS) {
   if (metrics.skillLines > limits.maxLines) add('error', 'budget', skillFile, `SKILL.md has ${metrics.skillLines} lines, max ${limits.maxLines}`);
 
   // 3. references: Contents line, links, mentions
-  const mdFiles = walk(root).filter((f) => f.endsWith('.md') && !/(^|\/)HANDOFF\.md$/.test(f));
+  const mdFiles = walk(root).filter((f) => f.endsWith('.md') && !/(^|[\\/])HANDOFF\.md$/.test(f));
   const refDir = join(root, 'references'), refs = mdFiles.filter((f) => dirname(f) === refDir).sort();
   metrics.references = refs.length;
   for (const r of refs) {
@@ -158,7 +159,7 @@ export function main(argv: string[]): number {
     else if (a.startsWith('--')) { console.error(`unknown option ${a}`); return 1; } else targets.push(a);
   }
   if (Object.values(limits).some((v) => !Number.isFinite(v))) { console.error('limit options need a number'); return 1; }
-  const dirs = (targets.length ? targets : [join(dirname(new URL(import.meta.url).pathname), '..')]).flatMap(findSkills);
+  const dirs = (targets.length ? targets : [join(dirname(fileURLToPath(import.meta.url)), '..')]).flatMap(findSkills);
   if (!dirs.length) { console.error('no skill folder (a directory with SKILL.md) found'); return 1; }
   const gates: Gate[] = [], all: Issue[] = [], skills: unknown[] = [];
   for (const d of dirs) {
@@ -173,4 +174,4 @@ export function main(argv: string[]): number {
   return emit({ tool: 'validate-skills', ok: errors === 0, gates, errors, warnings: all.length - errors, skills, issues: all });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) process.exit(main(process.argv.slice(2)));
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) process.exit(main(process.argv.slice(2)));

@@ -75,11 +75,13 @@ Rules:
 How to add it (`src/lod.ts`):
 
 ```ts
-import { detailParam, lodLevel, lodPick } from './lod';
+import { detailParam, lodLevel, lodPick, lodRadiusScale } from './lod';
 export const dragonParameters: ParamDef[] = [ /* ... */ detailParam ];      // default 2
 const d = lodLevel(p.detail);                                               // ?? not ||: 0 is a real level
-const spine = sampleSpline(pts, lodPick(d, [1, 2, 4]));                    // [low, medium, full]
-const body = tubeTris(spine, radius, lodPick(d, [4, 6, 8]));
+const sides = lodPick(d, [4, 6, 8]);                                        // [low, medium, full]
+const { rx, rz } = lodRadiusScale(sides, 8);                                // keeps X/Z bounds within L3 5% when dropping 8 -> 6 -> 4 sides
+const spine = sampleSpline(pts, lodPick(d, [1, 2, 4]));
+const body = tubeTris(spine, radius, sides);
 ```
 
 Thin the middle, keep the ends and extremes: the lowest dragon level keeps the same head, tail and wing tips, with a 4-sided body and a straight leg. What the dragon gives: 388 -> 204 -> 96 triangles (ratios 0.53, 0.47), bounds within 1.1%.

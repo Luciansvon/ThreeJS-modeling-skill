@@ -1,6 +1,6 @@
-# Handoff: threejs-asset-generator v3 → v4 (setelah Fase 4 dan 5)
+# Handoff: threejs-asset-generator v3 → v4.1 (setelah Fase 4, 5, 6-awal & patch uji lapangan)
 
-Tanggal: 18 Nov 2026. Status: **Fase 0, 1, 2, 3, 4, dan 5 selesai. Lanjut Fase 6, lalu 7, 8.**
+Tanggal: 20 Nov 2026. Status: **Fase 0, 1, 2, 3, 4, 5, dan patch lapangan v4.1 (PNG murni tanpa `sharp`, flood-fill + turnaround sheet, `lodRadiusScale`, `rig-check` R1–R6, panduan studio HTML, `package.json`, kompatibilitas Windows) selesai. Lanjut Fase 7 (recipe) dan 8 (packaging akhir).**
 
 ## Tujuan
 Adopsi metodologi [EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-skills) (MIT, v1.3.2, commit `9e7e04a`) ke skill `threejs-asset-generator`, tanpa menjadikan Blender dependensi.
@@ -66,8 +66,19 @@ Adopsi metodologi [EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-sk
 4. **Tube dengan jumlah sisi ganjil tidak simetris cermin** bila cincin mulai di sumbu X (spine horizontal): segi-7 punya vertex di +X, sisi datar di −X. `dragonKernel.ts` memakai 7 untuk `body`; sekarang 8. Ini mengubah bentuk contoh itu sedikit (bukan hanya tes). Dikunci oleh `src/qa.kernel.test.ts`.
 5. Sapuan 12 produsen mesh tertutup (`boxTris`, `taperedBoxTris`, `extrudeTris`, `loftTris`, `footTris`, `handTris`, `eyeTris`, `noseTris`, `earTris`, `sleeveTris`, `tubeTris`, `spikeTris`): semuanya lulus Q1–Q5, tidak ada false positive.
 
+**Patch Uji Lapangan v4.1 (20 Nov 2026 — temuan dari pengujian nyata karakter rakun chibi):**
+- **PNG murni tanpa `sharp` (`scripts/png.ts`):** Penulis PNG RGBA + pengubah skala nearest-neighbor + pembaca PNG 8-bit non-interlaced menggunakan `node:zlib` bawaan. `qa-asset.ts` kini selalu menulis `review.png`, `ref-compare.ts` selalu menulis `diff-<view>.png`, dan `ref-intake.ts` dapat membaca/menulis PNG tanpa harus memasang `sharp` (`sharp` tetap didukung sebagai opsi untuk JPEG/WebP).
+- **Turnaround sheet & siluet flood-fill (`scripts/refcheck.ts`, `scripts/ref-intake.ts`):** `maskFromRGBA` kini memakai border flood-fill secara default agar area terang di dalam objek (seperti perut krem pada latar krem) tidak berlubang (`--no-flood` untuk mode lama). `ref-intake.ts` mendukung `--sheet <file> --grid 3x2 --views front,back,top,bottom,side,34` untuk memotong lembar karakter multi-sudut otomatis.
+- **Kompensasi radius LOD (`src/lod.ts`):** Menambahkan `lodRadiusScale(sides, refSides)` agar penurunan sisi poligon 8 → 6 → 4 menjaga lebar/kedalaman batas bentuk (mencegah kegagalan gerbang `L3`). Diuji di `src/lod.test.ts`.
+- **Gerbang rig, klip & ekspresi (`scripts/rigcheck.ts`, `scripts/rig-check.ts`, `scripts/rigcheck.test.ts`, `references/rig-check.md`):** Pemeriksa murni tanpa `three` untuk R1 hierarchy · R2 rest-pose · R3 clips (memastikan `RefPose` tidak bocor ke ekspor) · R4 tracks & in-place horizontal drift · R5 static expression mapping · R6 slide clearance (`dropPct >= 22%`, `minY >= -0.025m`).
+- **Panduan studio pratinjau HTML (`references/studio-preview.md`) & akar `package.json`:** Menambahkan panduan pola studio HTML interaktif (kamera 6 sudut, kontras HUD di latar terang, uji bolak-balik GLB di RAM) serta `package.json` akar dengan skrip `npm run check|qa|stats|export-glb|rig-check|ref-intake|ref-compare`.
+- **Kompatibilitas Windows (`scripts/result.ts` `spawnTsx`, `fileURLToPath`):** Memperbaiki `new URL(...).pathname` (bug garis miring awal di Windows), pola regex `HANDOFF.md` di `validate-skills.ts`, dan pemanggilan `tsx` lintas OS tanpa shell-quoting bug pada argumen JSON.
+- **Hijau di Windows (Node v24 + `npx tsx`):** `validate-skills` 0 error 0 warning (SKILL.md 202 baris, ≈3.965 token, 15 referensi); `trigger-check` 13/13; `run-tests` **11 lulus, 0 gagal, 1 skip** (`src/detailThree.test.ts` karena `three` belum terpasang); `check` exit 0.
+
 ## Cara menjalankan
 ```
+tsx scripts/rig-check.ts --meta char_metadata.json
+tsx scripts/ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json
 tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop [--lods]
 tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb
 tsx tools/check.ts                 # semua, satu verdict

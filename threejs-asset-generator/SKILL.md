@@ -27,6 +27,8 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 | Code export, Three.js versions (§11, §12) | `references/export.md` | `src/fingerprint.ts` |
 | A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts` |
 | Is it too heavy, platform budget, LOD `detail` (§17) | `references/budget.md` | `scripts/mesh-stats.ts`, `src/lod.ts` |
+| Rig, animation clips, drift, expressions (§18) | `references/rig-check.md` | `scripts/rig-check.ts` |
+| Interactive browser preview studio for textured/rigged assets | `references/studio-preview.md` | |
 | Complete small example | `references/examples.md` | |
 | Before saying an asset is done: QA gates, review image (§13) | `references/qa-gates.md` | `scripts/qa-asset.ts` |
 
@@ -193,4 +195,8 @@ Run `qa-asset.ts` first, then `npx tsx scripts/export-glb.ts --module ./kernel.t
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
-Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop` (or `--tris tris.json --meta meta.json --glb asset.glb`). It counts triangles, GPU vertices (3 x triangles, flat non-indexed), draw calls, materials, textures, bones and GLB size against the platform table, and says what it could not check. `--lods` builds `detail` 2, 1, 0 and checks about half the triangles per level, the same parts, bounds and pivot, determinism. Add LOD with `detailParam` from `src/lod.ts`: default 2 must leave the existing asset unchanged. The numbers are counted, not measured on a GPU: say so. Details: `references/budget.md`.
+Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop` (or `--tris tris.json --meta meta.json --glb asset.glb`). It counts triangles, GPU vertices (3 x triangles, flat non-indexed), draw calls, materials, textures, bones and GLB size against the platform table, and says what it could not check. `--lods` builds `detail` 2, 1, 0 and checks about half the triangles per level, the same parts, bounds and pivot, determinism. Add LOD with `detailParam` and `lodRadiusScale` from `src/lod.ts`: default 2 must leave the existing asset unchanged. The numbers are counted, not measured on a GPU: say so. Details: `references/budget.md`.
+
+## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
+
+Run `npx tsx scripts/rig-check.ts --meta char_metadata.json` to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & in-place horizontal drift · R5 static expression mapping · R6 slide clearance. JSON checks do not verify visual textures or engine-native import: inspect textured/animated characters in a browser studio (`references/studio-preview.md`). Details: `references/rig-check.md`.

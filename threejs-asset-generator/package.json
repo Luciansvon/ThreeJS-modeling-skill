@@ -1,0 +1,27 @@
+{
+  "name": "threejs-asset-generator",
+  "version": "4.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
+  "scripts": {
+    "check": "tsx tools/check.ts",
+    "check:strict": "tsx tools/check.ts --strict",
+    "validate": "tsx tools/validate-skills.ts",
+    "trigger": "tsx tools/trigger-check.ts",
+    "test": "tsx tools/run-tests.ts",
+    "qa": "tsx scripts/qa-asset.ts",
+    "stats": "tsx scripts/mesh-stats.ts",
+    "export-glb": "tsx scripts/export-glb.ts",
+    "rig-check": "tsx scripts/rig-check.ts",
+    "ref-intake": "tsx scripts/ref-intake.ts",
+    "ref-compare": "tsx scripts/ref-compare.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "three": "^0.180.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.5"
+  }
+}

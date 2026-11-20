@@ -4,12 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { qaGates, determinismGates, normalizeParts, edgeReport, symmetryGap, degenerateTris, signedVolume, type Parts, type QAOptions } from './qacheck';
 import { renderSheet } from './review';
-import { parseResult } from './result';
+import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 const gateOf = (parts: Parts, id: string, o: QAOptions = {}) => { const g = qaGates(parts, o).gates.find((x) => x.gate.startsWith(id)); assert.ok(g, `gate ${id} missing`); return g!; };
 const flipAll = (t: number[]) => { const o = t.slice(); for (let i = 0; i < o.length; i += 9) for (let k = 0; k < 3; k++) { o[i + 3 + k] = t[i + 6 + k]; o[i + 6 + k] = t[i + 3 + k]; } return o; };   // swap vertices 1 and 2
 const cube = box(-0.5, 0, -0.5, 0.5, 1, 0.5);
@@ -84,7 +85,7 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
 
 // 7. the CLI end to end: exit codes and the last-line contract
 {
-  const run = (...a: string[]) => { const r = spawnSync('tsx', [join(here, 'qa-asset.ts'), ...a], { cwd: here, encoding: 'utf8', timeout: 120_000 }); return { code: r.status, res: parseResult(r.stdout ?? ''), out: r.stdout ?? '' }; };
+  const run = (...a: string[]) => { const r = spawnTsx(join(here, 'qa-asset.ts'), a, { cwd: here, timeout: 120_000 }); return { code: r.status, res: parseResult(r.stdout ?? ''), out: r.stdout ?? '' }; };
   const out = mkdtempSync(join(tmpdir(), 'qa-'));
   const crate = join(here, 'fixtures/crate.qa.ts');
 

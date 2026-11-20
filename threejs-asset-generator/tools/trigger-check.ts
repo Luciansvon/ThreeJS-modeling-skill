@@ -13,6 +13,7 @@
 // expect null = no skill should trigger. "$self" = the skill folder that contains tools/.
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { emit, type Gate } from '../scripts/result';
 import { findSkills, parseFrontmatter } from './validate-skills';
 
@@ -75,7 +76,7 @@ export function loadSkillDocs(dirs: string[]): Doc[] {
 }
 
 export function main(argv: string[]): number {
-  const here = dirname(new URL(import.meta.url).pathname), self = resolve(here, '..');
+  const here = dirname(fileURLToPath(import.meta.url)), self = resolve(here, '..');
   let casesFile = join(here, 'trigger-cases.json'), minArg: number | null = null, verbose = false;
   const skillDirs: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -108,4 +109,4 @@ export function main(argv: string[]): number {
   return emit({ tool: 'trigger-check', ok: failed === 0, gates, failed, min, competitors: docs.map((d) => d.name), cases: rows });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) process.exit(main(process.argv.slice(2)));
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) process.exit(main(process.argv.slice(2)));

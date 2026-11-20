@@ -39,16 +39,16 @@ What was adapted from `EL4CTEO/blender-skills` (re-implemented independently in 
 
 ## Current Status
 
-Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 18, 2026):
+Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 20, 2026 — **v4.1**):
 
-- **Completed:** **Phases 0, 1, 2, 3, 4, and 5**
+- **Completed:** **Phases 0, 1, 2, 3, 4, 5, plus v4.1 field-test patch & rig/clip validator**
   - **Phases 0–1 (Structure):** Trimmed `SKILL.md` into a concise router, moved builder modules to `src/`, and split detailed guides into `references/`.
-  - **Phase 2 (Tooling):** Added unified runner `tools/check.ts` (`validate-skills`, `trigger-check`, and `run-tests`).
-  - **Phase 3 (QA Gates & Visual Review):** Added pure triangle-array QA gates (`qacheck.ts`) and a 2x2 orthographic software renderer (`review.ts`, `qa-asset.ts`).
-  - **Phase 4 (Budgets & LOD):** Added platform budget & LOD checks (`budget.ts`, `mesh-stats.ts`) and `detail`-level LOD helpers (`src/lod.ts`).
+  - **Phase 2 (Tooling):** Added unified runner `tools/check.ts` (`validate-skills`, `trigger-check`, and `run-tests`) with cross-platform `spawnTsx` and Windows path support.
+  - **Phase 3 (QA Gates & Visual Review):** Added pure triangle-array QA gates (`qacheck.ts`), a 2x2 orthographic software renderer (`review.ts`, `qa-asset.ts`), and zero-dependency pure-Node PNG writing (`scripts/png.ts`, no `sharp` required for `review.png` or `diff-*.png`).
+  - **Phase 4 (Budgets & LOD):** Added platform budget & LOD checks (`budget.ts`, `mesh-stats.ts`), `detail`-level LOD helpers, and `lodRadiusScale` polygon bounds compensation (`src/lod.ts`).
   - **Phase 5 (GLB Export):** Added pure JS/TS `.glb` writer/reader and CLI (`scripts/glb.ts`, `scripts/export-glb.ts`).
+  - **v4.1 Field-Test Patch:** Added border flood-fill masking and `--sheet --grid` turnaround sheet splitting in `scripts/refcheck.ts` / `scripts/ref-intake.ts`, pure JSON rig/clip/expression/slide validator (`scripts/rig-check.ts`, R1–R6, `references/rig-check.md`), interactive HTML studio guide (`references/studio-preview.md`), and root `threejs-asset-generator/package.json`.
 - **Pending:**
-  - **Phase 6:** `rig-check` and `clip-check`
   - **Phase 7:** Reusable asset recipes
   - **Phase 8:** Final packaging (`AGENTS.md`, `CLAUDE.md`, description tuning, and install targets)
 
@@ -62,12 +62,13 @@ ThreeJS-modeling-skill/
 ├── THIRD_PARTY_NOTICES.md           # Verbatim MIT License notice for EL4CTEO/blender-skills
 ├── .gitignore                       # Ignored dependencies and generated outputs
 ├── .gitattributes                   # Consistent LF line endings
-└── threejs-asset-generator/         # Core skill package (65 files)
-    ├── SKILL.md                     # Main router and conventions
-    ├── HANDOFF.md                   # Detailed progress log (Phases 0–5) and unverified notes
-    ├── references/                  # 13 topic guides (geometry, look, QA, budgets, GLB, etc.)
-    ├── src/                         # 24 builder modules, helpers, and unit tests
-    ├── scripts/                     # 17 CLI scripts & tests (QA, review, stats, GLB export)
+└── threejs-asset-generator/         # Core skill package (72 files)
+    ├── package.json                 # Dependencies (tsx, three, optional sharp) & npm scripts
+    ├── SKILL.md                     # Main router and conventions (202 lines, ~3965 tokens)
+    ├── HANDOFF.md                   # Detailed progress log (v4.1) and unverified notes
+    ├── references/                  # 15 topic guides (geometry, look, QA, budgets, GLB, rig-check, studio-preview)
+    ├── src/                         # 24 builder modules, LOD helpers, and unit tests
+    ├── scripts/                     # 23 CLI scripts, fixtures & tests (QA, PNG, review, stats, GLB export, rig-check)
     └── tools/                       # 7 validation, trigger-check, and test-runner scripts
 ```
 
@@ -75,23 +76,29 @@ ThreeJS-modeling-skill/
 
 ## Usage
 
-Run commands from inside `threejs-asset-generator/` (requires **Node.js** and **`tsx`**):
+Install dependencies once inside `threejs-asset-generator/` (`npm install`, optional `sharp` only needed for JPEG/WebP references) and run commands from inside `threejs-asset-generator/`:
 
 ```bash
-# Run skill validation, trigger checks, and pure unit tests
-tsx tools/check.ts
+# Run skill validation, trigger checks, and pure unit tests (11 pass, 1 skip without three)
+npx tsx tools/check.ts
 
 # Strict mode (treats skipped `three`-dependent tests as failures)
-tsx tools/check.ts --strict
+npx tsx tools/check.ts --strict
 
-# Run QA gates and render a 4-panel preview sheet (review.png)
-tsx scripts/qa-asset.ts --module ./kernel.ts --export buildXTris --symmetric
+# Intake a multi-view turnaround sheet (border flood-fill on by default)
+npx tsx scripts/ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json
+
+# Run QA gates and render a 4-panel preview sheet (review.png, zero external deps)
+npx tsx scripts/qa-asset.ts --module ./kernel.ts --export buildXTris --symmetric
 
 # Check triangle/memory budgets and LOD ratios
-tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop
+npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop --lods
+
+# Validate character rig hierarchy, clips, drift, expressions & slide clearance
+npx tsx scripts/rig-check.ts --meta char_metadata.json
 
 # Export a QA-verified asset to .glb
-tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb
+npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb
 ```
 
 See [`references/`](./threejs-asset-generator/references/) and fixture templates (`scripts/fixtures/crate.qa.ts`, `scripts/fixtures/dragon.qa.ts`) for parameter schemas and `@@RESULT` JSON output details.

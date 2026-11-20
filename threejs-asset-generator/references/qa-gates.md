@@ -4,7 +4,7 @@ Reference for `threejs-asset-generator`. Read it before you tell the user an ass
 
 Contents: §13 Run the gates · The gates (Q1 to Q10) · Reading `review.png` · The "Done" rule and report · What the gates do not cover
 
-Scripts (run them, do not read them): `scripts/qa-asset.ts`; library `scripts/qacheck.ts` (gates), `scripts/review.ts` (renderer); tests `scripts/qacheck.test.ts`, `src/qa.kernel.test.ts`. Needs `tsx`; `sharp` only for the PNG. Same output contract as the other scripts: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
+Scripts (run them, do not read them): `scripts/qa-asset.ts`; library `scripts/qacheck.ts` (gates), `scripts/review.ts` (renderer), `scripts/png.ts` (pure-Node PNG writer); tests `scripts/qacheck.test.ts`, `src/qa.kernel.test.ts`. Needs `tsx` only (`review.png` is written directly with `node:zlib`, no `sharp` required). Same output contract as the other scripts: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 
 ## 13. Run the gates
 

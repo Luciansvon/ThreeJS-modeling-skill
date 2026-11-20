@@ -4,13 +4,14 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PROFILES, textureMiB, assetStats, budgetGates, lodGates, type Stats } from './budget';
 import { normalizeParts, type Parts } from './qacheck';
-import { parseResult } from './result';
+import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
 import { buildDragon } from './fixtures/dragon.qa';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 const base: Stats = { triangles: 100, gpuVertices: 300, meshes: 1, drawCalls: 1, drawCallsExact: true, materials: 1, bones: null, textures: [], textureMiB: 0 };
 const gate = (s: Partial<Stats>, id: string, o: Parameters<typeof budgetGates>[1] = {}) => { const g = budgetGates({ ...base, ...s }, o).gates.find((x) => x.gate.startsWith(id)); assert.ok(g, `gate ${id} missing`); return g!; };
 
@@ -84,7 +85,7 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
 // 4. the CLI end to end
 {
   const out = mkdtempSync(join(tmpdir(), 'budget-')), cli = join(here, 'mesh-stats.ts');
-  const run = (...a: string[]) => { const r = spawnSync('tsx', [cli, ...a], { encoding: 'utf8', cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
+  const run = (...a: string[]) => { const r = spawnTsx(cli, a, { cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
   const dragon = join(here, 'fixtures', 'dragon.qa.ts'), crate = join(here, 'fixtures', 'crate.qa.ts');
 
   const lods = run('--module', dragon, '--lods', '--open', 'wingL,wingR', '--symmetric');

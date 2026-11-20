@@ -5,9 +5,9 @@
 //         as "unverified" and listed. With --strict a skip fails the run, so use --strict on a machine where `npm i three` works.
 // fail  = anything else. The last lines of its output are printed.
 import { readdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
-import { emit, type Gate } from '../scripts/result';
+import { fileURLToPath } from 'node:url';
+import { emit, spawnTsx, type Gate } from '../scripts/result';
 
 export type Status = 'pass' | 'fail' | 'skip';
 export type TestRun = { file: string; status: Status; ms: number; reason?: string };
@@ -26,7 +26,7 @@ export const missingThree = (output: string) =>
   /Cannot find (module|package) ['"]three(\/[^'"]*)?['"]/.test(output) || /ERR_MODULE_NOT_FOUND[^\n]*['"]three(\/[^'"]*)?['"]/.test(output);
 
 export function runOne(file: string, timeoutMs: number): TestRun & { output: string } {
-  const t0 = Date.now(), r = spawnSync('tsx', [file], { cwd: dirname(file), encoding: 'utf8', timeout: timeoutMs, env: process.env });
+  const t0 = Date.now(), r = spawnTsx(file, [], { cwd: dirname(file), timeout: timeoutMs, env: process.env });
   const ms = Date.now() - t0, output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
   if (r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') return { file, status: 'fail', ms, reason: `timeout after ${timeoutMs} ms`, output };
   if (r.error) return { file, status: 'fail', ms, reason: `could not start tsx: ${r.error.message}`, output };
@@ -43,7 +43,7 @@ export function main(argv: string[]): number {
     else if (a.startsWith('--')) { console.error(`unknown option ${a}`); return 1; } else root = a;
   }
   if (!Number.isFinite(timeout) || timeout <= 0) { console.error('--timeout needs a positive number of milliseconds'); return 1; }
-  root = resolve(root || join(dirname(new URL(import.meta.url).pathname), '..'));
+  root = resolve(root || join(dirname(fileURLToPath(import.meta.url)), '..'));
   const files = findTests(root).filter((f) => !only || f.includes(only));
   if (!files.length) { console.error(`no *.test.ts found under ${root}${only ? ` matching "${only}"` : ''}`); return 1; }
   const runs: TestRun[] = [], gates: Gate[] = [];
@@ -60,4 +60,4 @@ export function main(argv: string[]): number {
   return emit({ tool: 'run-tests', ok, gates, passed, failed, skipped, strict, tests: runs });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) process.exit(main(process.argv.slice(2)));
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) process.exit(main(process.argv.slice(2)));

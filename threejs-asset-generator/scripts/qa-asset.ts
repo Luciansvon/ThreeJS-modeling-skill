@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadSharp } from './sharp';
+import { writePngRgba } from './png';
 import { normalizeParts, qaGates, determinismGates, type Gate, type Parts, type QAOptions } from './qacheck';
 import { renderSheet, WRONG_TOL } from './review';
 import { emit } from './result';
@@ -48,9 +48,9 @@ if (!flag('no-render') && gates[0].pass) {
   const sheet = renderSheet(parts!, { open: o.open }); legend = sheet.legend; wrong = sheet.wrong;
   const over = Object.entries(wrong).filter(([, c]) => c > WRONG_TOL);
   gates.push({ gate: 'Q10 visible faces', value: over.length ? over.map(([n, c]) => `${n} ${c}px magenta`).join(', ') : `no back faces on top of the surface (noise limit ${WRONG_TOL}px per part)`, pass: over.length === 0, hint: 'magenta in review.png = a triangle faces away from the camera but is the nearest surface: inside-out part (Q3), a hole (Q4), or a sheet that needs --open' });
-  const sharp = await loadSharp();
-  if (!sharp) unverified.push('review.png (the `sharp` package is missing: npm i sharp)');
-  else { mkdirSync(out, { recursive: true }); review = join(out, 'review.png'); await sharp(sheet.rgba, { raw: { width: sheet.width, height: sheet.height, channels: 4 } }).png().toFile(review); }
+  mkdirSync(out, { recursive: true });
+  review = join(out, 'review.png');
+  writePngRgba(review, sheet.rgba, sheet.width, sheet.height);
 } else if (!flag('no-render')) unverified.push('review.png (Q1 failed, nothing to draw)');
 else unverified.push('review.png (--no-render)');
 

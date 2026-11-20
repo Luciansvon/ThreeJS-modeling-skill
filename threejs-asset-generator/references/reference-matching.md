@@ -4,7 +4,7 @@ Reference for `threejs-asset-generator` §15. Read it BEFORE writing code whenev
 
 Contents: 1 Intake (once) · 2 The loop · 3 Gates and thresholds · 4 Efficiency rules · 5 Getting triangles out · 6 Final report · 7 When numbers do not apply
 
-Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-compare.ts`; library `scripts/refcheck.ts`; test `scripts/refcheck.test.ts`. Needs `tsx` and `sharp`. Copy `scripts/` next to the project if the skill folder is read-only.
+Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-compare.ts`; library `scripts/refcheck.ts`, `scripts/png.ts`; test `scripts/refcheck.test.ts`. Needs `tsx`; writes mask and diff PNGs and reads standard 8-bit PNG inputs with pure Node (`scripts/png.ts`, no `sharp` required). Install `sharp` only when reading JPEG/WebP references. Copy `scripts/` next to the project if the skill folder is read-only.
 
 ## 1 Intake (once per reference)
 
@@ -16,7 +16,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
    - **Palette**: what `ref-intake` prints (do not guess hex values from memory).
    - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
    - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
-3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`.
+3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. For a single multi-view turnaround sheet (e.g. 3×2 grid), use `--sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34`. Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. `view` the printed `ref-<view>-mask.png` once. Wrong silhouette (background leaked in, part missing)? Change `--tol` and run again. A bad mask makes every later number meaningless, so this is the only intake check that may not be skipped.
 
 ## 2 The loop

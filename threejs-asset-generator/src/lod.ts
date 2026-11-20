@@ -15,3 +15,18 @@ export function lodLevel(raw: unknown): 0 | 1 | 2 {
 
 /** Picks the value for a level from [low, medium, full]. */
 export const lodPick = <T>(raw: unknown, byLevel: readonly [T, T, T]): T => byLevel[lodLevel(raw)];
+
+/** Scale factors { rx, rz } so a lower-sided polygon ring keeps the same X/Z bounding box as refSides (prevents L3 bounds shrink when dropping 8 -> 6 -> 4 sides). */
+export function lodRadiusScale(sides: number, refSides = 8, angleOffset = Math.PI / sides, refOffset = Math.PI / refSides): { rx: number; rz: number } {
+  const ext = (n: number, off: number) => {
+    let mx = 0, mz = 0;
+    for (let j = 0; j < n; j++) {
+      const th = (j / n) * Math.PI * 2 + off;
+      mx = Math.max(mx, Math.abs(Math.sin(th)));
+      mz = Math.max(mz, Math.abs(Math.cos(th)));
+    }
+    return { mx: mx || 1, mz: mz || 1 };
+  };
+  const r = ext(refSides, refOffset), c = ext(sides, angleOffset);
+  return { rx: r.mx / c.mx, rz: r.mz / c.mz };
+}

@@ -4,11 +4,12 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { partsToGlb, readGlb, glbGates, faceNormal, type Parts } from './glb';
-import { parseResult } from './result';
+import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 const gateOf = (bytes: Uint8Array, source: Parts, id: string) => { const g = glbGates(bytes, source).find((x) => x.gate.startsWith(id)); assert.ok(g, `gate ${id} missing`); return g!; };
 const crate = buildCrateTris({ seed: 3 }) as Parts, cube = box(-0.5, 0, -0.5, 0.5, 1, 0.5);
 const setU32 = (b: Uint8Array, at: number, v: number) => new DataView(b.buffer, b.byteOffset).setUint32(at, v, true);
@@ -79,7 +80,7 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
 // 6. the CLI end to end: file on disk, exit codes, @@RESULT, QA refusal, --skip-qa, usage and load errors
 {
   const out = mkdtempSync(join(tmpdir(), 'glb-')), cli = join(here, 'export-glb.ts');
-  const run = (...a: string[]) => { const r = spawnSync('tsx', [cli, ...a], { encoding: 'utf8', cwd: out }); const o = `${r.stdout}${r.stderr}`; return { code: r.status, out: o, res: parseResult(r.stdout) }; };
+  const run = (...a: string[]) => { const r = spawnTsx(cli, a, { cwd: out }); const o = `${r.stdout}${r.stderr}`; return { code: r.status, out: o, res: parseResult(r.stdout) }; };
   const crateFile = join(here, 'fixtures', 'crate.qa.ts'), file = join(out, 'crate.glb');
 
   const ok = run('--module', crateFile, '--export', 'buildCrateTris', '--params', '{"seed":0}', '--out', file);

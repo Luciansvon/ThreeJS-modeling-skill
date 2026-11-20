@@ -2,6 +2,7 @@
 // Human-readable text goes first. The LAST stdout line is exactly one line of JSON behind a fixed marker:
 //   @@RESULT {"tool":"run-tests","ok":true,"gates":[{"gate":"...","value":"...","pass":true,"hint":""}], ...}
 // Exit codes: 0 = ok, 2 = a gate failed, 1 = usage or internal error. `gates` uses the same shape as scripts/refcheck.ts `Gate`.
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 export const MARKER = '@@RESULT ';
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
 export type Result = { tool: string; ok: boolean; gates?: Gate[] } & Record<string, unknown>;
@@ -23,4 +24,17 @@ export function parseResult(stdout: string): Result | null {
     try { const r = JSON.parse(lines[i].slice(MARKER.length)); return r && typeof r.tool === 'string' && typeof r.ok === 'boolean' ? (r as Result) : null; } catch { return null; }
   }
   return null;
+}
+
+/** Runs a .ts script under the active tsx loader without shell quoting issues (Windows/macOS/Linux and npx tsx). */
+export function spawnTsx(file: string, args: string[], opts: Partial<SpawnSyncOptionsWithStringEncoding> = {}) {
+  const loaderArgs: string[] = [];
+  for (let i = 0; i < process.execArgv.length; i++) {
+    const a = process.execArgv[i];
+    if (a === '--require' || a === '-r' || a === '--import' || a === '--loader') loaderArgs.push(a, process.execArgv[++i]);
+  }
+  const base = { encoding: 'utf8' as const, ...opts };
+  return loaderArgs.length
+    ? spawnSync(process.execPath, [...loaderArgs, file, ...args], base)
+    : spawnSync('tsx', [file, ...args], { ...base, shell: process.platform === 'win32' });
 }
