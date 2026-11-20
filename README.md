@@ -6,6 +6,15 @@ Procedural low-poly 3D asset generator skill for **Three.js (r170+)**. It combin
 
 ---
 
+## Credits & Attribution
+
+- **[EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-skills)** (`v1.3.2`, commit `9e7e04a`, **MIT License**, Copyright © 2026 EL4CTEO)
+  - The QA gate workflow, 4-panel visual review methodology, platform budget ranges, LOD checks, and skill validation/router structure in v4 are adapted from and aligned with `EL4CTEO/blender-skills`, re-implemented independently for JavaScript/TypeScript and Three.js without requiring Blender.
+  - The full MIT copyright and permission notice is included in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+- **[Three.js](https://threejs.org/)** (MIT License) — target 3D engine and geometry/export APIs (`r170+`).
+
+---
+
 ## Current Status
 
 Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 18, 2026):
@@ -27,7 +36,8 @@ Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 18, 2026):
 
 ```text
 ThreeJS-modeling-skill/
-├── README.md                        # Repository overview
+├── README.md                        # Repository overview & credits
+├── THIRD_PARTY_NOTICES.md           # Verbatim MIT License notice for EL4CTEO/blender-skills
 ├── .gitignore                       # Ignored dependencies and generated outputs
 ├── .gitattributes                   # Consistent LF line endings
 └── threejs-asset-generator/         # Core skill package (65 files)
@@ -71,9 +81,3 @@ See [`references/`](./threejs-asset-generator/references/) and fixture templates
 As documented in [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md):
 - Tests and paths requiring the `three` package (`src/detailThree.test.ts`, `GLTFExporter`, and `groupToTris`) have not been executed yet because `three` was not installed in the sandbox environment.
 - Exported `.glb` files have not yet been tested in third-party viewers (`GLTFLoader`, Blender, or `model-viewer`).
-
----
-
-## Attribution
-
-Methodology adapted from [EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-skills) (MIT License, v1.3.2), implemented independently for Three.js / TypeScript without Blender as a dependency.
