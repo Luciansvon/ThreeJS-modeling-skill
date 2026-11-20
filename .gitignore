@@ -1,0 +1,15 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+
+# Generated preview / export artifacts from running scripts
+*.glb
+review.png
+ref-*.png
+diff-*.png
+tris.json
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.log
