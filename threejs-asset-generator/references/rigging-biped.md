@@ -4,18 +4,29 @@ Reference for `threejs-asset-generator`. Read it before writing a character, any
 
 Contents: 6.4 Rigged parts (`rig.ts`, clips) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets): `detail.md`.
 
-## 6.4 Rigged parts
+## 6.4 Rigged parts & choosing rigid vs skinned
 
-`PartBuilder` merges everything of one material into one static mesh, so a merged character cannot move. Split by **bone**: parts merge per (bone, material), and bones are plain `THREE.Group` pivots. Everything is still a pure seeded function; animation only rotates the groups.
+Choose the rigging strategy by silhouette and flexibility needs:
+- **Rigid per-bone pivots (`RigBuilder`, `THREE.Group` hierarchy):** Best for humanoids, robots, hard-shelled arthropods (spiders, crabs), vehicles (wheels, steering, turrets, doors), and articulated building parts (gates, windmills). Parts merge per `(bone, material)` and rotate cleanly around each joint without deforming facets.
+- **Flat-shaded `THREE.SkinnedMesh` (continuous organic bending):** Recommended for long serpentine bodies (dragons, snakes), flexible tentacles (kraken, octopus), tails, and organic necks that must curve smoothly in S-waves without breaking into stiff segments. Keep the low-poly faceted look by using `flatShading: true` on the material, building a clean 6–8 sided lofted body in rest pose along `+Z` (or natural curve), weighting each ring smoothly across adjacent spine bones (`skinIndex`, `skinWeight`), and attaching rigid details (horns, claws, armor plates, eyes, whiskers, fins) directly to their parent `THREE.Bone`. A single `SkinnedMesh` also keeps draw calls to 1–2 even on a 40+ bone kraken!
 
 Rules:
-- Author every part in the **rest pose in asset space** (A-pose for humanoids, §0 axes). `RigBuilder` shifts each part by `-pivot`, so the bone's local origin is its joint and a rotation about the bone turns the part about the joint.
-- Bones are listed **parents first** and have unique names; mixer tracks address them by name. The root bone (hips) is where body bob goes.
-- Draw calls = bones × materials. A humanoid fits in about 10 bones: `hips, spine, head, upperArmL/R, foreArmL/R, thighL/R, shinL/R`. Put hands into the forearm bone and feet into the shin bone. Do not rig what never moves (belts, pouches go into the bone they hang from).
-- Close the visible gap at a joint with a small sphere or a slightly wider `tubeTris` end on the child bone, not with overlapping random geometry.
+- Author every part in the **rest pose in asset space** (A-pose for humanoids, §0 axes). With `RigBuilder`, each part shifts by `-pivot` so the bone's local origin is its joint.
+- Bones are listed **parents first** and have unique names; mixer tracks address them by name. The root bone (`hips` / `root`) carries body bob and (for `--motion free` hovering/leaping creatures) subtle natural X/Z sway or lunge.
+- **Category-appropriate bone counts:** Humanoids fit in ~10–16 bones; serpentine creatures and articulated dragons typically need **16–26 bones** (including articulated jaw, whiskers, and 5–8 spine/tail segments); multi-limb creatures such as spiders (~28 bones: 8 legs × 3 joints + body/fangs) or krakens (~40–52 bones: 8 tentacles × 5–6 segments + mantle) should use `--kind creature` in `rig-check.ts` (up to 64 pivots) and prefer `SkinnedMesh` on flexible limbs so draw calls stay low.
+- For rigid pivots, close visible joint gaps with overlapping spherical/ellipsoid joint caps or slightly flared child rings so bending 35–45° never opens seams.
 - Mirror with `mirrorBone` for the pivot and a mirror matrix for the parts. The mirror matrix is applied before the pivot shift inside `RigBuilder`, and `PartBuilder` restores the winding (SKILL.md §6.1).
-- `groundAsset(rig)` and `disposeAsset(rig)` work as they are. Ground in rest pose; foot IK or hip bob afterwards is the animation's job.
-- Not covered on purpose: `SkinnedMesh` (smooth bending needs weights and breaks the flat-shaded look at joints). Rigid per-bone meshes match the low-poly style and keep the pipeline untouched.
+- `groundAsset(rig)` and `disposeAsset(rig)` work as they are. Ground in rest pose; foot IK, hovering elevation, or hip bob afterwards is the animation's job.
+
+### Animation quality standards (anti-stiff motion)
+
+Do not ship robotic 8-sample sine oscillations for hero or creature animations:
+- **Sample density:** Bake clips at **24–30 fps** (or smooth `smoothstep`/cubic-eased pose evaluators) with shortest-path quaternion hemisphere alignment (`prev.dot(curr) < 0` → negate) so `AnimationMixer` and exported `.glb` clips play silk-smooth.
+- **Anticipation → Climax → Recovery:** Action clips (attacks, roars, leaps, bursts) must coil/wind up first, snap rapidly into an expressive peak pose (e.g. jaw wide open, arms flung out, chest lifted), hold briefly with micro-tremor, and relax cleanly back to idle.
+- **Traveling wave & follow-through:** On spines, tails, tentacles, and whiskers, propagate phase lag sequentially down the chain (`phase = idx * 0.55`) with amplitude growing gradually toward the tip (`0.06` at chest → `0.25–0.45` at tail tip).
+- **Secondary life:** Add subtle eye blinks (scaling an `eyes` node in Y), articulated lower-jaw roar, breathing chest rise, and whisker/fin flutter.
+- **Seamless transitions:** For looping clips, sample exact `t = 0` at the final frame (`pose(duration) === pose(0)`). For chained actions (e.g. `Charge` → `Burst` → `Idle`), match the exact end pose of clip A to the start pose of clip B so crossfade or cut transitions have zero pop.
+- **Mechanical & vehicle motion:** Use continuous 360° wheel/propeller rotation tracks around local X/Z, separate steering parent pivots (`wheelSteerFL` → `wheelSpinFL`) for front wheels, and bounded hinge angles on doors/hatches so they never clip through the chassis.
 
 Code: `src/rig.ts`. API:
 

@@ -28,11 +28,19 @@ export const prefixParams = (prefix: string, defs: ParamDef[]) =>
 export const pickParams = (p: Record<string, unknown>, prefix: string) =>
   Object.fromEntries(Object.entries(p).filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k.slice(prefix.length), v]));
 
-export function footprintOf(obj: THREE.Object3D) {                 // circle, conservative
+export function footprintOf(obj: THREE.Object3D) {                 // circle, conservative (trees, rocks, round props)
   const b = new THREE.Box3().setFromObject(obj, true);
   const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
   return { x: c.x, z: c.z, r: Math.hypot(s.x, s.z) / 2 };
 }
+
+/** Rectangular AABB footprint for elongated buildings, walls, and vehicles so props can sit close to walls without huge circular dead zones. */
+export function boxFootprintOf(obj: THREE.Object3D, clearance = 0) {
+  const b = new THREE.Box3().setFromObject(obj, true);
+  return { minX: b.min.x - clearance, maxX: b.max.x + clearance, minZ: b.min.z - clearance, maxZ: b.max.z + clearance };
+}
+export const hitsBox = (a: { minX: number; maxX: number; minZ: number; maxZ: number }, b: { minX: number; maxX: number; minZ: number; maxZ: number }) =>
+  a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
 
 type Spot = { r: number; clearance?: number };
 /** Returns the items that fit, in input order, with x/z set. Returned r includes clearance. */
@@ -83,3 +91,10 @@ export function buildPlotAsset(raw: Record<string, unknown> = {}) {
 ```
 
 Carry the object on the item (`obj`), as above. Pairing `placeAll`'s result with the input array by index breaks as soon as one item is skipped.
+
+### Architecture, hollow walls & interiors (`--kind building`)
+
+- **Rectangular layouts:** Use `boxFootprintOf` + `hitsBox` when placing elongated houses, fences, market stalls, or city blocks so adjacent assets pack cleanly along walls.
+- **Window & door cutouts (watertight):** Never punch unsealed holes into a box (fails Q4). Build each wall with an opening from 4 closed wall segments around the opening (left pier, right pier, lintel above, sill below), then place a recessed frame + glass pane (`references/look.md`) inside the opening.
+- **Walkable interiors:** Give interior walls real thickness (two outward-facing closed slabs or an extruded U-frame) rather than `DoubleSide` sheets, and separate movable doors/shutters onto bounded hinge pivots (`references/rigging-biped.md`).
+- **Budget:** Use `--kind building` in `mesh-stats.ts` (allows up to 6 materials on web for stone/plaster, roof tiles, wood trim, glass, metal, and emissive windows) and pass `--budget 20000` (or the platform building max) to `qa-asset.ts`.

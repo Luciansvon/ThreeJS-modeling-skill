@@ -107,4 +107,45 @@ const no = run('--meta', badFile); assert.equal(no.status, 2, no.stdout + no.std
 assert.equal(parseResult(no.stdout)!.ok, false);
 const miss = run(); assert.equal(miss.status, 1);
 
+// 4. v4.2: malformed hierarchy map fails cleanly (no crash), creature multi-pivot rig (44 pivots), motionMode=free, general clipMinY
+{
+  const badMap = baseMeta();
+  (badMap.rig as unknown as Record<string, unknown>).hierarchy = { head_pivot: 'root_body_pivot' };
+  const mapRes = rigGates(badMap);
+  assert.ok(mapRes.gates.some((g) => g.gate === 'R1 hierarchy' && !g.pass && /array of \{ parent, child \}/.test(g.value)), 'non-array hierarchy reports clean R1 failure');
+
+  // 44-pivot kraken/spider creature rig
+  const krakenPivots = ['root'];
+  const krakenEdges: { parent: string; child: string }[] = [];
+  const krakenRest: Record<string, number[]> = { root: [0, 1, 0] };
+  for (let arm = 0; arm < 8; arm++) {
+    let prev = 'root';
+    for (let seg = 0; seg < 5; seg++) {
+      const name = `tentacle_${arm}_${seg}`;
+      krakenPivots.push(name);
+      krakenEdges.push({ parent: prev, child: name });
+      krakenRest[name] = [0.2, 0, 0.2];
+      prev = name;
+    }
+  }
+  const krakenMeta: RigMeta = {
+    rig: { pivotNames: krakenPivots, hierarchy: krakenEdges, restLocalPositions: krakenRest },
+    animations: [{
+      name: 'SwimSway', durationSeconds: 2.0, loop: true,
+      tracks: [
+        { name: 'root.position', times: [0, 1, 2], values: [0, 1, 0, 0.25, 1.15, -0.18, 0, 1, 0] },
+        { name: 'tentacle_0_0.quaternion', times: [0, 1, 2], values: [0, 0, 0, 1, 0, 0.2, 0, 0.98, 0, 0, 0, 1] },
+      ],
+    }],
+    qa: { clipMinY: 0.05 },
+  };
+  assert.ok(rigGates(krakenMeta).gates.some((g) => g.gate === 'R1 hierarchy' && !g.pass), 'hero default max 16 rejects 41 pivots');
+  const krakenPass = rigGates(krakenMeta, { kind: 'creature', motionMode: 'free' });
+  assert.deepEqual(krakenPass.gates.filter((g) => !g.pass), [], 'creature kind + free motion passes 41-pivot kraken with root sway & floor clearance');
+  const krakenFile = join(dir, 'kraken.json');
+  writeFileSync(krakenFile, JSON.stringify(krakenMeta));
+  const kCli = run('--meta', krakenFile, '--kind', 'creature', '--motion', 'free');
+  assert.equal(kCli.status, 0, kCli.stdout + kCli.stderr);
+}
+
 console.log('RIGCHECK OK');

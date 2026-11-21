@@ -12,6 +12,7 @@ Contents: §4 Low-poly look (`lowpoly.ts`) and texture choices · §5 Vertex jit
 - Organic and stone: `roughness` 0.7–0.9, `metalness` 0–0.2.
 - Painted or metal parts: `roughness` 0.35–0.6, `metalness` 0.5–0.8. Rough metal (roughness 0.7–0.9 with metalness 0.6–0.9) renders almost black without an environment map; metals only reflect their surroundings. Tell the user that metal parts need `scene.environment` (for example `RoomEnvironment` through `PMREMGenerator`), or lower `metalness` to ≤ 0.35 for an environment-free scene.
 - Lamps and windows: use `emissive` and `emissiveIntensity`, not extra lights (§10).
+- Transparent glass (vehicle windshields, cockpits, building windows): put glass in its own material (`MeshStandardMaterial` with `transparent: true`, `opacity: 0.42–0.58`, `roughness: 0.12`, `metalness: 0.15`, `depthWrite: false`, muted tint `#88c9e8`). Keep glass panes as clean closed slabs or thin single-sided outward panes over a dark interior shell so alpha sorting stays clean and survives `GLTFExporter` without needing `MeshPhysicalMaterial` transmission extensions.
 - Palette: muted hex tones (`#2e7d32`, `#e6a100`, `#1e222a`); avoid pure primaries.
 - Since r181 PBR energy conservation, and since r187 PMREM, shading differs slightly between versions. Judge a palette by relative contrast, not by absolute screenshots.
 

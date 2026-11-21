@@ -105,6 +105,19 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
   const no = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(no.status, 2); assert.match(no.stdout, /FAIL/);
   const nor = parseResult(no.stdout)!; assert.ok(!nor.ok && nor.gates!.some((g) => !g.pass), 'failing compare reports ok:false');
   const miss = run('ref-compare.ts', ['nope.json', 'tris.json']); assert.equal(miss.status, 1); assert.equal(parseResult(miss.stdout)!.ok, false);
+
+  // v4.2: 34 and 34_back views are evaluated in ref-compare (no longer silently skipped)
+  const s34 = silhouette(wide, '34'), s34b = silhouette(wide, '34_back');
+  const ref34 = {
+    views: {
+      '34': { w: 64, h: 64, data: maskToB64(flipH(s34.mask)), aspect: s34.aspect },
+      '34_back': { w: 64, h: 64, data: maskToB64(s34b.mask), aspect: s34b.aspect },
+    },
+    palette: dc,
+  };
+  const cmp34 = compareToRef(wide, ref34, ['#c82828', '#2828c8', '#fafafa']);
+  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34 silhouette IoU' && g.pass), '34 view evaluated and passes (including auto flipH)');
+  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34_back silhouette IoU' && g.pass), '34_back view evaluated and passes');
   console.log('CLI OK');
 }
 console.log('REFCHECK OK');

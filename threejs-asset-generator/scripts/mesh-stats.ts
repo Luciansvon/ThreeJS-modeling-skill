@@ -2,22 +2,24 @@
 //   Kernel (no THREE):   npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}'] [--profile web] [--kind prop]
 //   Any asset via tris:  npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
 //   LOD check:           npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods [--open a,b] [--symmetric]    (builds detail 2, 1, 0; the builder must accept `detail`)
-// Options: --profile mobile|web|vr|desktop (default web)  --kind prop|hero (default prop)  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
+// Options: --profile mobile|web|vr|desktop (default web)  --kind prop|hero|creature|vehicle|building (default prop)  --budget N  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
 // meta.json (all optional): { "parts": { "body": { "material": "wood", "bone": "root" } }, "textures": [1024, { "name": "atlas", "width": 2048 }], "bones": 12 }
 // What meta does not give is reported as "not checked", never guessed. Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizeParts, type Parts } from './qacheck';
-import { assetStats, budgetGates, lodGates, PROFILES, type Kind, type Meta, type Platform } from './budget';
+import { assetStats, budgetGates, lodGates, KINDS, PROFILES, type Kind, type Meta, type Platform } from './budget';
 import { emit } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'mesh-stats', ok: false, error: msg }, 1)); };
 const modFile = opt('module'), trisFile = opt('tris'), platform = (opt('profile') ?? 'web') as Platform, kind = (opt('kind') ?? 'prop') as Kind;
-if (!modFile === !trisFile) fail('usage: tsx scripts/mesh-stats.ts (--module file.ts [--export name] [--params json] [--lods] | --tris tris.json) [--profile mobile|web|vr|desktop] [--kind prop|hero] [--meta meta.json] [--glb file.glb] [--open a,b|all] [--symmetric]');
+if (!modFile === !trisFile) fail('usage: tsx scripts/mesh-stats.ts (--module file.ts [--export name] [--params json] [--lods] | --tris tris.json) [--profile mobile|web|vr|desktop] [--kind prop|hero|creature|vehicle|building] [--budget N] [--meta meta.json] [--glb file.glb] [--open a,b|all] [--symmetric]');
 if (!(platform in PROFILES)) fail(`--profile must be one of ${Object.keys(PROFILES).join(', ')}, got "${platform}"`);
-if (kind !== 'prop' && kind !== 'hero') fail(`--kind must be prop or hero, got "${kind}"`);
+if (!KINDS.includes(kind)) fail(`--kind must be one of ${KINDS.join(', ')}, got "${kind}"`);
+const budgetOpt = opt('budget') !== undefined ? Number(opt('budget')) : undefined;
+if (budgetOpt !== undefined && (!Number.isFinite(budgetOpt) || budgetOpt <= 0)) fail('--budget needs a positive number');
 if (flag('lods') && !modFile) fail('--lods needs --module: a tris.json is one fixed level and cannot be rebuilt at another detail');
 let params: Record<string, unknown> = {}, meta: Meta = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
@@ -40,7 +42,8 @@ try {
 
 const stats = assetStats(parts!, meta), { gates, skipped } = budgetGates(stats, { platform, kind, glbBytes }), unverified: string[] = [];
 let levels: unknown = null;
-if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric') }); gates.push(...l.gates); levels = l.levels; }
+const lodBudget = budgetOpt ?? PROFILES[platform].tris[kind].max;
+if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: lodBudget }); gates.push(...l.gates); levels = l.levels; }
 else if (modFile) skipped.push('L1 to L4 LOD (pass --lods; the builder must accept `detail`)');
 if (!stats.drawCallsExact) unverified.push('draw calls are an upper bound (one per part); pass --meta with a material and bone per part for the real number');
 unverified.push('triangle, vertex and texture numbers are counted from the arrays and sizes given, not measured in a renderer: no frame time, fill rate or real GPU memory');

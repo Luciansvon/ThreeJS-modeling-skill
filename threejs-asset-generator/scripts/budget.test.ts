@@ -108,5 +108,28 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
   assert.equal(run().code, 1); assert.equal(run('--tris', big, '--profile', 'phone').code, 1); assert.equal(run('--tris', big, '--kind', 'boss').code, 1);
   assert.equal(run('--tris', big, '--lods').code, 1, '--lods needs a builder'); assert.equal(run('--tris', big, '--meta', join(out, 'nope.json')).code, 1); assert.equal(run('--tris', big, '--glb', join(out, 'nope.glb')).code, 1);
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
+
+  // 5. v4.2 category kinds (creature, vehicle, building) & L0 LOD budget respects profile+kind (not locked at 2000)
+  assert.equal(gate({ materials: 5 }, 'B2', { platform: 'web', kind: 'vehicle' }).pass, true, 'web vehicle allows up to 6 materials (paint, rubber, metal, glass, lights)');
+  assert.equal(gate({ materials: 7 }, 'B2', { platform: 'web', kind: 'vehicle' }).pass, false);
+  assert.equal(gate({ materials: 5 }, 'B2', { platform: 'web', kind: 'building' }).pass, true, 'web building allows up to 6 materials');
+  assert.equal(gate({ triangles: 25000 }, 'B1', { platform: 'web', kind: 'creature' }).pass, true);
+  assert.equal(gate({ triangles: 20000 }, 'B1', { platform: 'web', kind: 'building' }).pass, true);
+  const heavyMod = join(out, 'heavyCreature.ts');
+  writeFileSync(heavyMod, `
+    import { box } from ${JSON.stringify(join(here, 'fixtures', 'crate.qa.ts'))};
+    export function buildHeavy(p: { detail?: number } = {}) {
+      const d = p.detail ?? 2;
+      const count = d === 2 ? 240 : d === 1 ? 120 : 60; // 2880 -> 1440 -> 720 tris (>2000 at detail 2)
+      const tris: number[] = [];
+      for (let i = 0; i < count; i++) { const x = i * 2; tris.push(...box(x, 0, 0, x + 1, 1, 1)); }
+      // keep identical outer bounds at all LODs by anchoring end box at fixed X
+      const endX = 240 * 2; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
+      return { body: tris };
+    }
+  `);
+  const heavyRes = run('--module', heavyMod, '--export', 'buildHeavy', '--profile', 'web', '--kind', 'creature', '--lods');
+  assert.equal(heavyRes.code, 0, `>2000-tri creature must pass L0 under web/creature budget:\n${heavyRes.out}`);
+  assert.equal(heavyRes.res?.ok, true);
 }
 console.log('BUDGET OK');

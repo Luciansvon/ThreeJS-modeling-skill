@@ -68,6 +68,7 @@ import assert from 'node:assert/strict';
 import { createPRNG } from './prng';
 import { resolveParams } from './params';
 import { signedVolumeOf, mirrorTris } from './tri';
+import { tubeTris, planarBladeTris, radialArrayTris } from './organic';
 import { dragonParameters, buildDragonKernel } from './dragonKernel';
 
 const kernel = (o = {}) => {
@@ -81,6 +82,20 @@ for (const name of ['body', 'spikes', 'legs'] as const)                     // c
   assert.ok(signedVolumeOf(k[name]) > 0, `${name} is inside-out or open`);
 assert.ok(Math.abs(signedVolumeOf(mirrorTris(k.legs)) - signedVolumeOf(k.legs)) < 1e-9);   // mirror keeps winding
 assert.deepEqual(kernel({ hasSpikes: false }).body, kernel({ hasSpikes: true }).body);     // stream isolation
+
+// v4.2 helpers: tubeTris upHint on vertical curve, planarBladeTris stays thin in X, radialArrayTris preserves volume
+const vTube = tubeTris([[0, 0, 0], [0, 0.5, -0.02], [0, 1.0, -0.05]], [0.1, 0.08, 0.04], 6, true, undefined, [0, 0, 1]);
+assert.ok(signedVolumeOf(vTube) > 0, 'vertical tubeTris with upHint has positive volume');
+
+const blade = planarBladeTris([0, 0, 0], [0, 0.4, -0.1], [0, 0.85, -0.35], 0.025, 0.14, 0.10, [1, 0, 0]);
+assert.ok(signedVolumeOf(blade) > 0, 'planarBladeTris is closed with outward CCW winding');
+let maxAbsX = 0; for (let i = 0; i < blade.length; i += 3) maxAbsX = Math.max(maxAbsX, Math.abs(blade[i]));
+assert.ok(maxAbsX <= 0.026, `planarBladeTris stays razor-thin in X (got ${maxAbsX})`);
+
+const singleLeg = tubeTris([[0.3, 0.4, 0], [0.7, 0.5, 0], [0.9, 0, 0]], [0.06, 0.045, 0.025], 6);
+const spider8 = radialArrayTris(singleLeg, 8, 1);
+assert.equal(spider8.length, singleLeg.length * 8, 'radialArrayTris duplicates triangles 8x');
+assert.ok(Math.abs(signedVolumeOf(spider8) - signedVolumeOf(singleLeg) * 8) < 1e-6, 'radialArrayTris preserves outward winding');
 ~~~
 
 ## src/detail.pure.test.ts
@@ -509,6 +524,29 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
   assert.equal(run().code, 1); assert.equal(run('--tris', big, '--profile', 'phone').code, 1); assert.equal(run('--tris', big, '--kind', 'boss').code, 1);
   assert.equal(run('--tris', big, '--lods').code, 1, '--lods needs a builder'); assert.equal(run('--tris', big, '--meta', join(out, 'nope.json')).code, 1); assert.equal(run('--tris', big, '--glb', join(out, 'nope.glb')).code, 1);
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
+
+  // 5. v4.2 category kinds (creature, vehicle, building) & L0 LOD budget respects profile+kind (not locked at 2000)
+  assert.equal(gate({ materials: 5 }, 'B2', { platform: 'web', kind: 'vehicle' }).pass, true, 'web vehicle allows up to 6 materials (paint, rubber, metal, glass, lights)');
+  assert.equal(gate({ materials: 7 }, 'B2', { platform: 'web', kind: 'vehicle' }).pass, false);
+  assert.equal(gate({ materials: 5 }, 'B2', { platform: 'web', kind: 'building' }).pass, true, 'web building allows up to 6 materials');
+  assert.equal(gate({ triangles: 25000 }, 'B1', { platform: 'web', kind: 'creature' }).pass, true);
+  assert.equal(gate({ triangles: 20000 }, 'B1', { platform: 'web', kind: 'building' }).pass, true);
+  const heavyMod = join(out, 'heavyCreature.ts');
+  writeFileSync(heavyMod, `
+    import { box } from ${JSON.stringify(join(here, 'fixtures', 'crate.qa.ts'))};
+    export function buildHeavy(p: { detail?: number } = {}) {
+      const d = p.detail ?? 2;
+      const count = d === 2 ? 240 : d === 1 ? 120 : 60; // 2880 -> 1440 -> 720 tris (>2000 at detail 2)
+      const tris: number[] = [];
+      for (let i = 0; i < count; i++) { const x = i * 2; tris.push(...box(x, 0, 0, x + 1, 1, 1)); }
+      // keep identical outer bounds at all LODs by anchoring end box at fixed X
+      const endX = 240 * 2; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
+      return { body: tris };
+    }
+  `);
+  const heavyRes = run('--module', heavyMod, '--export', 'buildHeavy', '--profile', 'web', '--kind', 'creature', '--lods');
+  assert.equal(heavyRes.code, 0, `>2000-tri creature must pass L0 under web/creature budget:\n${heavyRes.out}`);
+  assert.equal(heavyRes.res?.ok, true);
 }
 console.log('BUDGET OK');
 ~~~
@@ -620,6 +658,31 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
 
   assert.equal(run().code, 1); assert.equal(run('--tris', bad, '--color', '2,0,0').code, 1, 'colour out of range');
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
+
+  // 7. v4.2 export-rigged-glb.ts end-to-end (vertex colors + pivot + AnimationClip round-trip via GLTFExporter -> GLTFLoader)
+  const rigCli = join(here, 'export-rigged-glb.ts');
+  const rigMod = join(out, 'riggedSample.ts');
+  writeFileSync(rigMod, `
+    export function buildSample(_params: Record<string, unknown>, THREE: any) {
+      const root = new THREE.Group(); root.name = 'sample_root';
+      const pivot = new THREE.Group(); pivot.name = 'head'; pivot.position.set(0, 1, 0); root.add(pivot);
+      const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5).toNonIndexed();
+      const colors = new Float32Array(geo.attributes.position.count * 3).fill(0.5);
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true }));
+      mesh.name = 'head_mesh'; pivot.add(mesh);
+      const clip = new THREE.AnimationClip('Nod', 1.0, [
+        new THREE.QuaternionKeyframeTrack('head.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.1, 0, 0, 0.995, 0, 0, 0, 1]),
+      ]);
+      return { root, animations: [clip] };
+    }
+  `);
+  const rigOut = join(out, 'sample_rigged.glb');
+  const rigRes = spawnTsx(rigCli, ['--module', rigMod, '--export', 'buildSample', '--out', rigOut], { cwd: join(here, '..') });
+  assert.equal(rigRes.status, 0, `${rigRes.stdout}${rigRes.stderr}`);
+  const rigParsed = parseResult(rigRes.stdout)!;
+  assert.equal(rigParsed.ok, true);
+  assert.deepEqual(rigParsed.clips, ['Nod']);
 }
 console.log('GLB OK');
 ~~~
@@ -854,6 +917,19 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
   const no = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(no.status, 2); assert.match(no.stdout, /FAIL/);
   const nor = parseResult(no.stdout)!; assert.ok(!nor.ok && nor.gates!.some((g) => !g.pass), 'failing compare reports ok:false');
   const miss = run('ref-compare.ts', ['nope.json', 'tris.json']); assert.equal(miss.status, 1); assert.equal(parseResult(miss.stdout)!.ok, false);
+
+  // v4.2: 34 and 34_back views are evaluated in ref-compare (no longer silently skipped)
+  const s34 = silhouette(wide, '34'), s34b = silhouette(wide, '34_back');
+  const ref34 = {
+    views: {
+      '34': { w: 64, h: 64, data: maskToB64(flipH(s34.mask)), aspect: s34.aspect },
+      '34_back': { w: 64, h: 64, data: maskToB64(s34b.mask), aspect: s34b.aspect },
+    },
+    palette: dc,
+  };
+  const cmp34 = compareToRef(wide, ref34, ['#c82828', '#2828c8', '#fafafa']);
+  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34 silhouette IoU' && g.pass), '34 view evaluated and passes (including auto flipH)');
+  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34_back silhouette IoU' && g.pass), '34_back view evaluated and passes');
   console.log('CLI OK');
 }
 console.log('REFCHECK OK');
@@ -970,6 +1046,47 @@ assert.equal(parseResult(ok.stdout)!.ok, true);
 const no = run('--meta', badFile); assert.equal(no.status, 2, no.stdout + no.stderr);
 assert.equal(parseResult(no.stdout)!.ok, false);
 const miss = run(); assert.equal(miss.status, 1);
+
+// 4. v4.2: malformed hierarchy map fails cleanly (no crash), creature multi-pivot rig (44 pivots), motionMode=free, general clipMinY
+{
+  const badMap = baseMeta();
+  (badMap.rig as unknown as Record<string, unknown>).hierarchy = { head_pivot: 'root_body_pivot' };
+  const mapRes = rigGates(badMap);
+  assert.ok(mapRes.gates.some((g) => g.gate === 'R1 hierarchy' && !g.pass && /array of \{ parent, child \}/.test(g.value)), 'non-array hierarchy reports clean R1 failure');
+
+  // 44-pivot kraken/spider creature rig
+  const krakenPivots = ['root'];
+  const krakenEdges: { parent: string; child: string }[] = [];
+  const krakenRest: Record<string, number[]> = { root: [0, 1, 0] };
+  for (let arm = 0; arm < 8; arm++) {
+    let prev = 'root';
+    for (let seg = 0; seg < 5; seg++) {
+      const name = `tentacle_${arm}_${seg}`;
+      krakenPivots.push(name);
+      krakenEdges.push({ parent: prev, child: name });
+      krakenRest[name] = [0.2, 0, 0.2];
+      prev = name;
+    }
+  }
+  const krakenMeta: RigMeta = {
+    rig: { pivotNames: krakenPivots, hierarchy: krakenEdges, restLocalPositions: krakenRest },
+    animations: [{
+      name: 'SwimSway', durationSeconds: 2.0, loop: true,
+      tracks: [
+        { name: 'root.position', times: [0, 1, 2], values: [0, 1, 0, 0.25, 1.15, -0.18, 0, 1, 0] },
+        { name: 'tentacle_0_0.quaternion', times: [0, 1, 2], values: [0, 0, 0, 1, 0, 0.2, 0, 0.98, 0, 0, 0, 1] },
+      ],
+    }],
+    qa: { clipMinY: 0.05 },
+  };
+  assert.ok(rigGates(krakenMeta).gates.some((g) => g.gate === 'R1 hierarchy' && !g.pass), 'hero default max 16 rejects 41 pivots');
+  const krakenPass = rigGates(krakenMeta, { kind: 'creature', motionMode: 'free' });
+  assert.deepEqual(krakenPass.gates.filter((g) => !g.pass), [], 'creature kind + free motion passes 41-pivot kraken with root sway & floor clearance');
+  const krakenFile = join(dir, 'kraken.json');
+  writeFileSync(krakenFile, JSON.stringify(krakenMeta));
+  const kCli = run('--meta', krakenFile, '--kind', 'creature', '--motion', 'free');
+  assert.equal(kCli.status, 0, kCli.stdout + kCli.stderr);
+}
 
 console.log('RIGCHECK OK');
 ~~~
@@ -1136,6 +1253,9 @@ console.log('TOOLS OK');
     { "prompt": "Here is a reference image of a robot, build it as a procedural low-poly mesh that matches the silhouette", "expect": "$self" },
     { "prompt": "Export my procedural asset as standalone Three.js code that gives the same mesh", "expect": "$self" },
     { "prompt": "Compose a village from generated houses and trees with deterministic placement", "expect": "$self" },
+    { "prompt": "Help me explore options for a procedural low-poly spider or kraken creature with multi-limb rigs in Three.js", "expect": "$self" },
+    { "prompt": "Create a procedural low-poly vehicle with spinning wheels, vertex colors, and seeded variations in Three.js", "expect": "$self" },
+    { "prompt": "Build a deterministic procedural low-poly building with custom geometry and recessed windows", "expect": "$self" },
     { "prompt": "Load a .glb model with GLTFLoader and play its embedded animation", "expect": "gltf-model-loader" },
     { "prompt": "Open Blender, bake the textures and export a GLB for Three.js", "expect": "threejs-blender-bridge" },
     { "prompt": "Add OrbitControls, bloom postprocessing and soft shadows to my existing scene", "expect": "three-scene-ui" },

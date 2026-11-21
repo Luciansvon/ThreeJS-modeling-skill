@@ -22,13 +22,14 @@ export function sampleSpline(pts: V3[], perSegment = 4): V3[] {
   return out;
 }
 
-/** Closed tube along a polyline. Frames are parallel-transported, so the tube never twists. */
+/** Closed tube along a polyline. Frames are parallel-transported, so the tube never twists. Pass `upHint` to control initial frame alignment on steep/vertical fins. */
 export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,
-  shape?: (angle: number, t: number) => number): Tris {   // shape: radius multiplier by angle (rad) and t in 0..1 along the path
+  shape?: (angle: number, t: number) => number, upHint?: V3): Tris {   // shape: radius multiplier by angle (rad) and t in 0..1 along the path
   const n = path.length, out: Tris = [];
   const r = (i: number) => (typeof radius === 'function' ? radius(i / (n - 1)) : radius[i]);
   const T = path.map((_, i) => norm(sub(path[Math.min(i + 1, n - 1)], path[Math.max(i - 1, 0)])));
-  let u = norm(cross(Math.abs(T[0][1]) < 0.9 ? [0, 1, 0] : [1, 0, 0], T[0]));   // any normal to the first tangent
+  const hint = upHint && Math.abs(dot(norm(upHint), T[0])) < 0.98 ? norm(upHint) : (Math.abs(T[0][1]) < 0.9 ? [0, 1, 0] as V3 : [1, 0, 0] as V3);
+  let u = norm(cross(hint, T[0]));   // any normal to the first tangent
   const rings: V3[][] = [];
   for (let i = 0; i < n; i++) {
     if (i > 0) u = norm(sub(u, mul(T[i], dot(u, T[i]))));    // carry the previous normal into the new plane
@@ -61,5 +62,63 @@ export const spikeTris = (base: V3, dir: V3, length: number, radius: number, sid
 export function fanTris(apex: V3, rim: V3[]): Tris {
   const out: Tris = [];
   for (let i = 0; i < rim.length - 1; i++) out.push(...apex, ...rim[i], ...rim[i + 1]);
+  return out;
+}
+
+/** Closed razor-sharp planar blade/fin (dorsal spines, tail fans, crests, ears) lying perpendicular to `planeNormal` (default +X so blades stay razor-thin on X=0). Guaranteed outward CCW. */
+export function planarBladeTris(
+  base: V3, mid: V3, tip: V3,
+  halfThick: number, chordBase: number, chordMid: number,
+  planeNormal: V3 = [1, 0, 0]
+): Tris {
+  const nrm = norm(planeNormal);
+  const t0 = norm(sub(mid, base));
+  const t1 = norm(sub(tip, base));
+  const c0 = norm(cross(nrm, t0));
+  const c1 = norm(cross(nrm, t1));
+  const ring = (center: V3, chordDir: V3, hThick: number, hChord: number): V3[] => [
+    add(center, mul(nrm, hThick)),
+    add(center, mul(chordDir, hChord)),
+    add(center, mul(nrm, -hThick)),
+    add(center, mul(chordDir, -hChord)),
+  ];
+  const r0 = ring(base, c0, Math.max(0.002, halfThick), Math.max(0.004, chordBase));
+  const r1 = ring(mid, c1, Math.max(0.002, halfThick * 0.8), Math.max(0.004, chordMid));
+  const out: Tris = [];
+  const push = (a: V3, b: V3, c: V3) => out.push(...a, ...b, ...c);
+  for (let j = 0; j < 4; j++) {
+    const k = (j + 1) % 4;
+    push(r0[j], r0[k], r1[k]); push(r0[j], r1[k], r1[j]);
+    push(r1[j], r1[k], tip);
+    push(base, r0[k], r0[j]);
+  }
+  // Ensure outward CCW regardless of base->mid->tip orientation
+  let vol = 0;
+  for (let i = 0; i < out.length; i += 9) {
+    const ax = out[i], ay = out[i + 1], az = out[i + 2], bx = out[i + 3], by = out[i + 4], bz = out[i + 5], cx = out[i + 6], cy = out[i + 7], cz = out[i + 8];
+    vol += (ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx)) / 6;
+  }
+  if (vol < 0) {
+    for (let i = 0; i < out.length; i += 9) {
+      for (let c = 0; c < 3; c++) { const tmp = out[i + 3 + c]; out[i + 3 + c] = out[i + 6 + c]; out[i + 6 + c] = tmp; }
+    }
+  }
+  return out;
+}
+
+/** Replicates `tris` evenly `count` times around `axis` (0=X, 1=Y, 2=Z) through `center` (spider legs, kraken tentacles, wheel spokes, pillars). Preserves outward CCW winding. */
+export function radialArrayTris(tris: Tris, count: number, axis: 0 | 1 | 2 = 1, center: V3 = [0, 0, 0], startAngle = 0): Tris {
+  const out: Tris = [];
+  const a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
+  for (let k = 0; k < count; k++) {
+    const ang = startAngle + (k / count) * Math.PI * 2, ca = Math.cos(ang), sa = Math.sin(ang);
+    for (let i = 0; i < tris.length; i += 3) {
+      const p: V3 = [tris[i] - center[0], tris[i + 1] - center[1], tris[i + 2] - center[2]];
+      const r: V3 = [p[0], p[1], p[2]];
+      r[a1] = p[a1] * ca - p[a2] * sa;
+      r[a2] = p[a1] * sa + p[a2] * ca;
+      out.push(r[0] + center[0], r[1] + center[1], r[2] + center[2]);
+    }
+  }
   return out;
 }

@@ -18,7 +18,7 @@ npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 
 The builder returns `Tris` (9 numbers per triangle, CCW from outside), `{ tris }`, or named parts `{ body: Tris, legs: Tris }`. Named parts are better: the gates then name the part at fault. `scripts/fixtures/crate.qa.ts` is the smallest complete example.
 
-Options: `--budget N` (default 2000; about 20000 for a composite) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
+Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
 
 Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the next result unreadable.
 

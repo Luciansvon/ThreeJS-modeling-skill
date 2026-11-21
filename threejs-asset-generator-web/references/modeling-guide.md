@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~markdown source-excerpt
 ---
 name: threejs-asset-generator
-description: Procedural low-poly 3D assets in Three.js r170+ with seeded deterministic builders, parameter schemas, flat-shaded vertex-color meshes, custom geometry with correct winding, mirrored parts, rigged biped and creature kernels, composites, textures, standalone code export, and matching a reference image. Not for loading glTF files.
+description: Procedural low-poly 3D assets in Three.js r170+ with seeded deterministic builders, parameter schemas, flat-shaded vertex-color meshes, custom geometry with correct winding, mirrored parts, rigged biped, creature, vehicle and building kernels, composites, textures, standalone code export, and reference image matching. Not for loading glTF files.
 ---
 
 # Three.js Procedural Low-Poly Asset Generator
@@ -18,9 +18,13 @@ This harness edition assumes a workspace and Node.js. Use the bundled builders a
 
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
 
-**Surface detail:** Start with solid material or vertex colors. Add an image map only for a requested or visible detail that needs one. Use the session's image generator when original artwork is the right fit, then keep its output as a fixed input to the builder.
-
-**Preview choice:** When the user asks for a preview without choosing a mode, offer **Fast Preview** (orbit, pan, check textures, play or scrub embedded clips) and **Full Preview** (editable parameters, rig inspection, animation authoring, or expressions). Share a fast result if already available and use the requested mode. See `references/studio-preview.md`.
+**Exploration vs Build Mode:** When the user is still exploring ideas, asking for advice, or leaves major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults—do NOT write full 3D model code until aligned. Go straight to **Build Mode** when the brief is already complete or the user asks to build right away. Ask only what is missing from these **6 core intake items**:
+1. **Reference & style:** existing image, generate a reference image first, or build from text.
+2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed (keep generated image maps as fixed builder inputs).
+3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
+4. **Preview mode:** **Fast Preview** (orbit, textures, clip scrub) vs **Full Preview** (live sliders, rig/clip inspection). Do not build a heavy studio before the user chooses (`references/studio-preview.md`).
+5. **Runtime VFX:** optional studio-only lightning/fire/aura, strictly excluded from `.glb` export.
+6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -34,13 +38,13 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 |---|---|---|
 | Materials, flat shading, procedural or image-generated textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
-| Creature, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
-| Anything that animates, humanoid, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
+| Creature, multi-limb, vehicle, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
+| Anything that animates, humanoid, SkinnedMesh, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
 | Flat or blocky look, atlas, chamfer, AO, sockets (§6.8) | `references/detail.md` | `src/detail.ts`, `src/detailThree.ts` |
-| Several sub-assets in one (§8) | `references/composite.md` | |
+| Several sub-assets, buildings, interiors (§8) | `references/composite.md` | |
 | Grounding, disposal, rebuilds, lights (§9, §10) | `references/lifecycle.md` | `src/lifecycle.ts` |
 | Code export, Three.js versions (§11, §12) | `references/export.md` | `src/fingerprint.ts` |
-| A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts` |
+| A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts`, `scripts/export-rigged-glb.ts` |
 | Is it too heavy, platform budget, LOD `detail` (§17) | `references/budget.md` | `scripts/mesh-stats.ts`, `src/lod.ts` |
 | Rig, animation clips, drift, expressions (§18) | `references/rig-check.md` | `scripts/rig-check.ts` |
 | Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html) |
@@ -137,8 +141,8 @@ Geometry and look
 - [ ] Overlays use a constant-distance inset and a small lift against z-fighting
 
 Rigging, humanoids, textures (only when they apply)
-- [ ] Moving parts are bones from `RigBuilder`, authored in rest pose; static parts stay merged; bones ≤ about 12
-- [ ] Left/right bones come from `mirrorBone` + a mirror matrix; clips use `AnimationMixer` on the rig root
+- [ ] Moving parts use `RigBuilder` (rigid/mechanical/arthropods) or flat-shaded `SkinnedMesh` (serpentine/tentacle/organic curves) in rest pose; static parts stay merged; bone count fits category (`≤ 16` hero/prop, `≤ 24` building, `≤ 32` vehicle, `≤ 64` creature)
+- [ ] Left/right bones use `mirrorBone` + mirror matrix; clips use `AnimationMixer` on the rig root with ≥ 24 fps, smooth easing, anticipation→climax→recovery, follow-through, and clean transitions
 - [ ] Limb chains go through `twoBoneIK` or fixed point chains; feet and hands have explicit forward/up
 - [ ] Extruded and lofted parts have positive `signedVolume`, also after mirroring
 - [ ] UV is off unless a texture is used; with a texture, `PartBuilder({ uv })` is set for every part of that material and `disposeAsset` frees `map`
@@ -198,8 +202,8 @@ Promote it to the full schema form (§1) as soon as it gets sliders, presets, or
 
 Full procedure and scripts: `references/reference-matching.md`. The rules, in order:
 
-1. **Intake once.** View the reference once, write `ref-spec.md` (max 15 lines: facing, measured proportions, parts, palette, 3 signature features, out of scope), run `scripts/ref-intake.ts`, look at the mask PNG once. After that, never re-read the image: work from the spec and `ref.json`.
-2. **Build coarse to fine, compare after every step.** A blockout (G1 proportions, G2 aspect) → B silhouette (G2 IoU ≥ 0.85 per view) → C colour (G3 palette) → D detail (G4 signature features). Run `scripts/ref-compare.ts` after each step; it takes under a second.
+1. **Intake once.** View the reference once, write `ref-spec.md` (max 15 lines: facing, measured proportions, parts, palette, 3 signature features, out of scope), run `scripts/ref-intake.ts` (supports `front`, `side`, `top`, `back`, `34`, `34_back`), look at the mask PNG once. After that, never re-read the image: work from the spec and `ref.json`.
+2. **Build coarse to fine, compare after every step.** A blockout (G1 proportions, G2 aspect) → B silhouette (G2 IoU ≥ 0.85 ortho, ≥ 0.70 for `34`/`34_back`) → C colour (G3 palette) → D detail (G4 signature features). Run `scripts/ref-compare.ts` after each step; it takes under a second.
 3. **Numbers before pictures.** Fix only the FIRST failing gate per round, change one parameter group, compare again. View an image only for the mask check, a failing IoU diff (`diff-<view>.png`) and the G4 milestones.
 4. **Stop rule.** Max 3 rounds per gate; then keep the best version and report the gap. Never distort a shape to fill a red area. No detail pass (§6.8) while G2 fails.
 5. **Log one line per round** (`step B, round 2: side IoU 0.71 -> 0.83, shortened neck`) and **end the answer with the gate table** of the last compare run. "Matches the reference" without that table is not allowed.
@@ -208,15 +212,15 @@ Full procedure and scripts: `references/reference-matching.md`. The rules, in or
 
 For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`). It reruns Q1 to Q5 and verifies the output with E1 to E6.
 
-When the GLB must retain colors, UVs, maps, rigging, or clips, export the built Three.js group with `GLTFExporter` and reopen the result with `GLTFLoader`. Check the requested attributes and report evidence for the exact file. See `references/glb-export.md`.
+When the GLB must retain vertex colors, materials, UVs, maps, rigging (`RigBuilder` or `SkinnedMesh`), or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb`. It runs `GLTFExporter` → disk → `GLTFLoader` and reports RG1–RG5 (`@@RESULT`). See `references/glb-export.md`.
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
-Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop` (or `--tris tris.json --meta meta.json --glb asset.glb`). It counts triangles, GPU vertices (3 x triangles, flat non-indexed), draw calls, materials, textures, bones and GLB size against the platform table, and says what it could not check. `--lods` builds `detail` 2, 1, 0 and checks about half the triangles per level, the same parts, bounds and pivot, determinism. Add LOD with `detailParam` and `lodRadiusScale` from `src/lod.ts`: default 2 must leave the existing asset unchanged. The numbers are counted, not measured on a GPU: say so. Details: `references/budget.md`.
+Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop` (`--kind` supports `prop`, `hero`, `creature`, `vehicle`, `building`; optional `--budget N` overrides the L0 triangle ceiling). It counts triangles, GPU vertices (3 x triangles, flat non-indexed), draw calls, materials, textures, bones and GLB size against the platform table, and says what it could not check. `--lods` builds `detail` 2, 1, 0 and checks about half the triangles per level, the same parts, bounds and pivot, determinism. Add LOD with `detailParam` and `lodRadiusScale` from `src/lod.ts`: default 2 must leave the existing asset unchanged. The numbers are counted, not measured on a GPU: say so. Details: `references/budget.md`.
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 
-Run `npx tsx scripts/rig-check.ts --meta char_metadata.json` to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & in-place horizontal drift · R5 static expression mapping · R6 slide clearance. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.
+Run `npx tsx scripts/rig-check.ts --meta char_metadata.json --kind creature --motion free` (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping/lunging sway) to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & drift · R5 static expression mapping · R6 slide & floor (`qa.clipMinY`) clearance. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.
 ~~~
 
 ## references/composite.md
@@ -252,11 +256,19 @@ export const prefixParams = (prefix: string, defs: ParamDef[]) =>
 export const pickParams = (p: Record<string, unknown>, prefix: string) =>
   Object.fromEntries(Object.entries(p).filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k.slice(prefix.length), v]));
 
-export function footprintOf(obj: THREE.Object3D) {                 // circle, conservative
+export function footprintOf(obj: THREE.Object3D) {                 // circle, conservative (trees, rocks, round props)
   const b = new THREE.Box3().setFromObject(obj, true);
   const c = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
   return { x: c.x, z: c.z, r: Math.hypot(s.x, s.z) / 2 };
 }
+
+/** Rectangular AABB footprint for elongated buildings, walls, and vehicles so props can sit close to walls without huge circular dead zones. */
+export function boxFootprintOf(obj: THREE.Object3D, clearance = 0) {
+  const b = new THREE.Box3().setFromObject(obj, true);
+  return { minX: b.min.x - clearance, maxX: b.max.x + clearance, minZ: b.min.z - clearance, maxZ: b.max.z + clearance };
+}
+export const hitsBox = (a: { minX: number; maxX: number; minZ: number; maxZ: number }, b: { minX: number; maxX: number; minZ: number; maxZ: number }) =>
+  a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
 
 type Spot = { r: number; clearance?: number };
 /** Returns the items that fit, in input order, with x/z set. Returned r includes clearance. */
@@ -307,6 +319,13 @@ export function buildPlotAsset(raw: Record<string, unknown> = {}) {
 ```
 
 Carry the object on the item (`obj`), as above. Pairing `placeAll`'s result with the input array by index breaks as soon as one item is skipped.
+
+### Architecture, hollow walls & interiors (`--kind building`)
+
+- **Rectangular layouts:** Use `boxFootprintOf` + `hitsBox` when placing elongated houses, fences, market stalls, or city blocks so adjacent assets pack cleanly along walls.
+- **Window & door cutouts (watertight):** Never punch unsealed holes into a box (fails Q4). Build each wall with an opening from 4 closed wall segments around the opening (left pier, right pier, lintel above, sill below), then place a recessed frame + glass pane (`references/look.md`) inside the opening.
+- **Walkable interiors:** Give interior walls real thickness (two outward-facing closed slabs or an extruded U-frame) rather than `DoubleSide` sheets, and separate movable doors/shutters onto bounded hinge pivots (`references/rigging-biped.md`).
+- **Budget:** Use `--kind building` in `mesh-stats.ts` (allows up to 6 materials on web for stone/plaster, roof tiles, wood trim, glass, metal, and emissive windows) and pass `--budget 20000` (or the platform building max) to `qa-asset.ts`.
 ~~~
 
 ## references/creatures.md
@@ -349,9 +368,11 @@ Code: `src/organic.ts`. API:
 - `export const cross = (a: V3, b: V3): V3`
 - `export const norm = (a: V3): V3`
 - `export function sampleSpline(pts: V3[], perSegment = 4): V3[]`
-- `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,`
+- `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): Tris`
 - `export const spikeTris = (base: V3, dir: V3, length: number, radius: number, sides = 4): Tris`
 - `export function fanTris(apex: V3, rim: V3[]): Tris`
+- `export function planarBladeTris(base: V3, mid: V3, tip: V3, halfThick: number, chordBase: number, chordMid: number, planeNormal?: V3): Tris`
+- `export function radialArrayTris(tris: Tris, count: number, axis?: 0 | 1 | 2, center?: V3, startAngle?: number): Tris`
 
 
 Example kernel: `src/dragonKernel.ts` (project-specific parameters and wing rim; copy and adapt).
@@ -363,6 +384,9 @@ Example kernel: `src/dragonKernel.ts` (project-specific parameters and wing rim;
 - **Sheets:** a one-sided membrane has no volume, so `signedVolume` does not apply. Either give it thickness (a second, offset, reversed copy) or put it in its own `PartBuilder` with a `DoubleSide` material. This is the one accepted use of `DoubleSide` (SKILL.md §6).
 - **Poses:** describe joints as points (hip, knee, foot), not as nested rotations. Points stay mirror-safe and testable.
 - **Mirroring** follows SKILL.md §6.1; build the left side and mirror it.
+- **Steep/vertical fins & tail fans:** Pass `upHint` (e.g. `[0, 0, 1]`) to `tubeTris` or use `planarBladeTris(..., [1, 0, 0])` so vertical blades stay razor-thin on `X = 0` instead of twisting 90°.
+- **Multi-limb & radial creatures (spiders, krakens, octopi):** Use `radialArrayTris` for static spokes/suckers/limbs or build one articulated leg/tentacle template and instantiate radially around the thorax/mantle. Use `--kind creature` in `mesh-stats.ts` and `rig-check.ts` (up to 64 pivots), and prefer flat-shaded `SkinnedMesh` for flexible tentacles so draw calls stay low (1–2 per creature) while curves bend smoothly.
+- **Vehicles & mechanical assemblies:** Separate rotating wheels/propellers (`wheelSpin*`), steering knuckles (`wheelSteerFL/FR` parented above `wheelSpinFL/FR`), and bounded door/turret hinges into dedicated child pivots. Use `--kind vehicle` in `mesh-stats.ts` (allows up to 5–6 materials for paint, rubber, metal, transparent glass, and emissive lights).
 
 ## 6.4 Biped / humanoid & tapered box helpers
 
@@ -733,6 +757,7 @@ Contents: §4 Low-poly look (`lowpoly.ts`) and texture choices · §5 Vertex jit
 - Organic and stone: `roughness` 0.7–0.9, `metalness` 0–0.2.
 - Painted or metal parts: `roughness` 0.35–0.6, `metalness` 0.5–0.8. Rough metal (roughness 0.7–0.9 with metalness 0.6–0.9) renders almost black without an environment map; metals only reflect their surroundings. Tell the user that metal parts need `scene.environment` (for example `RoomEnvironment` through `PMREMGenerator`), or lower `metalness` to ≤ 0.35 for an environment-free scene.
 - Lamps and windows: use `emissive` and `emissiveIntensity`, not extra lights (§10).
+- Transparent glass (vehicle windshields, cockpits, building windows): put glass in its own material (`MeshStandardMaterial` with `transparent: true`, `opacity: 0.42–0.58`, `roughness: 0.12`, `metalness: 0.15`, `depthWrite: false`, muted tint `#88c9e8`). Keep glass panes as clean closed slabs or thin single-sided outward panes over a dark interior shell so alpha sorting stays clean and survives `GLTFExporter` without needing `MeshPhysicalMaterial` transmission extensions.
 - Palette: muted hex tones (`#2e7d32`, `#e6a100`, `#1e222a`); avoid pure primaries.
 - Since r181 PBR energy conservation, and since r187 PMREM, shading differs slightly between versions. Judge a palette by relative contrast, not by absolute screenshots.
 
@@ -815,18 +840,29 @@ Reference for `threejs-asset-generator`. Read it before writing a character, any
 
 Contents: 6.4 Rigged parts (`rig.ts`, clips) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets): `detail.md`.
 
-## 6.4 Rigged parts
+## 6.4 Rigged parts & choosing rigid vs skinned
 
-`PartBuilder` merges everything of one material into one static mesh, so a merged character cannot move. Split by **bone**: parts merge per (bone, material), and bones are plain `THREE.Group` pivots. Everything is still a pure seeded function; animation only rotates the groups.
+Choose the rigging strategy by silhouette and flexibility needs:
+- **Rigid per-bone pivots (`RigBuilder`, `THREE.Group` hierarchy):** Best for humanoids, robots, hard-shelled arthropods (spiders, crabs), vehicles (wheels, steering, turrets, doors), and articulated building parts (gates, windmills). Parts merge per `(bone, material)` and rotate cleanly around each joint without deforming facets.
+- **Flat-shaded `THREE.SkinnedMesh` (continuous organic bending):** Recommended for long serpentine bodies (dragons, snakes), flexible tentacles (kraken, octopus), tails, and organic necks that must curve smoothly in S-waves without breaking into stiff segments. Keep the low-poly faceted look by using `flatShading: true` on the material, building a clean 6–8 sided lofted body in rest pose along `+Z` (or natural curve), weighting each ring smoothly across adjacent spine bones (`skinIndex`, `skinWeight`), and attaching rigid details (horns, claws, armor plates, eyes, whiskers, fins) directly to their parent `THREE.Bone`. A single `SkinnedMesh` also keeps draw calls to 1–2 even on a 40+ bone kraken!
 
 Rules:
-- Author every part in the **rest pose in asset space** (A-pose for humanoids, §0 axes). `RigBuilder` shifts each part by `-pivot`, so the bone's local origin is its joint and a rotation about the bone turns the part about the joint.
-- Bones are listed **parents first** and have unique names; mixer tracks address them by name. The root bone (hips) is where body bob goes.
-- Draw calls = bones × materials. A humanoid fits in about 10 bones: `hips, spine, head, upperArmL/R, foreArmL/R, thighL/R, shinL/R`. Put hands into the forearm bone and feet into the shin bone. Do not rig what never moves (belts, pouches go into the bone they hang from).
-- Close the visible gap at a joint with a small sphere or a slightly wider `tubeTris` end on the child bone, not with overlapping random geometry.
+- Author every part in the **rest pose in asset space** (A-pose for humanoids, §0 axes). With `RigBuilder`, each part shifts by `-pivot` so the bone's local origin is its joint.
+- Bones are listed **parents first** and have unique names; mixer tracks address them by name. The root bone (`hips` / `root`) carries body bob and (for `--motion free` hovering/leaping creatures) subtle natural X/Z sway or lunge.
+- **Category-appropriate bone counts:** Humanoids fit in ~10–16 bones; serpentine creatures and articulated dragons typically need **16–26 bones** (including articulated jaw, whiskers, and 5–8 spine/tail segments); multi-limb creatures such as spiders (~28 bones: 8 legs × 3 joints + body/fangs) or krakens (~40–52 bones: 8 tentacles × 5–6 segments + mantle) should use `--kind creature` in `rig-check.ts` (up to 64 pivots) and prefer `SkinnedMesh` on flexible limbs so draw calls stay low.
+- For rigid pivots, close visible joint gaps with overlapping spherical/ellipsoid joint caps or slightly flared child rings so bending 35–45° never opens seams.
 - Mirror with `mirrorBone` for the pivot and a mirror matrix for the parts. The mirror matrix is applied before the pivot shift inside `RigBuilder`, and `PartBuilder` restores the winding (SKILL.md §6.1).
-- `groundAsset(rig)` and `disposeAsset(rig)` work as they are. Ground in rest pose; foot IK or hip bob afterwards is the animation's job.
-- Not covered on purpose: `SkinnedMesh` (smooth bending needs weights and breaks the flat-shaded look at joints). Rigid per-bone meshes match the low-poly style and keep the pipeline untouched.
+- `groundAsset(rig)` and `disposeAsset(rig)` work as they are. Ground in rest pose; foot IK, hovering elevation, or hip bob afterwards is the animation's job.
+
+### Animation quality standards (anti-stiff motion)
+
+Do not ship robotic 8-sample sine oscillations for hero or creature animations:
+- **Sample density:** Bake clips at **24–30 fps** (or smooth `smoothstep`/cubic-eased pose evaluators) with shortest-path quaternion hemisphere alignment (`prev.dot(curr) < 0` → negate) so `AnimationMixer` and exported `.glb` clips play silk-smooth.
+- **Anticipation → Climax → Recovery:** Action clips (attacks, roars, leaps, bursts) must coil/wind up first, snap rapidly into an expressive peak pose (e.g. jaw wide open, arms flung out, chest lifted), hold briefly with micro-tremor, and relax cleanly back to idle.
+- **Traveling wave & follow-through:** On spines, tails, tentacles, and whiskers, propagate phase lag sequentially down the chain (`phase = idx * 0.55`) with amplitude growing gradually toward the tip (`0.06` at chest → `0.25–0.45` at tail tip).
+- **Secondary life:** Add subtle eye blinks (scaling an `eyes` node in Y), articulated lower-jaw roar, breathing chest rise, and whisker/fin flutter.
+- **Seamless transitions:** For looping clips, sample exact `t = 0` at the final frame (`pose(duration) === pose(0)`). For chained actions (e.g. `Charge` → `Burst` → `Idle`), match the exact end pose of clip A to the start pose of clip B so crossfade or cut transitions have zero pop.
+- **Mechanical & vehicle motion:** Use continuous 360° wheel/propeller rotation tracks around local X/Z, separate steering parent pivots (`wheelSteerFL` → `wheelSpinFL`) for front wheels, and bounded hinge angles on doors/hatches so they never clip through the chassis.
 
 Code: `src/rig.ts`. API:
 

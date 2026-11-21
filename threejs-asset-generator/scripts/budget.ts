@@ -6,15 +6,76 @@ import { qaGates, boundsOf, flatten, triCount, type Gate, type Parts, type QAOpt
 export type { Gate };
 
 export type Platform = 'mobile' | 'web' | 'vr' | 'desktop';
-export type Kind = 'prop' | 'hero';
+export type Kind = 'prop' | 'hero' | 'creature' | 'vehicle' | 'building';
+export const KINDS: readonly Kind[] = ['prop', 'hero', 'creature', 'vehicle', 'building'];
 type Range = { target: number; max: number };
-export type Profile = { tris: Record<Kind, Range>; materials: Range; texture: number; bones: Range; drawCalls?: number; glbMiB?: Partial<Record<Kind, Range>> };
+export type Profile = {
+  tris: Record<Kind, Range>;
+  materials: Range;
+  materialsByKind?: Partial<Record<Kind, Range>>;
+  texture: number;
+  bones: Range;
+  drawCalls?: number;
+  glbMiB?: Partial<Record<Kind, Range>>;
+};
 
 export const PROFILES: Record<Platform, Profile> = {
-  mobile: { tris: { hero: { target: 5000, max: 15000 }, prop: { target: 300, max: 3000 } }, materials: { target: 1, max: 2 }, texture: 1024, bones: { target: 75, max: 75 }, drawCalls: 50, glbMiB: { hero: { target: 2, max: 5 } } },
-  web: { tris: { hero: { target: 10000, max: 30000 }, prop: { target: 1000, max: 10000 } }, materials: { target: 1, max: 2 }, texture: 2048, bones: { target: 100, max: 100 }, drawCalls: 100, glbMiB: { hero: { target: 2, max: 5 } } },
-  vr: { tris: { hero: { target: 10000, max: 40000 }, prop: { target: 1000, max: 10000 } }, materials: { target: 1, max: 3 }, texture: 2048, bones: { target: 100, max: 100 } },
-  desktop: { tris: { hero: { target: 50000, max: 150000 }, prop: { target: 5000, max: 50000 } }, materials: { target: 2, max: 6 }, texture: 4096, bones: { target: 150, max: 300 } },
+  mobile: {
+    tris: {
+      hero: { target: 5000, max: 15000 },
+      creature: { target: 5000, max: 15000 },
+      vehicle: { target: 3000, max: 12000 },
+      building: { target: 2000, max: 10000 },
+      prop: { target: 300, max: 3000 },
+    },
+    materials: { target: 1, max: 2 },
+    materialsByKind: { vehicle: { target: 3, max: 5 }, building: { target: 2, max: 4 } },
+    texture: 1024,
+    bones: { target: 75, max: 75 },
+    drawCalls: 50,
+    glbMiB: { hero: { target: 2, max: 5 }, creature: { target: 2, max: 5 }, vehicle: { target: 2, max: 5 } },
+  },
+  web: {
+    tris: {
+      hero: { target: 10000, max: 30000 },
+      creature: { target: 10000, max: 30000 },
+      vehicle: { target: 6000, max: 25000 },
+      building: { target: 4000, max: 20000 },
+      prop: { target: 1000, max: 10000 },
+    },
+    materials: { target: 1, max: 2 },
+    materialsByKind: { vehicle: { target: 3, max: 6 }, building: { target: 3, max: 6 } },
+    texture: 2048,
+    bones: { target: 100, max: 100 },
+    drawCalls: 100,
+    glbMiB: { hero: { target: 2, max: 5 }, creature: { target: 2, max: 5 }, vehicle: { target: 2, max: 5 } },
+  },
+  vr: {
+    tris: {
+      hero: { target: 10000, max: 40000 },
+      creature: { target: 10000, max: 40000 },
+      vehicle: { target: 8000, max: 30000 },
+      building: { target: 5000, max: 25000 },
+      prop: { target: 1000, max: 10000 },
+    },
+    materials: { target: 1, max: 3 },
+    materialsByKind: { vehicle: { target: 3, max: 6 }, building: { target: 3, max: 6 } },
+    texture: 2048,
+    bones: { target: 100, max: 100 },
+  },
+  desktop: {
+    tris: {
+      hero: { target: 50000, max: 150000 },
+      creature: { target: 50000, max: 150000 },
+      vehicle: { target: 30000, max: 120000 },
+      building: { target: 20000, max: 100000 },
+      prop: { target: 5000, max: 50000 },
+    },
+    materials: { target: 2, max: 6 },
+    materialsByKind: { vehicle: { target: 4, max: 8 }, building: { target: 4, max: 8 } },
+    texture: 4096,
+    bones: { target: 150, max: 300 },
+  },
 };
 
 /** GPU memory of an RGBA8 texture in MiB. With a full mip chain (default) a 1024 texture is 5.33, 2048 is 21.33, 4096 is 85.33. */
@@ -44,7 +105,8 @@ export function budgetGates(s: Stats, o: BudgetOptions = {}): { gates: Gate[]; s
     gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}${id === 'B1 triangles' ? `, ${kind}` : ''}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
   };
   range('B1 triangles', `${s.triangles} triangles`, s.triangles, P.tris[kind], 'lower `detail`, fewer segments, drop small details (references/budget.md)');
-  if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, P.materials, 'merge parts that share a look into one material');
+  const matRange = P.materialsByKind?.[kind] ?? P.materials;
+  if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, matRange, 'merge parts that share a look into one material');
   if (!s.textures.length) skipped.push('B3 textures (no textures in --meta; an asset with vertex colours only has none)');
   else { const worst = s.textures.reduce((a, b) => (Math.max(b.w, b.h) > Math.max(a.w, a.h) ? b : a)), side = Math.max(worst.w, worst.h);
     gates.push({ gate: 'B3 textures', value: `largest ${worst.name} ${worst.w}x${worst.h} of max ${P.texture}, ${fmt(s.textureMiB)} MiB uncompressed GPU memory in total (${platform})`, pass: side <= P.texture, hint: 'shrink the atlas or split the cells; compression (KTX2) cuts memory, not the size limit' }); }

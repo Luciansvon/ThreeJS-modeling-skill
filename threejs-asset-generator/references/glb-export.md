@@ -60,6 +60,10 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use `GLTFExporter` from `three/addons/exporters/GLTFExporter.js` on a fresh Three.js group in rest pose. Pass `{ binary: true, animations: clips }` to `parseAsync`. Reopen the returned `ArrayBuffer` with `GLTFLoader.parseAsync(bytes, '')`, compare the mesh names, bounds and triangle counts, then compare the attributes, bones, and clip names and keyframes required by the brief. Save and test the exact exported bytes.
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, and re-parses the exact disk bytes with `GLTFLoader` to emit `@@RESULT` gates RG1–RG5):
 
-A Three.js r180 smoke test round-tripped a static vertex-colour attribute, material roughness, a one-bone skin, and one clip. Procedural textures, visual playback, and target-engine import need an asset-specific test. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.
+```
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
+```
+
+The builder may return a `THREE.Object3D` (with optional `root.userData.animations`) or `{ root, animations }`. Always build a fresh rest-pose instance excluding gizmos and runtime VFX. Procedural textures, visual playback, and target-engine import need an asset-specific check. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.

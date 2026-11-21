@@ -35,9 +35,11 @@ Code: `src/organic.ts`. API:
 - `export const cross = (a: V3, b: V3): V3`
 - `export const norm = (a: V3): V3`
 - `export function sampleSpline(pts: V3[], perSegment = 4): V3[]`
-- `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,`
+- `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): Tris`
 - `export const spikeTris = (base: V3, dir: V3, length: number, radius: number, sides = 4): Tris`
 - `export function fanTris(apex: V3, rim: V3[]): Tris`
+- `export function planarBladeTris(base: V3, mid: V3, tip: V3, halfThick: number, chordBase: number, chordMid: number, planeNormal?: V3): Tris`
+- `export function radialArrayTris(tris: Tris, count: number, axis?: 0 | 1 | 2, center?: V3, startAngle?: number): Tris`
 
 
 Example kernel: `src/dragonKernel.ts` (project-specific parameters and wing rim; copy and adapt).
@@ -49,6 +51,9 @@ Example kernel: `src/dragonKernel.ts` (project-specific parameters and wing rim;
 - **Sheets:** a one-sided membrane has no volume, so `signedVolume` does not apply. Either give it thickness (a second, offset, reversed copy) or put it in its own `PartBuilder` with a `DoubleSide` material. This is the one accepted use of `DoubleSide` (SKILL.md §6).
 - **Poses:** describe joints as points (hip, knee, foot), not as nested rotations. Points stay mirror-safe and testable.
 - **Mirroring** follows SKILL.md §6.1; build the left side and mirror it.
+- **Steep/vertical fins & tail fans:** Pass `upHint` (e.g. `[0, 0, 1]`) to `tubeTris` or use `planarBladeTris(..., [1, 0, 0])` so vertical blades stay razor-thin on `X = 0` instead of twisting 90°.
+- **Multi-limb & radial creatures (spiders, krakens, octopi):** Use `radialArrayTris` for static spokes/suckers/limbs or build one articulated leg/tentacle template and instantiate radially around the thorax/mantle. Use `--kind creature` in `mesh-stats.ts` and `rig-check.ts` (up to 64 pivots), and prefer flat-shaded `SkinnedMesh` for flexible tentacles so draw calls stay low (1–2 per creature) while curves bend smoothly.
+- **Vehicles & mechanical assemblies:** Separate rotating wheels/propellers (`wheelSpin*`), steering knuckles (`wheelSteerFL/FR` parented above `wheelSpinFL/FR`), and bounded door/turret hinges into dedicated child pivots. Use `--kind vehicle` in `mesh-stats.ts` (allows up to 5–6 materials for paint, rubber, metal, transparent glass, and emissive lights).
 
 ## 6.4 Biped / humanoid & tapered box helpers
 

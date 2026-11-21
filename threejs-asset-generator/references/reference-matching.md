@@ -16,7 +16,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
    - **Palette**: what `ref-intake` prints (do not guess hex values from memory).
    - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
    - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
-3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. For a single multi-view turnaround sheet (e.g. 3×2 grid), use `--sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34`. Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
+3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. `view` the printed `ref-<view>-mask.png` once. Wrong silhouette (background leaked in, part missing)? Change `--tol` and run again. A bad mask makes every later number meaningless, so this is the only intake check that may not be skipped.
 
 ## 2 The loop
@@ -49,7 +49,7 @@ Stop rules: max 3 rounds per gate. After 3 rounds without reaching the threshold
 | G3 palette | every reference colour with 5% or more share has a colour within RGB distance 60 | all | retune that one colour |
 | G4 checklist | the signature features from `ref-spec.md` (visual) | all present | add or reshape that feature |
 
-- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down.
+- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down. Angled `34` / `34_back` views project from front/rear 3/4 angles (38°/142° azimuth, 16° elevation) and automatically use the 3/4 concept-art threshold (`IoU >= 0.70`, aspect within `14%`) so you never need to mislabel a 3/4 image as an orthographic `side` view.
 - G4 is the only visual gate. Take ONE screenshot per milestone (end of B, end of D), same camera angle as the reference, reference and render in the same message, and tick each signature feature. If you cannot render, use the diff PNGs and say that G4 was checked from silhouettes only.
 - Thresholds live in `THRESH` in `scripts/refcheck.ts`. Loosen them (IoU 0.7) only for photos with strong perspective and say so in the report.
 

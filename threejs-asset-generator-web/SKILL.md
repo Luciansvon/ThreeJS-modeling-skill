@@ -28,6 +28,18 @@ The packs reproduce canonical files under headings named for the original paths.
 3. Keep working on independent outputs. Preserve the brief, design decisions, geometry conventions, and gate thresholds. Hold only the step or result that needs the missing tool or input.
 4. Deliver the usable artifacts and evidence first. Put unresolved tool failures and their impact in the last section, **Blocked**. Report the failed stage, what prevented it, what you delivered in its place, and what would unblock the missing result.
 
+## Exploration vs Build Mode
+
+When the user is still exploring ideas, asking for advice, or has left major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults before writing full model code. Ask only what is missing from these 6 core items:
+1. **Reference & style:** existing image, generate a reference concept first, or build from text.
+2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed.
+3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
+4. **Preview mode:** **Fast Preview** (quick orbit/scrub) vs **Full Preview** (studio controls, rig/clip inspection).
+5. **Runtime VFX:** optional studio-only lightning/fire/aura kept outside the exported asset.
+6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
+
+Jump straight to **Build Mode** when the brief is already complete or the user asks to build directly.
+
 ## Build from one model
 
 1. Record the target platform, requested file type, main dimensions, palette, and which reference views are visible. Use a labeled assumption where information is missing. When an image is available, note the silhouette breaks, part layout, and proportions visible in that view. Report obscured features as assumptions.
@@ -48,7 +60,7 @@ The packs reproduce canonical files under headings named for the original paths.
 - **Fast Preview** is the default for a quick look. When the session can show the actual GLB, use its built-in viewer for orbit, pan, zoom, textures, labels, and playback or scrubbing of embedded clips as supported. Otherwise show a frame, orthographic SVG projected from the model data, or dimensioned front and side blockouts in text. Label schematic output clearly and mark any clip playback that was unavailable as **Unchecked**.
 - **Full Preview** is for live parameters, rig inspection, clip authoring or comparison, and expression changes. Open the interactive controls that matter to the brief if the session supports them. If a requested control is unavailable, provide the available preview and record the missing control under **Blocked**.
 
-When the user asks for a preview without specifying the mode, offer both in one sentence and state what the session can show. Share the fast result if it is ready. Follow an explicit choice directly and keep building the asset while the choice is open. Report checks only for the model and views actually inspected.
+When the user asks for a preview without specifying the mode, offer both in one sentence and state what the session can show. Share a lightweight fast preview if already ready, and wait for the user's choice before building a heavy Full Preview studio. Follow an explicit choice directly and report checks only for the model and views actually inspected.
 
 ## Return the result
 

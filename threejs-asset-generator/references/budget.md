@@ -10,14 +10,15 @@ Scripts (run them, do not read them): `scripts/mesh-stats.ts`; library `scripts/
 
 Numbers aligned with blender-skills. Each range is *target to hard limit*: the gate fails above the limit and says "above the target" between the two.
 
-| Platform | Hero char tris | Prop tris | Materials per asset | Texture max | Bones | Draw calls |
-|---|---|---|---|---|---|---|
-| `mobile` | 5k to 15k | 0.3k to 3k | 1 to 2 | 1024 | 75 | 50 |
-| `web` (three.js, default) | 10k to 30k | 1k to 10k | 1 to 2 | 2048 | 100 | 100 |
-| `vr` (standalone) | 10k to 40k | 1k to 10k | 1 to 3 | 2048 | 100 | not in the table |
-| `desktop` | 50k to 150k | 5k to 50k | 2 to 6 | 4096 | 150 to 300 | not in the table |
+| Platform | Hero / Creature tris | Vehicle tris | Building tris | Prop tris | Materials (default / vehicle & building) | Texture max | Bones | Draw calls |
+|---|---|---|---|---|---|---|---|---|
+| `mobile` | 5k to 15k | 3k to 12k | 2k to 10k | 0.3k to 3k | 1 to 2 / 3 to 5 (`building` 2–4) | 1024 | 75 | 50 |
+| `web` (three.js, default) | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
+| `vr` (standalone) | 10k to 40k | 8k to 30k | 5k to 25k | 1k to 10k | 1 to 3 / 3 to 6 | 2048 | 100 | not in the table |
+| `desktop` | 50k to 150k | 30k to 120k | 20k to 100k | 5k to 50k | 2 to 6 / 4 to 8 | 4096 | 150 to 300 | not in the table |
 
-Web delivery: a hero model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
+Web delivery: a `hero`, `creature`, or `vehicle` model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
+`--kind` accepts `prop`, `hero`, `creature`, `vehicle`, or `building`. `--lods` automatically passes the selected `--profile` + `--kind` max triangle limit (or `--budget N`) into L0 QA instead of clamping at 2,000 triangles.
 
 A limit the table does not give is reported under `not checked`. Do not fill it with a number you remember.
 

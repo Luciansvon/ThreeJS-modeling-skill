@@ -19,14 +19,15 @@ Scripts (run them, do not read them): `scripts/mesh-stats.ts`; library `scripts/
 
 Numbers aligned with blender-skills. Each range is *target to hard limit*: the gate fails above the limit and says "above the target" between the two.
 
-| Platform | Hero char tris | Prop tris | Materials per asset | Texture max | Bones | Draw calls |
-|---|---|---|---|---|---|---|
-| `mobile` | 5k to 15k | 0.3k to 3k | 1 to 2 | 1024 | 75 | 50 |
-| `web` (three.js, default) | 10k to 30k | 1k to 10k | 1 to 2 | 2048 | 100 | 100 |
-| `vr` (standalone) | 10k to 40k | 1k to 10k | 1 to 3 | 2048 | 100 | not in the table |
-| `desktop` | 50k to 150k | 5k to 50k | 2 to 6 | 4096 | 150 to 300 | not in the table |
+| Platform | Hero / Creature tris | Vehicle tris | Building tris | Prop tris | Materials (default / vehicle & building) | Texture max | Bones | Draw calls |
+|---|---|---|---|---|---|---|---|---|
+| `mobile` | 5k to 15k | 3k to 12k | 2k to 10k | 0.3k to 3k | 1 to 2 / 3 to 5 (`building` 2–4) | 1024 | 75 | 50 |
+| `web` (three.js, default) | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
+| `vr` (standalone) | 10k to 40k | 8k to 30k | 5k to 25k | 1k to 10k | 1 to 3 / 3 to 6 | 2048 | 100 | not in the table |
+| `desktop` | 50k to 150k | 30k to 120k | 20k to 100k | 5k to 50k | 2 to 6 / 4 to 8 | 4096 | 150 to 300 | not in the table |
 
-Web delivery: a hero model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
+Web delivery: a `hero`, `creature`, or `vehicle` model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
+`--kind` accepts `prop`, `hero`, `creature`, `vehicle`, or `building`. `--lods` automatically passes the selected `--profile` + `--kind` max triangle limit (or `--budget N`) into L0 QA instead of clamping at 2,000 triangles.
 
 A limit the table does not give is reported under `not checked`. Do not fill it with a number you remember.
 
@@ -251,9 +252,13 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use `GLTFExporter` from `three/addons/exporters/GLTFExporter.js` on a fresh Three.js group in rest pose. Pass `{ binary: true, animations: clips }` to `parseAsync`. Reopen the returned `ArrayBuffer` with `GLTFLoader.parseAsync(bytes, '')`, compare the mesh names, bounds and triangle counts, then compare the attributes, bones, and clip names and keyframes required by the brief. Save and test the exact exported bytes.
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, and re-parses the exact disk bytes with `GLTFLoader` to emit `@@RESULT` gates RG1–RG5):
 
-A Three.js r180 smoke test round-tripped a static vertex-colour attribute, material roughness, a one-bone skin, and one clip. Procedural textures, visual playback, and target-engine import need an asset-specific test. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.
+```
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
+```
+
+The builder may return a `THREE.Object3D` (with optional `root.userData.animations`) or `{ root, animations }`. Always build a fresh rest-pose instance excluding gizmos and runtime VFX. Procedural textures, visual playback, and target-engine import need an asset-specific check. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.
 ~~~
 
 ## references/qa-gates.md
@@ -279,7 +284,7 @@ npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 
 The builder returns `Tris` (9 numbers per triangle, CCW from outside), `{ tris }`, or named parts `{ body: Tris, legs: Tris }`. Named parts are better: the gates then name the part at fault. `scripts/fixtures/crate.qa.ts` is the smallest complete example.
 
-Options: `--budget N` (default 2000; about 20000 for a composite) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
+Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
 
 Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the next result unreadable.
 
@@ -354,7 +359,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
    - **Palette**: what `ref-intake` prints (do not guess hex values from memory).
    - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
    - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
-3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. For a single multi-view turnaround sheet (e.g. 3×2 grid), use `--sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34`. Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
+3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. `view` the printed `ref-<view>-mask.png` once. Wrong silhouette (background leaked in, part missing)? Change `--tol` and run again. A bad mask makes every later number meaningless, so this is the only intake check that may not be skipped.
 
 ## 2 The loop
@@ -387,7 +392,7 @@ Stop rules: max 3 rounds per gate. After 3 rounds without reaching the threshold
 | G3 palette | every reference colour with 5% or more share has a colour within RGB distance 60 | all | retune that one colour |
 | G4 checklist | the signature features from `ref-spec.md` (visual) | all present | add or reshape that feature |
 
-- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down.
+- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down. Angled `34` / `34_back` views project from front/rear 3/4 angles (38°/142° azimuth, 16° elevation) and automatically use the 3/4 concept-art threshold (`IoU >= 0.70`, aspect within `14%`) so you never need to mislabel a 3/4 image as an orthographic `side` view.
 - G4 is the only visual gate. Take ONE screenshot per milestone (end of B, end of D), same camera angle as the reference, reference and render in the same message, and tick each signature feature. If you cannot render, use the diff PNGs and say that G4 was checked from silhouettes only.
 - Thresholds live in `THRESH` in `scripts/refcheck.ts`. Loosen them (IoU 0.7) only for photos with strong perspective and say so in the report.
 
@@ -458,25 +463,55 @@ Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/r
 ## §18. Run rig-check
 
 ```
-npx tsx scripts/rig-check.ts --meta char_metadata.json [--max-pivots 16] [--allow-refpose]
+npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]
 ```
+
+Default `--max-pivots` scales by `--kind`: `hero` / `prop` = 16, `building` = 24, `vehicle` = 32, `creature` = 64 (for serpentine dragons, spiders, or kraken tentacles). Pass `--motion free` (or set `qa.motionMode: "free"`) for hovering, swimming, leaping, or lunging creatures whose root sways naturally in X/Z.
 
 ## The gates (R1 to R6)
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| R1 hierarchy | unique `pivotNames`, single root, valid parent-child edges, acyclic tree, count <= `--max-pivots` (default 16) | missing root, cycle, typo in parent/child edge, too many pivots |
+| R1 hierarchy | unique `pivotNames`, single root, valid `{ parent, child }[]` edges, acyclic tree, count <= max pivots for `--kind` (or `--max-pivots`) | missing root, cycle, passing a map instead of `{ parent, child }[]`, too many pivots |
 | R2 rest-pose | every pivot has a finite `[x, y, z]` entry in `rig.restLocalPositions` | `NaN` or missing pivot entry |
 | R3 clips | unique clip names, finite positive `durationSeconds`, inspection clip (`RefPose`) excluded from export | `RefPose` accidentally baked into gameplay GLB, zero duration |
-| R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets, horizontal root X/Z drift <= `1e-5` m where supplied or measurable | truncated track, duplicate timestamp, horizontal root movement |
+| R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets; in `--motion in-place` (default), horizontal root X/Z drift <= `1e-5` m; in `--motion free`, natural X/Z sway/lunge is permitted | truncated track, duplicate timestamp, unintended horizontal root movement on an in-place runner |
 | R5 expressions | square power-of-two `textureResolution` (e.g. `512x512`), `defaultExpressionInGlb` and every clip expression mapping exist | unmapped expression name or non-square resolution |
-| R6 slide clearance | `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m | slide animation does not duck enough, or feet/tail clip below the floor |
+| R6 floor / slide clearance | for runner slide clips: `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m; for general creatures/vehicles: `qa.clipMinY >= -0.025` m | animation clips below the floor or slide does not duck enough |
 
-Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 needs both slide measurements. R5 and R6 still report failures in the data that was supplied.
+Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 checks slide measurements when supplied, or general `qa.clipMinY` when no slide clip applies.
 
 ## Metadata JSON shape
 
-Pass a JSON file containing `rig` (`pivotNames`, `hierarchy`, optional `restLocalPositions`), optional `animations` (`name`, `durationSeconds`, `loop`, `expression`, optional `tracks`), optional `face` (`defaultExpressionInGlb`, `textureResolution`, `expressions`, `animationExpressionMapping`), and optional `qa` (`maxHorizDrift`, `slideDropPct`, `slideMinY`).
+```json
+{
+  "rig": {
+    "pivotNames": ["root", "neck", "head", "tail1", "tail2"],
+    "hierarchy": [
+      { "parent": "root", "child": "neck" },
+      { "parent": "neck", "child": "head" },
+      { "parent": "root", "child": "tail1" },
+      { "parent": "tail1", "child": "tail2" }
+    ],
+    "restLocalPositions": {
+      "root": [0, 0.9, 0], "neck": [0, 0.3, 0.2], "head": [0, 0.3, 0.1],
+      "tail1": [0, -0.1, -0.4], "tail2": [0, 0.1, -0.4]
+    }
+  },
+  "animations": [
+    {
+      "name": "IdleHover",
+      "durationSeconds": 4.0,
+      "loop": true,
+      "tracks": [
+        { "name": "root.position", "times": [0, 2, 4], "values": [0, 0.9, 0, 0, 1.02, 0, 0, 0.9, 0] },
+        { "name": "head.quaternion", "times": [0, 2, 4], "values": [0, 0, 0, 1, 0, 0.05, 0, 0.9987, 0, 0, 0, 1] }
+      ]
+    }
+  ],
+  "qa": { "motionMode": "free", "clipMinY": 0.05 }
+}
+```
 
 ## What is not checked
 
@@ -494,7 +529,7 @@ Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting and contra
 
 ## 1. Choose a preview
 
-When the request leaves the mode open, offer both choices in one sentence. For example, “Fast Preview lets you rotate the final model and try its animation clips. Full Preview adds editable parameters, rig inspection, and expression controls. Which do you want?” Share any fast result that is already ready and continue the asset work while the user decides. Follow an explicit mode choice directly. Use Fast for requests like “quick look”, “check the label”, or “play the exported run clip”. Use Full for authoring controls or detailed rig and expression review.
+When the request leaves the mode open and the user has not asked to dive straight in, ask in one plain sentence before building a heavy studio. For example, “Fast Preview lets you rotate the final model and try its animation clips. Full Preview adds editable parameters, rig inspection, and expression controls. Which do you want?” Follow an explicit mode choice directly. Use Fast for requests like “quick look”, “check the label”, or “play the exported run clip”. Use Full for authoring controls or detailed rig and expression review.
 
 **Fast Preview.** Reuse the [Fast Preview HTML](../assets/fast-preview.html) for existing GLB files. Open the HTML in a browser and select or drop the exact file into it. Drag to orbit, right-drag or drag with two fingers to pan, and scroll or pinch to zoom. The viewer displays the materials, textures, and labels in the loaded GLB. When the file contains animation clips, pick a clip, press Play/Pause, or drag the timeline to inspect a frame. The viewer starts paused. It needs a WebGL-capable browser and a connection to load the viewer library. For GLB output with textures or clips, choose the Three.js export route in [GLB export](glb-export.md#threejs-export-route).
 
@@ -506,7 +541,10 @@ When the model is still being built or the interactive viewer is unavailable, sh
 
 Choose controls for the asset and the requested review.
 
-- **Up to six turnaround camera presets:** Front (`+Z`), 3/4, Side (`+X`), Back (`-Z`), Top (`+Y`), Bottom (`-Y`), framed far enough back that the full asset fits.
+- **Up to six turnaround camera presets:** Front (`+Z`), 3/4 Front, 3/4 Back, Side (`+X`), Back (`-Z`), Top (`+Y`), framed far enough back that the full asset (including horns, tail tips, and peak animation poses) fits cleanly inside the safe center area without colliding with top/bottom HUD bars.
+- **Match reference 3/4 facing:** When built from a reference image, place the `3/4 Front` camera on the same side so the asset faces the same screen direction (left or right) as the reference image for direct visual comparison.
+- **Non-overlapping HUD layout:** Never let an open parameter drawer overlap the live QA telemetry card or obscure the hero's head/tail; keep parameter drawers collapsible (collapsed by default on narrow viewports) on the opposite side from the QA card.
+- **Stylized low-poly VFX (optional, runtime-only):** When the brief asks for effects (lightning, fire, frost, aura), build them from faceted low-poly primitives or crisp additive ribbons in a separate `_studio_vfx` group (never parented under the exported asset root). Keep bloom/flash intensity restrained so the model's silhouette and flat-shaded facets remain readable at peak action.
 - **Parameter controls from schema:** Auto-render sliders and colour pickers directly from the asset's `parameters` array, including `seed` and `detail` (`src/lod.ts`, `0..2`).
 - **Live QA telemetry HUD:** Show triangles, meshes, pivots, active LOD level, winding (`ALL CCW`), ground `Y`, horizontal drift, track finiteness, and slide clearance.
 - **Rig & animation dock (when animated):** Play/pause, scrub bar, individual clip buttons plus `RefPose`, pivot gizmos toggle, and expression swap buttons (`neutral` / `happy` / `focused`) with optional clip auto-sync.

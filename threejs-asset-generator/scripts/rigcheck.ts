@@ -20,13 +20,20 @@ export type RigMeta = {
   files?: { expressions?: Record<string, unknown> };
   qa?: {
     maxHorizDrift?: number;
+    motionMode?: 'in-place' | 'free';
     slideDropPct?: number;
     slideMinY?: number;
+    clipMinY?: number;
   };
 };
 
+export type RigKind = 'hero' | 'creature' | 'vehicle' | 'building' | 'prop';
+export const DEFAULT_MAX_PIVOTS: Record<RigKind, number> = { hero: 16, creature: 64, vehicle: 32, building: 24, prop: 16 };
+
 export type RigCheckOptions = {
   maxPivots?: number;
+  kind?: RigKind;
+  motionMode?: 'in-place' | 'free';
   excludeClips?: string[];
   minSlideDropPct?: number;
   minSlideY?: number;
@@ -38,23 +45,33 @@ const isFinite3 = (v: unknown): v is [number, number, number] =>
 
 export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[]; skipped: string[]; stats: Record<string, unknown> } {
   const gates: Gate[] = [], skipped: string[] = [];
-  const maxPivots = o.maxPivots ?? 16;
+  const kind = o.kind ?? 'hero';
+  const maxPivots = o.maxPivots ?? DEFAULT_MAX_PIVOTS[kind];
+  const motionMode = o.motionMode ?? meta.qa?.motionMode ?? 'in-place';
   const excluded = new Set(o.excludeClips ?? ['RefPose']);
   const minSlideDrop = o.minSlideDropPct ?? 22;
   const minSlideY = o.minSlideY ?? -0.025;
   const maxDrift = o.maxHorizDrift ?? 1e-5;
 
-  const pivots = meta.rig?.pivotNames ?? [];
-  const edges = meta.rig?.hierarchy ?? [];
+  const pivots = Array.isArray(meta.rig?.pivotNames) ? meta.rig!.pivotNames! : [];
+  const rawEdges = meta.rig?.hierarchy;
+  const edgesValid = rawEdges === undefined || Array.isArray(rawEdges);
+  const edges = Array.isArray(rawEdges) ? rawEdges : [];
   const pivotSet = new Set(pivots);
 
   // R1 hierarchy
   const hIssues: string[] = [];
   if (!pivots.length) hIssues.push('no pivotNames');
+  if (!edgesValid) hIssues.push('rig.hierarchy must be an array of { parent, child } objects (not a map)');
   if (pivotSet.size !== pivots.length) hIssues.push('duplicate pivot names');
-  if (pivots.length > maxPivots) hIssues.push(`${pivots.length} pivots exceeds max ${maxPivots}`);
+  if (pivots.length > maxPivots) hIssues.push(`${pivots.length} pivots exceeds max ${maxPivots} (${kind})`);
   const childrenOf = new Map<string, string[]>(), parentOf = new Map<string, string>();
-  for (const { parent, child } of edges) {
+  for (const edge of edges) {
+    if (!edge || typeof edge.parent !== 'string' || typeof edge.child !== 'string') {
+      hIssues.push('invalid hierarchy edge (expected { parent: string, child: string })');
+      continue;
+    }
+    const { parent, child } = edge;
     if (!pivotSet.has(parent)) hIssues.push(`unknown parent "${parent}"`);
     if (!pivotSet.has(child)) hIssues.push(`unknown child "${child}"`);
     if (parent === child) hIssues.push(`self-loop on "${parent}"`);
@@ -145,28 +162,37 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
         for (let i = 1; i < tr.times.length; i++) if (!(tr.times[i] > tr.times[i - 1])) { tIssues.push(`${c.name}/${tr.name}: non-increasing timestamps`); break; }
         if (isPosition && target === roots[0]) {
           hasRootPosition = true;
-          const x0 = tr.values[0], z0 = tr.values[2];
-          let d = 0;
-          for (let i = 0; i + 2 < tr.values.length; i += 3) d = Math.max(d, Math.abs(tr.values[i] - x0), Math.abs(tr.values[i + 2] - z0));
-          if (d > maxDrift) tIssues.push(`${c.name}: horizontal root drift ${d.toFixed(4)}m > ${maxDrift}m`);
+          if (motionMode === 'in-place') {
+            const x0 = tr.values[0], z0 = tr.values[2];
+            let d = 0;
+            for (let i = 0; i + 2 < tr.values.length; i += 3) d = Math.max(d, Math.abs(tr.values[i] - x0), Math.abs(tr.values[i + 2] - z0));
+            if (d > maxDrift) tIssues.push(`${c.name}: horizontal root drift ${d.toFixed(4)}m > ${maxDrift}m`);
+          }
         }
       }
     }
-    if (hasDrift) {
+    if (hasDrift && motionMode === 'in-place') {
       if (!Number.isFinite(suppliedDrift) || suppliedDrift < 0 || suppliedDrift > maxDrift) {
         tIssues.push(`maxHorizDrift ${suppliedDrift} must be between 0 and ${maxDrift}m`);
       }
+    } else if (hasDrift && (!Number.isFinite(suppliedDrift) || suppliedDrift < 0)) {
+      tIssues.push(`maxHorizDrift ${suppliedDrift} must be finite and >= 0`);
     }
-    if (!hasRootPosition && !hasDrift) skipped.push('R4 horizontal root drift (no root position track or qa.maxHorizDrift provided)');
+    if (!hasRootPosition && !hasDrift && motionMode === 'in-place') skipped.push('R4 horizontal root drift (no root position track or qa.maxHorizDrift provided)');
     const checks = [];
     if (totalTracks) checks.push(`${totalTracks} track(s) checked for finite, ordered samples and matching value counts`);
-    if (hasRootPosition) checks.push(`root track drift <= ${maxDrift}m`);
-    if (hasDrift) checks.push(`supplied maxHorizDrift <= ${maxDrift}m`);
+    if (motionMode === 'free') checks.push('motionMode=free (natural horizontal sway/lunge allowed)');
+    else {
+      if (hasRootPosition) checks.push(`root track drift <= ${maxDrift}m`);
+      if (hasDrift) checks.push(`supplied maxHorizDrift <= ${maxDrift}m`);
+    }
     gates.push({
       gate: 'R4 tracks & drift',
       value: tIssues.length ? tIssues.join('; ') : checks.join(', '),
       pass: tIssues.length === 0,
-      hint: 'bake one value tuple per strictly increasing timestamp and keep root motion in-place (X/Z constant)',
+      hint: motionMode === 'free'
+        ? 'bake one finite value tuple per strictly increasing timestamp'
+        : 'bake one value tuple per strictly increasing timestamp and keep root motion in-place (X/Z constant), or pass --motion free for hovering/leaping creatures',
     });
   } else skipped.push('R4 tracks & drift (no per-clip tracks or qa.maxHorizDrift provided)');
 
@@ -204,22 +230,34 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     }
   } else skipped.push('R5 expressions (no face section in metadata)');
 
-  // R6 slide clearance
-  const drop = meta.qa?.slideDropPct, minY = meta.qa?.slideMinY;
+  // R6 floor / slide clearance
+  const drop = meta.qa?.slideDropPct, minY = meta.qa?.slideMinY, clipMinY = meta.qa?.clipMinY;
   const sIssues: string[] = [];
   if (drop !== undefined && (!Number.isFinite(drop) || drop < minSlideDrop)) sIssues.push(`slide drop ${drop}% must be finite and >= ${minSlideDrop}%`);
   if (minY !== undefined && (!Number.isFinite(minY) || minY < minSlideY)) sIssues.push(`slide minY ${minY}m must be finite and >= ${minSlideY}m`);
-  if (drop === undefined || minY === undefined) {
-    const missing = [drop === undefined && 'qa.slideDropPct', minY === undefined && 'qa.slideMinY'].filter(Boolean);
-    skipped.push(`R6 slide clearance (missing ${missing.join(' and ')})`);
-  }
-  if (sIssues.length || (drop !== undefined && minY !== undefined)) {
+  if (clipMinY !== undefined && (!Number.isFinite(clipMinY) || clipMinY < minSlideY)) sIssues.push(`clip minY ${clipMinY}m must be finite and >= ${minSlideY}m`);
+  if (drop !== undefined || minY !== undefined) {
+    if (drop === undefined || minY === undefined) {
+      const missing = [drop === undefined && 'qa.slideDropPct', minY === undefined && 'qa.slideMinY'].filter(Boolean);
+      skipped.push(`R6 slide clearance (missing ${missing.join(' and ')})`);
+    }
+    if (sIssues.length || (drop !== undefined && minY !== undefined)) {
+      gates.push({
+        gate: 'R6 slide clearance',
+        value: sIssues.length ? sIssues.join('; ') : `drop ${drop}%, minY ${minY}m`,
+        pass: sIssues.length === 0,
+        hint: 'raise root Y slightly or bend legs/tail upward at Slide peak so lowest Y stays >= -0.025m while height drops >= 22%',
+      });
+    }
+  } else if (clipMinY !== undefined) {
     gates.push({
-      gate: 'R6 slide clearance',
-      value: sIssues.length ? sIssues.join('; ') : `drop ${drop}%, minY ${minY}m`,
+      gate: 'R6 floor clearance',
+      value: sIssues.length ? sIssues.join('; ') : `clip minY ${clipMinY}m >= ${minSlideY}m`,
       pass: sIssues.length === 0,
-      hint: 'raise root Y slightly or bend legs/tail upward at Slide peak so lowest Y stays >= -0.025m while height drops >= 22%',
+      hint: 'adjust root Y or limb/tail arc so no animated frame dips below the floor',
     });
+  } else {
+    skipped.push('R6 slide clearance (missing qa.slideDropPct and qa.slideMinY)');
   }
 
   return {

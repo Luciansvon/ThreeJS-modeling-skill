@@ -36,7 +36,7 @@ async function loadImageRgba(file: string, maxDim = 512): Promise<{ rgba: Uint8A
 }
 
 const inputs: { view: View; rgba: Uint8Array; w: number; h: number }[] = [];
-const VALID_VIEWS = new Set<string>(['front', 'side', 'top']);
+const VALID_VIEWS = new Set<string>(['front', 'side', 'top', '34', '34_back']);
 if (sheetFile) {
   const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
   if (!gm) { const e = `--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
@@ -49,7 +49,7 @@ if (sheetFile) {
     const tile = fitRgba(tiles[idx].rgba, tiles[idx].w, tiles[idx].h, 512);
     inputs.push({ view: v as View, ...tile });
   });
-  if (!inputs.length) { const e = `--views "${viewsStr}" matched none of front, side, top in ${cols}x${rows} grid`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
+  if (!inputs.length) { const e = `--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
 } else {
   for (const [view, file] of files) {
     const img = await loadImageRgba(file, 512);

@@ -1,6 +1,6 @@
 // scripts/refcheck.ts: pure reference-vs-result measurements. No THREE, no DOM, no image library. Node-testable.
-// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)
-export type View = 'front' | 'side' | 'top';
+// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
+export type View = 'front' | 'side' | 'top' | '34' | '34_back';
 export type Mask = { w: number; h: number; data: Uint8Array };              // 1 = inside the shape
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
@@ -31,9 +31,19 @@ export function frameMask(m: Mask, res = RES): { mask: Mask; aspect: number } {
 /** Orthographic silhouette of a triangle array, already framed (see frameMask). */
 export function silhouette(t: Tris, view: View, res = RES) {
   const n = t.length / 3, U = new Float64Array(n), V = new Float64Array(n);
+  const az = view === '34_back' ? (142 * Math.PI) / 180 : (38 * Math.PI) / 180;
+  const el = (16 * Math.PI) / 180;
+  const caz = Math.cos(az), saz = Math.sin(az), cel = Math.cos(el), sel = Math.sin(el);
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
-    if (view === 'front') { U[i] = x; V[i] = y; } else if (view === 'side') { U[i] = -z; V[i] = y; } else { U[i] = x; V[i] = -z; }
+    if (view === 'front') { U[i] = x; V[i] = y; }
+    else if (view === 'side') { U[i] = -z; V[i] = y; }
+    else if (view === 'top') { U[i] = x; V[i] = -z; }
+    else {
+      U[i] = x * caz - z * saz;
+      const depth = x * saz + z * caz;
+      V[i] = y * cel - depth * sel;
+    }
   }
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
   for (let i = 0; i < n; i++) { u0 = Math.min(u0, U[i]); u1 = Math.max(u1, U[i]); v0 = Math.min(v0, V[i]); v1 = Math.max(v1, V[i]); }
@@ -174,18 +184,21 @@ export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
-export const THRESH = { iou: 0.85, aspect: 0.08, prop: 0.1, palette: 60 };
+export const THRESH = { iou: 0.85, iou34: 0.70, aspect: 0.08, aspect34: 0.14, prop: 0.1, palette: 60 };
 /** Runs every gate that the reference data can answer, cheapest first. */
 export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = [], th = THRESH) {
   const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {};
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
-  for (const view of ['front', 'side', 'top'] as View[]) {
+  for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
+    const isAngled = view === '34' || view === '34_back';
+    const aspectLimit = isAngled ? (th.aspect34 ?? 0.14) : th.aspect;
+    const iouLimit = isAngled ? (th.iou34 ?? 0.70) : th.iou;
     const { mask, aspect } = silhouette(tris, view), refMask = maskFromB64(r.data), best = bestIoU(mask, refMask, view), ae = Math.abs(aspect / r.aspect - 1);
-    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= th.aspect, hint: 'fix overall proportions before details' });
-    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}`, pass: best.iou >= th.iou, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
+    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= aspectLimit, hint: 'fix overall proportions before details' });
+    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}${isAngled ? ` (3/4 threshold ${iouLimit.toFixed(2)})` : ''}`, pass: best.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
     diffs[view] = diffRGBA(mask, best.ref);
   }
   if (usedColors.length && ref.palette.length) { const g = paletteGap(ref.palette, usedColors); gates.push({ gate: 'G3 palette', value: g.hex ? `${g.hex} nearest ${g.nearest}, distance ${g.gap.toFixed(0)}` : 'all main colours covered', pass: g.gap <= th.palette, hint: `retune the colour nearest to ${g.hex}` }); }

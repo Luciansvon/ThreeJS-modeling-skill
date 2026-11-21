@@ -102,5 +102,30 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
 
   assert.equal(run().code, 1); assert.equal(run('--tris', bad, '--color', '2,0,0').code, 1, 'colour out of range');
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
+
+  // 7. v4.2 export-rigged-glb.ts end-to-end (vertex colors + pivot + AnimationClip round-trip via GLTFExporter -> GLTFLoader)
+  const rigCli = join(here, 'export-rigged-glb.ts');
+  const rigMod = join(out, 'riggedSample.ts');
+  writeFileSync(rigMod, `
+    export function buildSample(_params: Record<string, unknown>, THREE: any) {
+      const root = new THREE.Group(); root.name = 'sample_root';
+      const pivot = new THREE.Group(); pivot.name = 'head'; pivot.position.set(0, 1, 0); root.add(pivot);
+      const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5).toNonIndexed();
+      const colors = new Float32Array(geo.attributes.position.count * 3).fill(0.5);
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true }));
+      mesh.name = 'head_mesh'; pivot.add(mesh);
+      const clip = new THREE.AnimationClip('Nod', 1.0, [
+        new THREE.QuaternionKeyframeTrack('head.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.1, 0, 0, 0.995, 0, 0, 0, 1]),
+      ]);
+      return { root, animations: [clip] };
+    }
+  `);
+  const rigOut = join(out, 'sample_rigged.glb');
+  const rigRes = spawnTsx(rigCli, ['--module', rigMod, '--export', 'buildSample', '--out', rigOut], { cwd: join(here, '..') });
+  assert.equal(rigRes.status, 0, `${rigRes.stdout}${rigRes.stderr}`);
+  const rigParsed = parseResult(rigRes.stdout)!;
+  assert.equal(rigParsed.ok, true);
+  assert.deepEqual(rigParsed.clips, ['Nod']);
 }
 console.log('GLB OK');

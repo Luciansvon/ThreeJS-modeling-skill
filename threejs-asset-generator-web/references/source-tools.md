@@ -1,6 +1,6 @@
 # Tool and fixture source
 
-Contents: package.json · scripts/budget.ts · scripts/export-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
+Contents: package.json · scripts/budget.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "private": true,
   "type": "module",
   "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
@@ -24,6 +24,7 @@ Generated from the canonical harness files. Search by original file path and use
     "qa": "tsx scripts/qa-asset.ts",
     "stats": "tsx scripts/mesh-stats.ts",
     "export-glb": "tsx scripts/export-glb.ts",
+    "export-rigged-glb": "tsx scripts/export-rigged-glb.ts",
     "rig-check": "tsx scripts/rig-check.ts",
     "ref-intake": "tsx scripts/ref-intake.ts",
     "ref-compare": "tsx scripts/ref-compare.ts"
@@ -49,15 +50,76 @@ import { qaGates, boundsOf, flatten, triCount, type Gate, type Parts, type QAOpt
 export type { Gate };
 
 export type Platform = 'mobile' | 'web' | 'vr' | 'desktop';
-export type Kind = 'prop' | 'hero';
+export type Kind = 'prop' | 'hero' | 'creature' | 'vehicle' | 'building';
+export const KINDS: readonly Kind[] = ['prop', 'hero', 'creature', 'vehicle', 'building'];
 type Range = { target: number; max: number };
-export type Profile = { tris: Record<Kind, Range>; materials: Range; texture: number; bones: Range; drawCalls?: number; glbMiB?: Partial<Record<Kind, Range>> };
+export type Profile = {
+  tris: Record<Kind, Range>;
+  materials: Range;
+  materialsByKind?: Partial<Record<Kind, Range>>;
+  texture: number;
+  bones: Range;
+  drawCalls?: number;
+  glbMiB?: Partial<Record<Kind, Range>>;
+};
 
 export const PROFILES: Record<Platform, Profile> = {
-  mobile: { tris: { hero: { target: 5000, max: 15000 }, prop: { target: 300, max: 3000 } }, materials: { target: 1, max: 2 }, texture: 1024, bones: { target: 75, max: 75 }, drawCalls: 50, glbMiB: { hero: { target: 2, max: 5 } } },
-  web: { tris: { hero: { target: 10000, max: 30000 }, prop: { target: 1000, max: 10000 } }, materials: { target: 1, max: 2 }, texture: 2048, bones: { target: 100, max: 100 }, drawCalls: 100, glbMiB: { hero: { target: 2, max: 5 } } },
-  vr: { tris: { hero: { target: 10000, max: 40000 }, prop: { target: 1000, max: 10000 } }, materials: { target: 1, max: 3 }, texture: 2048, bones: { target: 100, max: 100 } },
-  desktop: { tris: { hero: { target: 50000, max: 150000 }, prop: { target: 5000, max: 50000 } }, materials: { target: 2, max: 6 }, texture: 4096, bones: { target: 150, max: 300 } },
+  mobile: {
+    tris: {
+      hero: { target: 5000, max: 15000 },
+      creature: { target: 5000, max: 15000 },
+      vehicle: { target: 3000, max: 12000 },
+      building: { target: 2000, max: 10000 },
+      prop: { target: 300, max: 3000 },
+    },
+    materials: { target: 1, max: 2 },
+    materialsByKind: { vehicle: { target: 3, max: 5 }, building: { target: 2, max: 4 } },
+    texture: 1024,
+    bones: { target: 75, max: 75 },
+    drawCalls: 50,
+    glbMiB: { hero: { target: 2, max: 5 }, creature: { target: 2, max: 5 }, vehicle: { target: 2, max: 5 } },
+  },
+  web: {
+    tris: {
+      hero: { target: 10000, max: 30000 },
+      creature: { target: 10000, max: 30000 },
+      vehicle: { target: 6000, max: 25000 },
+      building: { target: 4000, max: 20000 },
+      prop: { target: 1000, max: 10000 },
+    },
+    materials: { target: 1, max: 2 },
+    materialsByKind: { vehicle: { target: 3, max: 6 }, building: { target: 3, max: 6 } },
+    texture: 2048,
+    bones: { target: 100, max: 100 },
+    drawCalls: 100,
+    glbMiB: { hero: { target: 2, max: 5 }, creature: { target: 2, max: 5 }, vehicle: { target: 2, max: 5 } },
+  },
+  vr: {
+    tris: {
+      hero: { target: 10000, max: 40000 },
+      creature: { target: 10000, max: 40000 },
+      vehicle: { target: 8000, max: 30000 },
+      building: { target: 5000, max: 25000 },
+      prop: { target: 1000, max: 10000 },
+    },
+    materials: { target: 1, max: 3 },
+    materialsByKind: { vehicle: { target: 3, max: 6 }, building: { target: 3, max: 6 } },
+    texture: 2048,
+    bones: { target: 100, max: 100 },
+  },
+  desktop: {
+    tris: {
+      hero: { target: 50000, max: 150000 },
+      creature: { target: 50000, max: 150000 },
+      vehicle: { target: 30000, max: 120000 },
+      building: { target: 20000, max: 100000 },
+      prop: { target: 5000, max: 50000 },
+    },
+    materials: { target: 2, max: 6 },
+    materialsByKind: { vehicle: { target: 4, max: 8 }, building: { target: 4, max: 8 } },
+    texture: 4096,
+    bones: { target: 150, max: 300 },
+  },
 };
 
 /** GPU memory of an RGBA8 texture in MiB. With a full mip chain (default) a 1024 texture is 5.33, 2048 is 21.33, 4096 is 85.33. */
@@ -87,7 +149,8 @@ export function budgetGates(s: Stats, o: BudgetOptions = {}): { gates: Gate[]; s
     gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}${id === 'B1 triangles' ? `, ${kind}` : ''}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
   };
   range('B1 triangles', `${s.triangles} triangles`, s.triangles, P.tris[kind], 'lower `detail`, fewer segments, drop small details (references/budget.md)');
-  if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, P.materials, 'merge parts that share a look into one material');
+  const matRange = P.materialsByKind?.[kind] ?? P.materials;
+  if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, matRange, 'merge parts that share a look into one material');
   if (!s.textures.length) skipped.push('B3 textures (no textures in --meta; an asset with vertex colours only has none)');
   else { const worst = s.textures.reduce((a, b) => (Math.max(b.w, b.h) > Math.max(a.w, a.h) ? b : a)), side = Math.max(worst.w, worst.h);
     gates.push({ gate: 'B3 textures', value: `largest ${worst.name} ${worst.w}x${worst.h} of max ${P.texture}, ${fmt(s.textureMiB)} MiB uncompressed GPU memory in total (${platform})`, pass: side <= P.texture, hint: 'shrink the atlas or split the cells; compression (KTX2) cuts memory, not the size limit' }); }
@@ -184,6 +247,120 @@ console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
 console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST one, run again.` : '\nAll export gates pass. Repeat the UNVERIFIED list in the answer.');
 process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, unverified, file: bytes ? outFile : null, bytes: bytes?.length ?? 0 }));
+~~~
+
+## scripts/export-rigged-glb.ts
+
+~~~typescript source-excerpt
+// scripts/export-rigged-glb.ts: official Three.js GLB export + disk round-trip verifier for assets with vertex colors, materials, skins/bones, or AnimationClips.
+// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}']
+// The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
+// Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { emit, type Gate } from './result';
+
+// Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
+if (typeof (globalThis as Record<string, unknown>).FileReader === 'undefined') {
+  class NodeFileReader {
+    result: ArrayBuffer | string | null = null;
+    onloadend: (() => void) | null = null;
+    onerror: ((e: unknown) => void) | null = null;
+    readAsArrayBuffer(blob: Blob) {
+      blob.arrayBuffer().then((buf) => { this.result = buf; this.onloadend?.(); }).catch((e) => this.onerror?.(e));
+    }
+    readAsDataURL(blob: Blob) {
+      blob.arrayBuffer().then((buf) => {
+        const b64 = Buffer.from(buf).toString('base64');
+        this.result = `data:${blob.type || 'application/octet-stream'};base64,${b64}`;
+        this.onloadend?.();
+      }).catch((e) => this.onerror?.(e));
+    }
+  }
+  (globalThis as Record<string, unknown>).FileReader = NodeFileReader;
+}
+
+const args = process.argv.slice(2);
+const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; };
+const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
+
+const modFile = opt('module'), outFile = opt('out');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] --out asset.glb');
+let params: Record<string, unknown> = {};
+try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
+
+let THREE: typeof import('three');
+let GLTFExporter: any;
+let GLTFLoader: any;
+try {
+  THREE = await import('three');
+  GLTFExporter = (await import('three/addons/exporters/GLTFExporter.js')).GLTFExporter;
+  GLTFLoader = (await import('three/addons/loaders/GLTFLoader.js')).GLTFLoader;
+} catch (e) {
+  fail(`three / addons not available: ${(e as Error).message}`);
+}
+
+let built: any;
+try {
+  const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
+  const fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
+  const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
+  if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
+  built = await (mod[name] as (p: Record<string, unknown>, t: typeof import('three')) => unknown)(params, THREE);
+} catch (e) {
+  fail(`cannot build asset: ${(e as Error).message}`);
+}
+
+const root = built?.root?.isObject3D ? built.root : built;
+if (!root?.isObject3D) fail('builder must return a THREE.Object3D or { root: THREE.Object3D, animations?: AnimationClip[] }');
+const animations = Array.isArray(built?.animations) ? built.animations : (Array.isArray(root.userData?.animations) ? root.userData.animations : []);
+
+function countScene(obj: any) {
+  let tris = 0, meshes = 0, skins = 0, bones = 0, vertexColorMeshes = 0;
+  obj.traverse((o: any) => {
+    if (o.isBone) bones++;
+    if (o.isSkinnedMesh) skins++;
+    if (o.isMesh && o.geometry?.attributes?.position) {
+      meshes++;
+      const g = o.geometry;
+      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+      if (g.attributes.color) vertexColorMeshes++;
+    }
+  });
+  return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
+}
+
+const before = countScene(root);
+const exporter = new GLTFExporter();
+const buf: ArrayBuffer = await exporter.parseAsync(root, { binary: true, animations, onlyVisible: true });
+const outPath = resolve(outFile);
+writeFileSync(outPath, Buffer.from(buf));
+
+const diskBytes = readFileSync(outPath);
+const diskAb = diskBytes.buffer.slice(diskBytes.byteOffset, diskBytes.byteOffset + diskBytes.byteLength);
+const loader = new GLTFLoader();
+const reloaded = await loader.parseAsync(diskAb, '');
+const after = countScene(reloaded.scene);
+const inClips = animations.map((c: any) => c.name);
+const outClips = (reloaded.animations ?? []).map((c: any) => c.name);
+
+const gates: Gate[] = [
+  { gate: 'RG1 written', value: `${diskBytes.byteLength} bytes (${(diskBytes.byteLength / 1024).toFixed(1)} KB)`, pass: diskBytes.byteLength > 12, hint: 'GLTFExporter produced an empty buffer' },
+  { gate: 'RG2 triangles', value: `${before.tris} in -> ${after.tris} out`, pass: before.tris > 0 && before.tris === after.tris, hint: 'triangle count changed across GLTFExporter -> GLTFLoader round-trip' },
+  { gate: 'RG3 meshes', value: `${before.meshes} in -> ${after.meshes} out (${after.vertexColorMeshes} vertex-colored)`, pass: before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes, hint: 'mesh or vertex color attributes lost on export' },
+  { gate: 'RG4 clips', value: `${inClips.length} in -> ${outClips.length} out [${outClips.join(', ')}]`, pass: inClips.length === outClips.length && inClips.every((n: string, i: number) => outClips[i] === n), hint: 'animation clips missing or renamed during export' },
+];
+if (before.skins > 0 || before.bones > 0) {
+  gates.push({ gate: 'RG5 skin/bones', value: `skins ${before.skins}->${after.skins}, bones ${before.bones}->${after.bones}`, pass: before.skins === after.skins && before.bones === after.bones, hint: 'SkinnedMesh or Bone count changed across round-trip' });
+}
+
+const unverified = ['Visual appearance, lighting, and target-engine import (e.g. Blender / Roblox Studio) are not tested by headless GLTFLoader parse'];
+console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
+console.log(`wrote ${outPath}`);
+console.log(`UNVERIFIED: ${unverified.join('; ')}`);
+const ok = gates.every((g) => g.pass);
+process.exit(emit({ tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, before, after, clips: outClips, gates, unverified }, ok ? 0 : 2));
 ~~~
 
 ## scripts/fixtures/crate.qa.ts
@@ -380,22 +557,24 @@ export function glbGates(bytes: Uint8Array, source: Parts): Gate[] {
 //   Kernel (no THREE):   npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}'] [--profile web] [--kind prop]
 //   Any asset via tris:  npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
 //   LOD check:           npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods [--open a,b] [--symmetric]    (builds detail 2, 1, 0; the builder must accept `detail`)
-// Options: --profile mobile|web|vr|desktop (default web)  --kind prop|hero (default prop)  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
+// Options: --profile mobile|web|vr|desktop (default web)  --kind prop|hero|creature|vehicle|building (default prop)  --budget N  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
 // meta.json (all optional): { "parts": { "body": { "material": "wood", "bone": "root" } }, "textures": [1024, { "name": "atlas", "width": 2048 }], "bones": 12 }
 // What meta does not give is reported as "not checked", never guessed. Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizeParts, type Parts } from './qacheck';
-import { assetStats, budgetGates, lodGates, PROFILES, type Kind, type Meta, type Platform } from './budget';
+import { assetStats, budgetGates, lodGates, KINDS, PROFILES, type Kind, type Meta, type Platform } from './budget';
 import { emit } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'mesh-stats', ok: false, error: msg }, 1)); };
 const modFile = opt('module'), trisFile = opt('tris'), platform = (opt('profile') ?? 'web') as Platform, kind = (opt('kind') ?? 'prop') as Kind;
-if (!modFile === !trisFile) fail('usage: tsx scripts/mesh-stats.ts (--module file.ts [--export name] [--params json] [--lods] | --tris tris.json) [--profile mobile|web|vr|desktop] [--kind prop|hero] [--meta meta.json] [--glb file.glb] [--open a,b|all] [--symmetric]');
+if (!modFile === !trisFile) fail('usage: tsx scripts/mesh-stats.ts (--module file.ts [--export name] [--params json] [--lods] | --tris tris.json) [--profile mobile|web|vr|desktop] [--kind prop|hero|creature|vehicle|building] [--budget N] [--meta meta.json] [--glb file.glb] [--open a,b|all] [--symmetric]');
 if (!(platform in PROFILES)) fail(`--profile must be one of ${Object.keys(PROFILES).join(', ')}, got "${platform}"`);
-if (kind !== 'prop' && kind !== 'hero') fail(`--kind must be prop or hero, got "${kind}"`);
+if (!KINDS.includes(kind)) fail(`--kind must be one of ${KINDS.join(', ')}, got "${kind}"`);
+const budgetOpt = opt('budget') !== undefined ? Number(opt('budget')) : undefined;
+if (budgetOpt !== undefined && (!Number.isFinite(budgetOpt) || budgetOpt <= 0)) fail('--budget needs a positive number');
 if (flag('lods') && !modFile) fail('--lods needs --module: a tris.json is one fixed level and cannot be rebuilt at another detail');
 let params: Record<string, unknown> = {}, meta: Meta = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
@@ -418,7 +597,8 @@ try {
 
 const stats = assetStats(parts!, meta), { gates, skipped } = budgetGates(stats, { platform, kind, glbBytes }), unverified: string[] = [];
 let levels: unknown = null;
-if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric') }); gates.push(...l.gates); levels = l.levels; }
+const lodBudget = budgetOpt ?? PROFILES[platform].tris[kind].max;
+if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: lodBudget }); gates.push(...l.gates); levels = l.levels; }
 else if (modFile) skipped.push('L1 to L4 LOD (pass --lods; the builder must accept `detail`)');
 if (!stats.drawCallsExact) unverified.push('draw calls are an upper bound (one per part); pass --meta with a material and bone per part for the real number');
 unverified.push('triangle, vertex and texture numbers are counted from the arrays and sizes given, not measured in a renderer: no frame time, fill rate or real GPU memory');
@@ -883,7 +1063,7 @@ async function loadImageRgba(file: string, maxDim = 512): Promise<{ rgba: Uint8A
 }
 
 const inputs: { view: View; rgba: Uint8Array; w: number; h: number }[] = [];
-const VALID_VIEWS = new Set<string>(['front', 'side', 'top']);
+const VALID_VIEWS = new Set<string>(['front', 'side', 'top', '34', '34_back']);
 if (sheetFile) {
   const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
   if (!gm) { const e = `--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
@@ -896,7 +1076,7 @@ if (sheetFile) {
     const tile = fitRgba(tiles[idx].rgba, tiles[idx].w, tiles[idx].h, 512);
     inputs.push({ view: v as View, ...tile });
   });
-  if (!inputs.length) { const e = `--views "${viewsStr}" matched none of front, side, top in ${cols}x${rows} grid`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
+  if (!inputs.length) { const e = `--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
 } else {
   for (const [view, file] of files) {
     const img = await loadImageRgba(file, 512);
@@ -927,8 +1107,8 @@ process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palet
 
 ~~~typescript source-excerpt
 // scripts/refcheck.ts: pure reference-vs-result measurements. No THREE, no DOM, no image library. Node-testable.
-// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)
-export type View = 'front' | 'side' | 'top';
+// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
+export type View = 'front' | 'side' | 'top' | '34' | '34_back';
 export type Mask = { w: number; h: number; data: Uint8Array };              // 1 = inside the shape
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
@@ -959,9 +1139,19 @@ export function frameMask(m: Mask, res = RES): { mask: Mask; aspect: number } {
 /** Orthographic silhouette of a triangle array, already framed (see frameMask). */
 export function silhouette(t: Tris, view: View, res = RES) {
   const n = t.length / 3, U = new Float64Array(n), V = new Float64Array(n);
+  const az = view === '34_back' ? (142 * Math.PI) / 180 : (38 * Math.PI) / 180;
+  const el = (16 * Math.PI) / 180;
+  const caz = Math.cos(az), saz = Math.sin(az), cel = Math.cos(el), sel = Math.sin(el);
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
-    if (view === 'front') { U[i] = x; V[i] = y; } else if (view === 'side') { U[i] = -z; V[i] = y; } else { U[i] = x; V[i] = -z; }
+    if (view === 'front') { U[i] = x; V[i] = y; }
+    else if (view === 'side') { U[i] = -z; V[i] = y; }
+    else if (view === 'top') { U[i] = x; V[i] = -z; }
+    else {
+      U[i] = x * caz - z * saz;
+      const depth = x * saz + z * caz;
+      V[i] = y * cel - depth * sel;
+    }
   }
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
   for (let i = 0; i < n; i++) { u0 = Math.min(u0, U[i]); u1 = Math.max(u1, U[i]); v0 = Math.min(v0, V[i]); v1 = Math.max(v1, V[i]); }
@@ -1102,18 +1292,21 @@ export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
-export const THRESH = { iou: 0.85, aspect: 0.08, prop: 0.1, palette: 60 };
+export const THRESH = { iou: 0.85, iou34: 0.70, aspect: 0.08, aspect34: 0.14, prop: 0.1, palette: 60 };
 /** Runs every gate that the reference data can answer, cheapest first. */
 export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = [], th = THRESH) {
   const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {};
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
-  for (const view of ['front', 'side', 'top'] as View[]) {
+  for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
+    const isAngled = view === '34' || view === '34_back';
+    const aspectLimit = isAngled ? (th.aspect34 ?? 0.14) : th.aspect;
+    const iouLimit = isAngled ? (th.iou34 ?? 0.70) : th.iou;
     const { mask, aspect } = silhouette(tris, view), refMask = maskFromB64(r.data), best = bestIoU(mask, refMask, view), ae = Math.abs(aspect / r.aspect - 1);
-    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= th.aspect, hint: 'fix overall proportions before details' });
-    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}`, pass: best.iou >= th.iou, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
+    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= aspectLimit, hint: 'fix overall proportions before details' });
+    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}${isAngled ? ` (3/4 threshold ${iouLimit.toFixed(2)})` : ''}`, pass: best.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
     diffs[view] = diffRGBA(mask, best.ref);
   }
   if (usedColors.length && ref.palette.length) { const g = paletteGap(ref.palette, usedColors); gates.push({ gate: 'G3 palette', value: g.hex ? `${g.hex} nearest ${g.nearest}, distance ${g.gap.toFixed(0)}` : 'all main colours covered', pass: g.gap <= th.palette, hint: `retune the colour nearest to ${g.hex}` }); }
@@ -1261,12 +1454,12 @@ export function renderSheet(parts: Parts, o: { open?: string[]; panel?: number }
 ## scripts/rig-check.ts
 
 ~~~typescript source-excerpt
-// scripts/rig-check.ts: CLI validator for rigged character metadata, clip contracts, track sanity, expression mappings & slide clearance (R1 to R6).
-//   npx tsx scripts/rig-check.ts --meta char_metadata.json [--max-pivots 16] [--allow-refpose]
+// scripts/rig-check.ts: CLI validator for rigged character/creature/vehicle metadata, clip contracts, track sanity, expression mappings & clearance (R1 to R6).
+//   npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]
 // Prints gate table; last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { rigGates, type RigMeta } from './rigcheck';
+import { DEFAULT_MAX_PIVOTS, rigGates, type RigKind, type RigMeta } from './rigcheck';
 import { emit, type Gate } from './result';
 
 const args = process.argv.slice(2);
@@ -1276,7 +1469,11 @@ const fail = (msg: string): never => { console.error(msg); process.exit(emit({ t
 const fmtGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 
 const metaFile = opt('meta') ?? args.find((a) => !a.startsWith('--'));
-if (!metaFile) fail('usage: tsx scripts/rig-check.ts --meta char_metadata.json [--max-pivots 16] [--allow-refpose]');
+if (!metaFile) fail('usage: tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]');
+const kind = (opt('kind') ?? 'hero') as RigKind;
+if (!(kind in DEFAULT_MAX_PIVOTS)) fail(`--kind must be one of ${Object.keys(DEFAULT_MAX_PIVOTS).join(', ')}, got "${kind}"`);
+const motionMode = opt('motion') as 'in-place' | 'free' | undefined;
+if (motionMode !== undefined && motionMode !== 'in-place' && motionMode !== 'free') fail('--motion must be in-place or free');
 const maxPivots = opt('max-pivots') !== undefined ? Number(opt('max-pivots')) : undefined;
 if (maxPivots !== undefined && (!Number.isFinite(maxPivots) || maxPivots <= 0)) fail('--max-pivots needs a positive number');
 
@@ -1284,6 +1481,8 @@ let meta: RigMeta;
 try { meta = JSON.parse(readFileSync(resolve(metaFile), 'utf8')); } catch (e) { fail(`cannot read ${metaFile}: ${(e as Error).message}`); }
 
 const { gates, skipped, stats } = rigGates(meta!, {
+  kind,
+  motionMode,
   maxPivots,
   excludeClips: flag('allow-refpose') ? [] : ['RefPose'],
 });
@@ -1324,13 +1523,20 @@ export type RigMeta = {
   files?: { expressions?: Record<string, unknown> };
   qa?: {
     maxHorizDrift?: number;
+    motionMode?: 'in-place' | 'free';
     slideDropPct?: number;
     slideMinY?: number;
+    clipMinY?: number;
   };
 };
 
+export type RigKind = 'hero' | 'creature' | 'vehicle' | 'building' | 'prop';
+export const DEFAULT_MAX_PIVOTS: Record<RigKind, number> = { hero: 16, creature: 64, vehicle: 32, building: 24, prop: 16 };
+
 export type RigCheckOptions = {
   maxPivots?: number;
+  kind?: RigKind;
+  motionMode?: 'in-place' | 'free';
   excludeClips?: string[];
   minSlideDropPct?: number;
   minSlideY?: number;
@@ -1342,23 +1548,33 @@ const isFinite3 = (v: unknown): v is [number, number, number] =>
 
 export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[]; skipped: string[]; stats: Record<string, unknown> } {
   const gates: Gate[] = [], skipped: string[] = [];
-  const maxPivots = o.maxPivots ?? 16;
+  const kind = o.kind ?? 'hero';
+  const maxPivots = o.maxPivots ?? DEFAULT_MAX_PIVOTS[kind];
+  const motionMode = o.motionMode ?? meta.qa?.motionMode ?? 'in-place';
   const excluded = new Set(o.excludeClips ?? ['RefPose']);
   const minSlideDrop = o.minSlideDropPct ?? 22;
   const minSlideY = o.minSlideY ?? -0.025;
   const maxDrift = o.maxHorizDrift ?? 1e-5;
 
-  const pivots = meta.rig?.pivotNames ?? [];
-  const edges = meta.rig?.hierarchy ?? [];
+  const pivots = Array.isArray(meta.rig?.pivotNames) ? meta.rig!.pivotNames! : [];
+  const rawEdges = meta.rig?.hierarchy;
+  const edgesValid = rawEdges === undefined || Array.isArray(rawEdges);
+  const edges = Array.isArray(rawEdges) ? rawEdges : [];
   const pivotSet = new Set(pivots);
 
   // R1 hierarchy
   const hIssues: string[] = [];
   if (!pivots.length) hIssues.push('no pivotNames');
+  if (!edgesValid) hIssues.push('rig.hierarchy must be an array of { parent, child } objects (not a map)');
   if (pivotSet.size !== pivots.length) hIssues.push('duplicate pivot names');
-  if (pivots.length > maxPivots) hIssues.push(`${pivots.length} pivots exceeds max ${maxPivots}`);
+  if (pivots.length > maxPivots) hIssues.push(`${pivots.length} pivots exceeds max ${maxPivots} (${kind})`);
   const childrenOf = new Map<string, string[]>(), parentOf = new Map<string, string>();
-  for (const { parent, child } of edges) {
+  for (const edge of edges) {
+    if (!edge || typeof edge.parent !== 'string' || typeof edge.child !== 'string') {
+      hIssues.push('invalid hierarchy edge (expected { parent: string, child: string })');
+      continue;
+    }
+    const { parent, child } = edge;
     if (!pivotSet.has(parent)) hIssues.push(`unknown parent "${parent}"`);
     if (!pivotSet.has(child)) hIssues.push(`unknown child "${child}"`);
     if (parent === child) hIssues.push(`self-loop on "${parent}"`);
@@ -1449,28 +1665,37 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
         for (let i = 1; i < tr.times.length; i++) if (!(tr.times[i] > tr.times[i - 1])) { tIssues.push(`${c.name}/${tr.name}: non-increasing timestamps`); break; }
         if (isPosition && target === roots[0]) {
           hasRootPosition = true;
-          const x0 = tr.values[0], z0 = tr.values[2];
-          let d = 0;
-          for (let i = 0; i + 2 < tr.values.length; i += 3) d = Math.max(d, Math.abs(tr.values[i] - x0), Math.abs(tr.values[i + 2] - z0));
-          if (d > maxDrift) tIssues.push(`${c.name}: horizontal root drift ${d.toFixed(4)}m > ${maxDrift}m`);
+          if (motionMode === 'in-place') {
+            const x0 = tr.values[0], z0 = tr.values[2];
+            let d = 0;
+            for (let i = 0; i + 2 < tr.values.length; i += 3) d = Math.max(d, Math.abs(tr.values[i] - x0), Math.abs(tr.values[i + 2] - z0));
+            if (d > maxDrift) tIssues.push(`${c.name}: horizontal root drift ${d.toFixed(4)}m > ${maxDrift}m`);
+          }
         }
       }
     }
-    if (hasDrift) {
+    if (hasDrift && motionMode === 'in-place') {
       if (!Number.isFinite(suppliedDrift) || suppliedDrift < 0 || suppliedDrift > maxDrift) {
         tIssues.push(`maxHorizDrift ${suppliedDrift} must be between 0 and ${maxDrift}m`);
       }
+    } else if (hasDrift && (!Number.isFinite(suppliedDrift) || suppliedDrift < 0)) {
+      tIssues.push(`maxHorizDrift ${suppliedDrift} must be finite and >= 0`);
     }
-    if (!hasRootPosition && !hasDrift) skipped.push('R4 horizontal root drift (no root position track or qa.maxHorizDrift provided)');
+    if (!hasRootPosition && !hasDrift && motionMode === 'in-place') skipped.push('R4 horizontal root drift (no root position track or qa.maxHorizDrift provided)');
     const checks = [];
     if (totalTracks) checks.push(`${totalTracks} track(s) checked for finite, ordered samples and matching value counts`);
-    if (hasRootPosition) checks.push(`root track drift <= ${maxDrift}m`);
-    if (hasDrift) checks.push(`supplied maxHorizDrift <= ${maxDrift}m`);
+    if (motionMode === 'free') checks.push('motionMode=free (natural horizontal sway/lunge allowed)');
+    else {
+      if (hasRootPosition) checks.push(`root track drift <= ${maxDrift}m`);
+      if (hasDrift) checks.push(`supplied maxHorizDrift <= ${maxDrift}m`);
+    }
     gates.push({
       gate: 'R4 tracks & drift',
       value: tIssues.length ? tIssues.join('; ') : checks.join(', '),
       pass: tIssues.length === 0,
-      hint: 'bake one value tuple per strictly increasing timestamp and keep root motion in-place (X/Z constant)',
+      hint: motionMode === 'free'
+        ? 'bake one finite value tuple per strictly increasing timestamp'
+        : 'bake one value tuple per strictly increasing timestamp and keep root motion in-place (X/Z constant), or pass --motion free for hovering/leaping creatures',
     });
   } else skipped.push('R4 tracks & drift (no per-clip tracks or qa.maxHorizDrift provided)');
 
@@ -1508,22 +1733,34 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     }
   } else skipped.push('R5 expressions (no face section in metadata)');
 
-  // R6 slide clearance
-  const drop = meta.qa?.slideDropPct, minY = meta.qa?.slideMinY;
+  // R6 floor / slide clearance
+  const drop = meta.qa?.slideDropPct, minY = meta.qa?.slideMinY, clipMinY = meta.qa?.clipMinY;
   const sIssues: string[] = [];
   if (drop !== undefined && (!Number.isFinite(drop) || drop < minSlideDrop)) sIssues.push(`slide drop ${drop}% must be finite and >= ${minSlideDrop}%`);
   if (minY !== undefined && (!Number.isFinite(minY) || minY < minSlideY)) sIssues.push(`slide minY ${minY}m must be finite and >= ${minSlideY}m`);
-  if (drop === undefined || minY === undefined) {
-    const missing = [drop === undefined && 'qa.slideDropPct', minY === undefined && 'qa.slideMinY'].filter(Boolean);
-    skipped.push(`R6 slide clearance (missing ${missing.join(' and ')})`);
-  }
-  if (sIssues.length || (drop !== undefined && minY !== undefined)) {
+  if (clipMinY !== undefined && (!Number.isFinite(clipMinY) || clipMinY < minSlideY)) sIssues.push(`clip minY ${clipMinY}m must be finite and >= ${minSlideY}m`);
+  if (drop !== undefined || minY !== undefined) {
+    if (drop === undefined || minY === undefined) {
+      const missing = [drop === undefined && 'qa.slideDropPct', minY === undefined && 'qa.slideMinY'].filter(Boolean);
+      skipped.push(`R6 slide clearance (missing ${missing.join(' and ')})`);
+    }
+    if (sIssues.length || (drop !== undefined && minY !== undefined)) {
+      gates.push({
+        gate: 'R6 slide clearance',
+        value: sIssues.length ? sIssues.join('; ') : `drop ${drop}%, minY ${minY}m`,
+        pass: sIssues.length === 0,
+        hint: 'raise root Y slightly or bend legs/tail upward at Slide peak so lowest Y stays >= -0.025m while height drops >= 22%',
+      });
+    }
+  } else if (clipMinY !== undefined) {
     gates.push({
-      gate: 'R6 slide clearance',
-      value: sIssues.length ? sIssues.join('; ') : `drop ${drop}%, minY ${minY}m`,
+      gate: 'R6 floor clearance',
+      value: sIssues.length ? sIssues.join('; ') : `clip minY ${clipMinY}m >= ${minSlideY}m`,
       pass: sIssues.length === 0,
-      hint: 'raise root Y slightly or bend legs/tail upward at Slide peak so lowest Y stays >= -0.025m while height drops >= 22%',
+      hint: 'adjust root Y or limb/tail arc so no animated frame dips below the floor',
     });
+  } else {
+    skipped.push('R6 slide clearance (missing qa.slideDropPct and qa.slideMinY)');
   }
 
   return {
