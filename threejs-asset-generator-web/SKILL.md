@@ -5,7 +5,28 @@ description: Use when creating or revising a procedural low-poly Three.js asset 
 
 # Three.js Asset Generator for Web Chat
 
-Produce a portable procedural model and a short record of what was checked. This skill works when the chat can return only text. Image generation, a hosted preview, a CPU code runner, and attachments are optional capabilities of the current session.
+Produce a portable procedural model and evidence for the requested checks. Use the harness workflow, production source, and test fixtures supplied in this Markdown pack. Choose tools by the current session's capabilities. The core workflow also works in text-only chat.
+
+## Read the relevant references
+
+Start with the [web runtime guide](references/runtime.md) before using commands or code from the source excerpts. Open the chapters that match the brief.
+
+| Work | Read |
+| --- | --- |
+| Model design, geometry, character rigs, textures, and procedural recipes | [Modeling guide](references/modeling-guide.md) |
+| Reference matching, mesh QA, budgets, LOD, rig gates, preview, and export | [Verification guide](references/verification-guide.md) |
+| Reusable parameter, geometry, rig, detail, and texture implementations | [Builder source](references/source-builders.md) |
+| Inspect or adapt a reference intake, preview, QA, or GLB tool | [Tool source and fixtures](references/source-tools.md) |
+| Use regression cases, expected behavior, or package notices | [Test source and notices](references/source-tests.md) |
+
+The packs reproduce canonical files under headings named for the original paths. If the chat reads attachments by name, search for the named chapter in those Markdown files. Their terminal commands and imports document the harness interface. Follow this web skill and the runtime guide when choosing what to execute.
+
+## Continue after a tool failure
+
+1. Check which inputs, tools, and outputs the current session can actually access for the task. Use built-in or hosted capabilities already available to the session.
+2. If a tool fails, record the exact error or missing capability. Retry when a specific input or configuration correction can fix it. Then use a compatible alternative or the closest deliverable the session can support.
+3. Keep working on independent outputs. Preserve the brief, design decisions, geometry conventions, and gate thresholds. Hold only the step or result that needs the missing tool or input.
+4. Deliver the usable artifacts and evidence first. Put unresolved tool failures and their impact in the last section, **Blocked**. Report the failed stage, what prevented it, what you delivered in its place, and what would unblock the missing result.
 
 ## Build from one model
 
@@ -25,22 +46,12 @@ Produce a portable procedural model and a short record of what was checked. This
 ## Offer a preview mode
 
 - **Fast Preview** is the default for a quick look. When the session can show the actual GLB, use its built-in viewer for orbit, pan, zoom, textures, labels, and playback or scrubbing of embedded clips as supported. Otherwise show a frame, orthographic SVG projected from the model data, or dimensioned front and side blockouts in text. Label schematic output clearly and mark any clip playback that was unavailable as **Unchecked**.
-- **Full Preview** is for live parameters, rig inspection, clip authoring or comparison, and expression changes. Open the interactive controls that matter to the brief if the session supports them. If a requested control is unavailable, state the capability and provide the fast result.
+- **Full Preview** is for live parameters, rig inspection, clip authoring or comparison, and expression changes. Open the interactive controls that matter to the brief if the session supports them. If a requested control is unavailable, provide the available preview and record the missing control under **Blocked**.
 
 When the user asks for a preview without specifying the mode, offer both in one sentence and state what the session can show. Share the fast result if it is ready. Follow an explicit choice directly and keep building the asset while the choice is open. Report checks only for the model and views actually inspected.
 
-## Match the output to the available capability
-
-| Need | Web alternative | Evidence to report |
-| --- | --- | --- |
-| Mesh QA, counts, or LOD | Inspect supplied geometry data. If a hosted CPU runner can execute the same emitted geometry, compute bounds, finite vertices, triangle counts, degenerates, and grounding. Compare LODs by measured counts and bounds. | Distinguish dimensions or counts calculated from declared primitives from measurements on executed geometry. Leave topology, winding, and target performance unchecked where evidence is missing. |
-| Rig or animation review | Inspect supplied or generated pivot and keyframe data. Check targets, increasing timestamps, one value tuple per key, and horizontal root movement when in-place is required. Use a frame/pose sheet for a visual draft. | Report exactly which metadata was checked. Mark deformation, playback, and target import unchecked until observed. |
-| Downloadable GLB | If this session can create binary files with a hosted CPU runner, export the actual model and reopen or validate the exact bytes. Compare expected bounds, part names, and requested attributes such as materials, skins, or clips. In text-only chat, deliver the complete Three.js builder and mark GLB pending. Keep export instructions and helpers out of the text-only handoff. | Attach the file with its size and checks run. A binary header check establishes format only. Rendered appearance and target import need separate evidence. |
-
-Use the capabilities already available in the chat, including hosted image generation when applicable. Keep the essential workflow independent of terminal commands, package installation, external upload services, and local GPU or WebGL rendering. When the built-in preview is unavailable, deliver copyable source and dimensioned views.
-
 ## Return the result
 
-Provide the model source or actual file first, then the dimensions, seed, and review evidence. For requests to show the shape, include a two-view blockout or a labeled part-position table alongside the dimensions. Use **Derived** for calculations from declared parameters, **Verified** for checks with observed input and output, and **Unchecked** for missing inputs, permissions, or execution. A planned test belongs under **Unchecked**.
+Provide the model source or actual file first, then the dimensions, seed, and review evidence. For requests to show the shape, include a two-view blockout or a labeled part-position table alongside the dimensions. Use **Derived** for calculations from declared parameters, **Verified** for checks with observed input and output, and **Unchecked** for checks without evidence. A planned test belongs under **Unchecked**. A requested result that remains unavailable belongs in the final **Blocked** section, even when you supplied a partial alternative.
 
 For example, a box-based fish crate with external dimensions 1.20 × 0.65 × 0.75 m and a 0.04 m wall can use five named boxes. The base is 1.20 × 0.04 × 0.75 m centered at Y=0.02. The front and back walls are each 1.20 × 0.61 × 0.04 m at Z=±0.355. The left and right walls are each 0.04 × 0.61 × 0.67 m at X=±0.58. All walls are centered at Y=0.345. Front is 1.20 × 0.65 m. Side is 0.75 × 0.65 m. These bounds are **Derived** from the box parameters. Silhouette agreement, rendered mesh, and GLB stay **Unchecked** until there is evidence.

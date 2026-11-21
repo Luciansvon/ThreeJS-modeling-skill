@@ -8,6 +8,8 @@
     "check": "tsx tools/check.ts",
     "check:strict": "tsx tools/check.ts --strict",
     "validate": "tsx tools/validate-skills.ts",
+    "pack:web": "tsx tools/pack-web.ts",
+    "check:web": "tsx tools/pack-web.ts --check",
     "trigger": "tsx tools/trigger-check.ts",
     "test": "tsx tools/run-tests.ts",
     "qa": "tsx scripts/qa-asset.ts",
