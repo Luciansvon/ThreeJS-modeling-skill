@@ -23,7 +23,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed (keep generated image maps as fixed builder inputs).
 3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
 4. **Preview mode:** **Fast Preview** (orbit, textures, clip scrub) vs **Full Preview** (live sliders, rig/clip inspection). Do not build a heavy studio before the user chooses (`references/studio-preview.md`).
-5. **Runtime VFX:** optional studio-only lightning/fire/aura, strictly excluded from `.glb` export.
+5. **Runtime VFX:** choose optional effects to suit the brief. Use the examples in `references/studio-preview.md` for inspiration and keep preview effects outside `.glb` export.
 6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
@@ -39,7 +39,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 | Materials, flat shading, procedural or image-generated textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
 | Creature, multi-limb, vehicle, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
-| Anything that animates, humanoid, SkinnedMesh, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
+| Anything that animates, humanoid, SkinnedMesh, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/skinnedRig.ts`, `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
 | Flat or blocky look, atlas, chamfer, AO, sockets (§6.8) | `references/detail.md` | `src/detail.ts`, `src/detailThree.ts` |
 | Several sub-assets, buildings, interiors (§8) | `references/composite.md` | |
 | Grounding, disposal, rebuilds, lights (§9, §10) | `references/lifecycle.md` | `src/lifecycle.ts` |
@@ -119,7 +119,7 @@ Code: `src/params.ts`. API:
 
 **Run the gates, then look.** `npx tsx scripts/qa-asset.ts --module ./kernel.ts --export buildXTris --symmetric` for a pure kernel, or `--tris tris.json` for the final grounded asset (usage and gate list: `references/qa-gates.md`). It prints Q1 to Q10, writes `review.png` and ends with an `@@RESULT` line. Fix the first failing gate and rerun.
 
-**Done rule.** Never report an asset as done until `qa-asset` passed on the current build (or each failing gate is named with its reason), `review.png` was opened with the view tool and one line per panel says what was seen, and everything listed as `UNVERIFIED` or `not checked` is repeated in the answer. End with the gate table of the last run.
+**Done rule.** Never report an asset as done until `qa-asset` passed on the current build (or each failing gate is named with its reason), `review.png` was opened with the view tool and one line per panel says what was seen, and everything listed as `UNVERIFIED` or `not checked` is repeated in the answer. For delivered previews, apply the final visual and animation checks in `references/studio-preview.md`. End with the gate table of the last run.
 
 Determinism and parameters
 - [ ] Defaults and ranges exist only in the schema; `build…Asset` calls `resolveParams`
@@ -203,7 +203,7 @@ Promote it to the full schema form (§1) as soon as it gets sliders, presets, or
 Full procedure and scripts: `references/reference-matching.md`. The rules, in order:
 
 1. **Intake once.** View the reference once, write `ref-spec.md` (max 15 lines: facing, measured proportions, parts, palette, 3 signature features, out of scope), run `scripts/ref-intake.ts` (supports `front`, `side`, `top`, `back`, `34`, `34_back`), look at the mask PNG once. After that, never re-read the image: work from the spec and `ref.json`.
-2. **Build coarse to fine, compare after every step.** A blockout (G1 proportions, G2 aspect) → B silhouette (G2 IoU ≥ 0.85 ortho, ≥ 0.70 for `34`/`34_back`) → C colour (G3 palette) → D detail (G4 signature features). Run `scripts/ref-compare.ts` after each step; it takes under a second.
+2. **Build coarse to fine, compare after every step.** A blockout (G1 proportions, G2 aspect) → B silhouette (G2 IoU ≥ 0.85 ortho, ≥ 0.70 for `34`/`34_back`) → C colour (G3 palette) → D detail (G4 signature features). Run `scripts/ref-compare.ts` after each step.
 3. **Numbers before pictures.** Fix only the FIRST failing gate per round, change one parameter group, compare again. View an image only for the mask check, a failing IoU diff (`diff-<view>.png`) and the G4 milestones.
 4. **Stop rule.** Max 3 rounds per gate; then keep the best version and report the gap. Never distort a shape to fill a red area. No detail pass (§6.8) while G2 fails.
 5. **Log one line per round** (`step B, round 2: side IoU 0.71 -> 0.83, shortened neck`) and **end the answer with the gate table** of the last compare run. "Matches the reference" without that table is not allowed.
@@ -777,6 +777,8 @@ Save the selected image as a fixed asset and load it outside the seeded builder.
 
 Report the image file or procedural source, the material slot, and which part it covers. Inspect the actual mesh for UV alignment, scale, seams, and legibility. If GLB is requested, use [the Three.js export path](glb-export.md#threejs-export-route) and inspect the reloaded material and target map. Keep image creation, mesh application, and export checks as separate evidence.
 
+For preview effects, choose the treatment by the intended focus, motion, and background. Check the actual result in the delivery lighting. Use a separate scene group for preview effects and export the actual model materials. [Optional VFX references](studio-preview.md#optional-vfx-references)
+
 **One mesh per material, colors in vertices.** Paint each part with a vertex color and merge all parts that share a material. A part that must move on its own (a limb, a head, a door) is the exception: merge per bone, not per asset (§6.4). A tree becomes 2 meshes instead of 60, and the colors stay editable through parameters.
 
 Code: `src/lowpoly.ts`. API:
@@ -838,7 +840,7 @@ The pinned base is measured from the geometry's own bounding box (primitives are
 
 Reference for `threejs-asset-generator`. Read it before writing a character, anything that must animate, a humanoid, an extruded or beveled shape, or a textured asset. `SKILL.md §N` means a section of the main file; 6.2 and 6.3 are in `creatures.md`.
 
-Contents: 6.4 Rigged parts (`rig.ts`, clips) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets): `detail.md`.
+Contents: 6.4 Rigged parts and skinned chains (`rig.ts`, `skinnedRig.ts`, clips and QA) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets) in `detail.md`.
 
 ## 6.4 Rigged parts & choosing rigid vs skinned
 
@@ -918,6 +920,62 @@ const mixer = new THREE.AnimationMixer(root); mixer.clipAction(walk).play();   /
 
 Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x = 0.2` directly. For a static pose baked into the asset, apply it once after `build` and keep it deterministic (a pure function of the params).
 
+### Skinned chains, rest pose, and `YXZ` motion
+
+For a dragon, snake, fish, or tentacle, author the bind pose with a tail extending along local `-Z` for a creature facing `+Z`. Put the curl into the clips. If the reference requires a curled bind pose, use local X pitch in the clip to straighten the chain toward `-Z` before Y yaw swings it toward `±X`. With the default `YXZ` order and zero Z roll, pitch is applied before yaw. An initially upright `+Y` segment needs `-π/2` pitch to point to `-Z`. Do not use yaw alone on an upright tail. Scrub the clip and check the tip moves to both sides.
+
+- `buildBoneHierarchy(specs)` returns `rootBone`, `bones` by name, and `boneOrder` in input order. Each spec has `name`, optional `parent`, and `worldPos` in asset space. List a single root and put each parent before its children. Use `boneOrder` to construct the `THREE.Skeleton`.
+- `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings. Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
+- `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder })` defaults to 30 fps and `YXZ`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. The last key uses the first pose. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
+- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata`. Clips can also come from `root.userData.animations` or `root.animations`. Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
+
+Build, bind, ground, and extract a simple tail. This tube uses `getPointAt()` so its ring indices give the authored arc-length parameters. Save the example alongside `src/skinnedRig.ts` to run it.
+
+```ts
+import { writeFileSync } from 'node:fs';
+import * as THREE from 'three';
+import { attachCurveSkinWeights, bakeClip30fps, buildBoneHierarchy, extractQaArtifacts } from './skinnedRig';
+
+const curve = new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.2));
+const chain = ['tailBase', 'tailMid', 'tailTip'];
+const boneT = [0, 0.5, 1];
+const { rootBone, bones, boneOrder } = buildBoneHierarchy(chain.map((name, i) => ({
+  name,
+  parent: chain[i - 1],
+  worldPos: curve.getPointAt(boneT[i]).toArray(),
+})));
+
+const segments = 12;
+const sides = 6;
+const geometry = new THREE.TubeGeometry(curve, segments, 0.12, sides, false);
+const vertexT = Array.from({ length: geometry.getAttribute('position').count }, (_, i) => Math.floor(i / (sides + 1)) / segments);
+attachCurveSkinWeights(geometry, boneOrder, chain, { vertexT, boneT });
+const tail = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({ flatShading: true }));
+tail.name = 'tail';
+const root = new THREE.Group().add(rootBone, tail);
+root.updateMatrixWorld(true);
+tail.bind(new THREE.Skeleton(boneOrder.map((name) => bones[name])));
+root.position.y -= new THREE.Box3().setFromObject(root, true).min.y;
+
+const swim = bakeClip30fps('Swim', 1.2, bones, (u) => ({
+  rotations: { tailBase: [0, 0.28 * Math.sin(2 * Math.PI * u), 0], tailMid: [0, 0.44 * Math.sin(2 * Math.PI * u - 0.55), 0] },
+  rootOffset: [0, 0, 0],
+}));
+root.userData.animations = [swim];
+const artifacts = extractQaArtifacts({ root, bones });
+for (const [name, data] of Object.entries(artifacts)) writeFileSync(`${name}.json`, JSON.stringify(data));
+```
+
+Run the checks from the skill folder. The example tube has open ends, so pass `--open tail` only for that part.
+
+```bash
+npx tsx scripts/qa-asset.ts --tris tris.json --open tail
+npx tsx scripts/mesh-stats.ts --tris tris.json --meta meshMeta.json --profile web --kind creature
+npx tsx scripts/rig-check.ts --meta rigMetadata.json --kind creature
+```
+
+QA samples a detached copy in export space. Keep the asset's ground offset on its wrapper. Helper-built bones use their authored local positions with identity rest rotations and scales. Supply manually built bones in their rest pose. Extraction uses visible `Mesh` and `SkinnedMesh` triangles, including indexed geometry and material groups. Keep all skeleton bones under `root` and address their position, quaternion, or scale by unique bone name. Instanced or batched meshes and tracks on non-bone objects require separate QA. Mesh metadata uses the stats CLI's bone/material grouping and dimensions of loaded material textures. Floor clearance is the lowest transformed vertex from both rigid and skinned parts at 30 fps and at every clip key, including the endpoints. View deformations between samples in preview.
+
 ## 6.5 Biped helpers and 6.6 Directed extrude and bevel
 
 Pure kernels, no THREE import (`src/biped.ts`, builds on `organic.ts` from `creatures.md` with its vector helpers exported). Left is +X, forward is +Z (SKILL.md §0).
@@ -973,9 +1031,9 @@ Code: `src/texture.ts`. API:
 - `disposeAsset` frees `material.map` (SKILL.md §9). A texture shared by several materials is disposed once per material, which is harmless.
 - Textured parts may be merged with `mergeFlat` only if they share the material **and** all have `uv`.
 
-## Tests (no Three.js, run with `tsx`)
+## Tests
 
-Test: `src/biped.test.ts` (run `tsx src/biped.test.ts`).
+Run `npx tsx src/biped.test.ts` for the pure kernels. Run `npx tsx src/skinnedRig.test.ts` with Three.js installed to check folded-curve weights, tail motion, loop closure, and the QA artifacts.
 
 Add to a project's tests as well: `RigBuilder` builds the same bone names and mesh count for the same params (run it with `three` installed), every bone mesh has `signedVolume > 0` per closed part before the merge, and `generate(params)` fingerprints equal the exported module's (SKILL.md §11), both at rest pose and after `mixer.setTime(0.25)`.
 ~~~

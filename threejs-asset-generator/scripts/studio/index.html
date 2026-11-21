@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en" data-studio-state="loading">
+<head>
+  <meta charset="utf-8">
+  <!-- THREE_LICENSE -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
+  <title>Three.js Asset Studio</title>
+  <style>
+    :root {
+      font: 14px/1.4 system-ui, sans-serif;
+      color: #f0f4f9;
+      background: #131b26;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    main {
+      height: 100vh;
+      height: 100dvh;
+      min-height: 430px;
+      display: grid;
+      grid-template-rows: auto minmax(200px, 1fr) auto;
+    }
+    header, footer {
+      padding: 12px clamp(12px, 3vw, 32px);
+      background: #131b26;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px 16px;
+      border-bottom: 1px solid #314154;
+    }
+    h1 { margin: 0; font-weight: 650; font-size: 1.16rem; overflow-wrap: anywhere; }
+    #asset-name, #metrics, .hint { color: #aebdd0; }
+    #asset-name { overflow-wrap: anywhere; }
+    .header-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; }
+    #stage { position: relative; background: #202b3a; min-width: 0; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #notice {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      transform: translate(-50%, -50%);
+      width: max-content;
+      max-width: calc(100% - 24px);
+      max-height: calc(100% - 24px);
+      overflow: auto;
+      padding: 12px 16px;
+      background: #131b26;
+      border: 1px solid #556880;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+    }
+    footer { border-top: 1px solid #314154; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+    .views, .clip-controls, label { display: flex; align-items: center; gap: 8px; }
+    .clip-controls { flex-wrap: wrap; min-width: 0; }
+    select, button {
+      min-height: 34px;
+      border: 1px solid #52637b;
+      border-radius: 5px;
+      padding: 4px 9px;
+      font: inherit;
+      background: #202b3a;
+      color: inherit;
+    }
+    select { max-width: min(210px, 55vw); }
+    button:not(:disabled) { cursor: pointer; }
+    button[aria-pressed="true"] { background: #244766; border-color: #8acbff; }
+    button:disabled, select:disabled, input:disabled { opacity: .58; }
+    #play { min-width: 62px; }
+    #time { min-width: 104px; font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #scrub { width: clamp(86px, 15vw, 210px); }
+    input { accent-color: #8acbff; }
+    :focus-visible { outline: 2px solid #8acbff; outline-offset: 2px; }
+    .hint { margin: 7px 0 0; font-size: .88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="header-info">
+        <h1 id="capture-label">3/4 front</h1>
+        <span id="asset-name"></span>
+      </div>
+      <span id="metrics"></span>
+    </header>
+    <div id="stage">
+      <canvas id="view" aria-label="Interactive asset preview"></canvas>
+      <div id="notice" role="status">Loading the asset…</div>
+    </div>
+    <footer>
+      <div class="toolbar">
+        <div class="views" role="group" aria-label="Camera presets">
+          <button type="button" data-view="34-front" aria-pressed="true">3/4 front</button>
+          <button type="button" data-view="34-back" aria-pressed="false">3/4 back</button>
+        </div>
+        <div class="clip-controls">
+          <label>Clip <select id="clip"><option value="-1">Rest pose</option></select></label>
+          <button id="play" type="button" disabled>Play</button>
+          <label>Time <input id="scrub" type="range" min="0" max="0" step="any" disabled></label>
+          <output id="time" for="scrub">0.00 / 0.00 s</output>
+        </div>
+        <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+      </div>
+      <p class="hint">Drag to orbit · Right-drag or two fingers to pan · Scroll or pinch to zoom</p>
+    </footer>
+  </main>
+  <script type="module">
+    /* STUDIO_BUNDLE */
+  </script>
+</body>
+</html>

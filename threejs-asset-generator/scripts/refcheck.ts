@@ -5,6 +5,15 @@ export type Mask = { w: number; h: number; data: Uint8Array };              // 1
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
 
+type CameraAngles = { azimuthDeg: number; elevationDeg: number };
+type AngleMatch = CameraAngles & { azimuthOffsetDeg: number; elevationOffsetDeg: number };
+const CANONICAL_ANGLES = {
+  '34': { azimuthDeg: 38, elevationDeg: 16 },
+  '34_back': { azimuthDeg: 142, elevationDeg: 16 },
+};
+const AZIMUTH_OFFSETS = [0, -6, 6, -12, 12];
+const ELEVATION_OFFSETS = [0, -6, 6];
+
 export const hex = (r: number, g: number, b: number) => '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 const unhex = (h: string): [number, number, number] => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
 const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -29,10 +38,10 @@ export function frameMask(m: Mask, res = RES): { mask: Mask; aspect: number } {
 }
 
 /** Orthographic silhouette of a triangle array, already framed (see frameMask). */
-export function silhouette(t: Tris, view: View, res = RES) {
+export function silhouette(t: Tris, view: View, res = RES, camera?: CameraAngles) {
   const n = t.length / 3, U = new Float64Array(n), V = new Float64Array(n);
-  const az = view === '34_back' ? (142 * Math.PI) / 180 : (38 * Math.PI) / 180;
-  const el = (16 * Math.PI) / 180;
+  const { azimuthDeg, elevationDeg } = camera ?? CANONICAL_ANGLES[view === '34_back' ? '34_back' : '34'];
+  const az = (azimuthDeg * Math.PI) / 180, el = (elevationDeg * Math.PI) / 180;
   const caz = Math.cos(az), saz = Math.sin(az), cel = Math.cos(el), sel = Math.sin(el);
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
@@ -153,6 +162,36 @@ export function bestIoU(model: Mask, ref: Mask, view: View) {
   const tries: [string, Mask][] = [['none', ref], ['flipH', flipH(ref)], ...(view === 'top' ? [['flipV', flipV(ref)] as [string, Mask]] : [])];
   return tries.map(([flip, m]) => ({ flip, iou: maskIoU(model, m), ref: m })).sort((p, q) => q.iou - p.iou)[0];
 }
+
+/** Prefer a camera that passes aspect, then maximize IoU. Evaluate the canonical pose first so it wins ties. */
+function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: number, aspectLimit: number) {
+  const project = (angles?: AngleMatch) => {
+    const { mask, aspect } = silhouette(tris, view, RES, angles);
+    const aspectError = Math.abs(aspect / referenceAspect - 1);
+    return { mask, aspect, aspectError, aspectPass: aspectError <= aspectLimit, match: bestIoU(mask, ref, view), angles };
+  };
+  if (view !== '34' && view !== '34_back') return project();
+
+  const canonical = CANONICAL_ANGLES[view];
+  let winner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  for (const azimuthOffsetDeg of AZIMUTH_OFFSETS) {
+    for (const elevationOffsetDeg of ELEVATION_OFFSETS) {
+      if (winner.aspectPass && winner.match.iou === 1) return winner;
+      if (azimuthOffsetDeg === 0 && elevationOffsetDeg === 0) continue;
+      const candidate = project({
+        azimuthDeg: canonical.azimuthDeg + azimuthOffsetDeg,
+        elevationDeg: canonical.elevationDeg + elevationOffsetDeg,
+        azimuthOffsetDeg,
+        elevationOffsetDeg,
+      });
+      const better = candidate.aspectPass === winner.aspectPass
+        ? candidate.match.iou > winner.match.iou
+        : candidate.aspectPass;
+      if (better) winner = candidate;
+    }
+  }
+  return winner;
+}
 /** RGBA picture: reference only = red, model only = blue, both = light grey, empty = white. Write it as PNG and look at it. */
 export function diffRGBA(model: Mask, ref: Mask) {
   const out = new Uint8Array(model.w * model.h * 4);
@@ -179,29 +218,36 @@ export function paletteGap(refColors: { hex: string; share: number }[], used: st
   return worst;
 }
 
-export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
+export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
 export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
 export const THRESH = { iou: 0.85, iou34: 0.70, aspect: 0.08, aspect34: 0.14, prop: 0.1, palette: 60 };
+const formatOffset = (deg: number) => `${deg > 0 ? '+' : ''}${deg}°`;
 /** Runs every gate that the reference data can answer, cheapest first. */
 export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = [], th = THRESH) {
-  const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {};
+  const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {}, angles: Partial<Record<View, AngleMatch>> = {};
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
   for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
-    const isAngled = view === '34' || view === '34_back';
-    const aspectLimit = isAngled ? (th.aspect34 ?? 0.14) : th.aspect;
-    const iouLimit = isAngled ? (th.iou34 ?? 0.70) : th.iou;
-    const { mask, aspect } = silhouette(tris, view), refMask = maskFromB64(r.data), best = bestIoU(mask, refMask, view), ae = Math.abs(aspect / r.aspect - 1);
-    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= aspectLimit, hint: 'fix overall proportions before details' });
-    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}${isAngled ? ` (3/4 threshold ${iouLimit.toFixed(2)})` : ''}`, pass: best.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
-    diffs[view] = diffRGBA(mask, best.ref);
+    const angled = view === '34' || view === '34_back';
+    const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;
+    const iouLimit = angled ? (th.iou34 ?? 0.70) : th.iou;
+    const { mask, aspect, aspectError, aspectPass, match, angles: camera } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
+    let cameraText = '';
+    if (camera) {
+      angles[view] = camera;
+      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}])`;
+    }
+    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(aspectError * 100).toFixed(0)}% off)`, pass: aspectPass, hint: 'fix overall proportions before details' });
+    const mirrored = match.flip !== 'none' ? ` (reference mirrored: ${match.flip})` : '';
+    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${match.iou.toFixed(2)}${mirrored}${cameraText}`, pass: match.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
+    diffs[view] = diffRGBA(mask, match.ref);
   }
   if (usedColors.length && ref.palette.length) { const g = paletteGap(ref.palette, usedColors); gates.push({ gate: 'G3 palette', value: g.hex ? `${g.hex} nearest ${g.nearest}, distance ${g.gap.toFixed(0)}` : 'all main colours covered', pass: g.gap <= th.palette, hint: `retune the colour nearest to ${g.hex}` }); }
-  return { gates, diffs };
+  return { gates, diffs, angles };
 }
 export const formatGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');

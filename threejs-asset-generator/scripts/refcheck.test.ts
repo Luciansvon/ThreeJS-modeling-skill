@@ -1,13 +1,12 @@
 // npx tsx refcheck.test.ts   (runs end-to-end with pure-Node PNG support, no `sharp` required)
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { writePngRgba, decodePngRgba } from './png';
 import { parseResult, spawnTsx } from './result';
-import { silhouette, maskIoU, bestIoU, maskFromRGBA, keepLargest, flipH, dominantColors, paletteGap, proportions, compareToRef, maskToB64, frameMask, splitGridSheet, type Tris } from './refcheck';
+import { silhouette, maskIoU, bestIoU, maskFromRGBA, keepLargest, flipH, dominantColors, paletteGap, proportions, compareToRef, maskToB64, frameMask, splitGridSheet, diffRGBA, THRESH, type RefData, type Tris } from './refcheck';
 
 const box = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): Tris => {
   const x = [cx - sx / 2, cx + sx / 2], y = [cy - sy / 2, cy + sy / 2], z = [cz - sz / 2, cz + sz / 2], P = (i: number, j: number, k: number) => [x[i], y[j], z[k]];
@@ -73,6 +72,69 @@ const good = compareToRef(wide, ref, ['#c82828', '#2828c8', '#fafafa']); assert.
 const bad = compareToRef(box(0, 0.5, 0, 1, 1, 1), ref, ['#00ff00']); assert.ok(bad.gates.filter((g) => !g.pass).length >= 3);
 assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
 
+// Asymmetric shapes at the angular sweep limits pick the matching camera for both G2 gates and the diff.
+const angledAsset = [...L, ...box(-0.6, 0.7, 0.8, 0.3, 0.4, 1.2)];
+const frontCamera = { azimuthDeg: 50, elevationDeg: 10, azimuthOffsetDeg: 12, elevationOffsetDeg: -6 };
+const rearCamera = { azimuthDeg: 130, elevationDeg: 22, azimuthOffsetDeg: -12, elevationOffsetDeg: 6 };
+const frontAngle = silhouette(angledAsset, '34', 64, frontCamera);
+const rearAngle = silhouette(angledAsset, '34_back', 64, rearCamera);
+const angledRef: RefData = {
+  views: {
+    '34': { w: 64, h: 64, aspect: frontAngle.aspect, data: maskToB64(frontAngle.mask) },
+    '34_back': { w: 64, h: 64, aspect: rearAngle.aspect, data: maskToB64(flipH(rearAngle.mask)) },
+  },
+  palette: [],
+};
+{
+  const before = angledAsset.slice();
+  assert.ok(bestIoU(silhouette(angledAsset, '34').mask, frontAngle.mask, '34').iou < 0.95);
+  assert.ok(bestIoU(silhouette(angledAsset, '34_back').mask, rearAngle.mask, '34_back').iou < 0.95);
+  const sweep = compareToRef(angledAsset, angledRef);
+  assert.deepEqual(sweep.angles, { '34': frontCamera, '34_back': rearCamera });
+  assert.ok(sweep.gates.every((gate) => gate.pass), JSON.stringify(sweep.gates));
+  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]/);
+  assert.match(sweep.gates[3].value, /reference mirrored: flipH/);
+  assert.deepEqual(sweep.diffs['34'], diffRGBA(frontAngle.mask, frontAngle.mask));
+  assert.deepEqual(sweep.diffs['34_back'], diffRGBA(rearAngle.mask, rearAngle.mask));
+  assert.deepEqual(angledAsset, before, 'compare must leave the triangles intact');
+}
+
+// A perfect mask match can miss the measured aspect. Prefer the best overlap within tolerance.
+{
+  const highestIoU = { azimuthDeg: 142, elevationDeg: 10, azimuthOffsetDeg: 0, elevationOffsetDeg: -6 };
+  const exactMask = silhouette(angledAsset, '34_back', 64, highestIoU);
+  const measuredAspect = silhouette(angledAsset, '34_back').aspect;
+  assert.ok(Math.abs(exactMask.aspect / measuredAspect - 1) > THRESH.aspect34);
+  const rear = { w: 64, h: 64, data: maskToB64(exactMask.mask), aspect: measuredAspect };
+  const preferred = compareToRef(angledAsset, { views: { '34_back': rear }, palette: [] });
+  assert.deepEqual(preferred.angles['34_back'], { azimuthDeg: 130, elevationDeg: 10, azimuthOffsetDeg: -12, elevationOffsetDeg: -6 });
+  assert.ok(preferred.gates.every((gate) => gate.pass), JSON.stringify(preferred.gates));
+
+  // With an unattainable aspect, report the highest IoU so the failing aspect stays visible.
+  const diagnostic = compareToRef(angledAsset, { views: { '34_back': { ...rear, aspect: 100 } }, palette: [] });
+  assert.deepEqual(diagnostic.angles['34_back'], highestIoU);
+  assert.deepEqual(diagnostic.gates.map((gate) => gate.pass), [false, true]);
+}
+
+// Every camera ties in IoU and satisfies the relaxed aspect tolerance. Canonical wins.
+{
+  const blank = { w: 64, h: 64, data: maskToB64({ w: 64, h: 64, data: new Uint8Array(64 * 64) }), aspect: 1 };
+  const tied = compareToRef(angledAsset, { views: { '34': blank, '34_back': blank }, palette: [] }, [], { ...THRESH, aspect34: 1 });
+  assert.deepEqual(tied.angles, {
+    '34': { azimuthDeg: 38, elevationDeg: 16, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 },
+    '34_back': { azimuthDeg: 142, elevationDeg: 16, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 },
+  });
+}
+
+for (const view of ['front', 'side', 'top'] as const) {
+  const fixed = silhouette(angledAsset, view);
+  assert.deepEqual(fixed, silhouette(angledAsset, view, 64, frontCamera), `${view} is a fixed projection`);
+  const reference = { views: { [view]: { w: 64, h: 64, data: maskToB64(fixed.mask), aspect: fixed.aspect } }, palette: [] };
+  const compared = compareToRef(angledAsset, reference);
+  assert.deepEqual(compared.angles, {});
+  assert.equal(compared.gates[1].value, '1.00');
+}
+
 // CLI end-to-end (works with pure-Node PNG writer/reader, no sharp needed)
 {
   const dir = mkdtempSync(join(tmpdir(), 'refcheck-')), here = dirname(fileURLToPath(import.meta.url));
@@ -81,9 +143,29 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
   const dec = decodePngRgba(readFileSync(join(dir, 'ref.png')))!;
   assert.equal(dec.width, 300); assert.equal(dec.height, 200);
   const run = (file: string, args: string[]) => spawnTsx(join(here, file), args, { cwd: dir, env: process.env });
-  const a = run('ref-intake.ts', ['front=ref.png', '--out', 'ref.json', '--w', '2']); assert.equal(a.status, 0, a.stderr + a.stdout); assert.ok(existsSync(join(dir, 'ref-front-mask.png')));
+  const singleFile = join('results', 'single', 'asset-ref.json'), singlePath = join(dir, singleFile);
+  const a = run('ref-intake.ts', ['front=ref.png', '--out', singleFile, '--w', '2']);
+  assert.equal(a.status, 0, a.stderr + a.stdout);
   assert.match(a.stdout, /aspect 2\.00/); assert.match(a.stdout, /#b45a28/);
-  const ar = parseResult(a.stdout)!; assert.ok(ar.ok && ar.tool === 'ref-intake' && Math.abs((ar.views as any).front.aspect - 2) < 0.05, 'ref-intake result line');
+  const checkMasks = (stdout: string, out: string, names: string[], stem: string) => {
+    const result = parseResult(stdout)!;
+    assert.equal(result.tool, 'ref-intake');
+    assert.equal(result.ok, true);
+    assert.equal(result.out, out);
+    const manifest = JSON.parse(readFileSync(out, 'utf8')) as RefData;
+    const views = result.views as Record<string, { aspect: number; mask: string }>;
+    assert.deepEqual(Object.keys(views), names);
+    assert.deepEqual(Object.keys(manifest.views), names);
+    for (const name of names) {
+      const view = manifest.views[name as keyof RefData['views']]!;
+      assert.equal(view.mask, `${stem}-${name}-mask.png`);
+      assert.equal(views[name].mask, join(dirname(out), view.mask));
+      const decoded = decodePngRgba(readFileSync(views[name].mask))!;
+      assert.equal(decoded.width, view.w);
+      assert.equal(decoded.height, view.h);
+    }
+  };
+  checkMasks(a.stdout, singlePath, ['front'], 'asset-ref');
 
   // turnaround sheet mode (--sheet --grid 2x1 --views front,side)
   const sheet = new Uint8Array(400 * 120 * 4); sheet.fill(255);
@@ -94,30 +176,55 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
     sheet.set(right.subarray(y * 200 * 4, (y + 1) * 200 * 4), (y * 400 + 200) * 4);
   }
   writePngRgba(join(dir, 'sheet.png'), sheet, 400, 120);
-  const sh = run('ref-intake.ts', ['--sheet', 'sheet.png', '--grid', '2x1', '--views', 'front,side', '--out', 'sheet.json']);
+  const sheetPath = join(dir, 'results', 'sheet', 'turnaround.json');
+  const sh = run('ref-intake.ts', ['--sheet', 'sheet.png', '--grid', '2x1', '--views', 'front,side', '--out', sheetPath]);
   assert.equal(sh.status, 0, sh.stderr + sh.stdout);
-  assert.ok(existsSync(join(dir, 'ref-side-mask.png')));
+  checkMasks(sh.stdout, sheetPath, ['front', 'side'], 'turnaround');
+  const blocked = run('ref-intake.ts', ['ref.png', '--out', 'results']);
+  assert.equal(blocked.status, 1, blocked.stderr + blocked.stdout);
+  assert.match(String(parseResult(blocked.stdout)?.error), /--out points to a directory/);
+  assert.deepEqual(readdirSync(dir).sort(), ['ref.png', 'results', 'sheet.png'], 'nested intake must leave cwd clean');
 
-  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ tris: box(0, 0.5, 0, 2, 1, 1), colors: ['#b45a28'] }));
-  const ok = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.ok(existsSync(join(dir, 'diff-front.png')));
+  const defaultIntake = run('ref-intake.ts', ['ref.png']);
+  assert.equal(defaultIntake.status, 0, defaultIntake.stderr + defaultIntake.stdout);
+  checkMasks(defaultIntake.stdout, join(dir, 'ref.json'), ['front'], 'ref');
+
+  // A single named-parts JSON with palette works for QA, budgets, and reference matching.
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ parts: { body: wide }, colors: ['#b45a28'] }));
+  const qa = run('qa-asset.ts', ['--tris', 'tris.json', '--no-render']);
+  assert.equal(qa.status, 0, qa.stdout + qa.stderr);
+  assert.deepEqual((parseResult(qa.stdout)?.stats as Record<string, unknown>).parts, { body: 12 });
+  const stats = run('mesh-stats.ts', ['--tris', 'tris.json']);
+  assert.equal(stats.status, 0, stats.stdout + stats.stderr);
+  assert.equal((parseResult(stats.stdout)?.stats as Record<string, unknown>).triangles, 12);
+  const ok = run('ref-compare.ts', [singleFile, 'tris.json']); assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.ok(existsSync(join(dir, 'diff-front.png')));
   const okr = parseResult(ok.stdout)!; assert.ok(okr.ok && okr.tool === 'ref-compare' && okr.gates!.length > 0 && okr.gates!.every((g) => g.pass), 'ref-compare result line');
+  assert.equal(okr.gates?.find((gate) => gate.gate === 'G3 palette')?.pass, true);
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ parts: { body: wide, broken: [1, null] } }));
+  const malformed = [
+    run('qa-asset.ts', ['--tris', 'tris.json', '--no-render']),
+    run('mesh-stats.ts', ['--tris', 'tris.json']),
+    run('ref-compare.ts', [singleFile, 'tris.json']),
+  ];
+  for (const error of malformed) {
+    assert.equal(error.status, 1);
+    assert.match(String(parseResult(error.stdout)?.error), /parts\.broken/);
+  }
+
   writeFileSync(join(dir, 'tris.json'), JSON.stringify({ tris: box(0, 0.5, 0, 1, 1, 1), colors: ['#00ff00'] }));
   const no = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(no.status, 2); assert.match(no.stdout, /FAIL/);
   const nor = parseResult(no.stdout)!; assert.ok(!nor.ok && nor.gates!.some((g) => !g.pass), 'failing compare reports ok:false');
   const miss = run('ref-compare.ts', ['nope.json', 'tris.json']); assert.equal(miss.status, 1); assert.equal(parseResult(miss.stdout)!.ok, false);
+  writeFileSync(join(dir, 'invalid-ref.json'), '{}');
+  const invalid = run('ref-compare.ts', ['invalid-ref.json', 'tris.json']);
+  assert.equal(invalid.status, 1);
+  assert.match(String(parseResult(invalid.stdout)?.error), /cannot compare invalid-ref\.json/);
 
-  // v4.2: 34 and 34_back views are evaluated in ref-compare (no longer silently skipped)
-  const s34 = silhouette(wide, '34'), s34b = silhouette(wide, '34_back');
-  const ref34 = {
-    views: {
-      '34': { w: 64, h: 64, data: maskToB64(flipH(s34.mask)), aspect: s34.aspect },
-      '34_back': { w: 64, h: 64, data: maskToB64(s34b.mask), aspect: s34b.aspect },
-    },
-    palette: dc,
-  };
-  const cmp34 = compareToRef(wide, ref34, ['#c82828', '#2828c8', '#fafafa']);
-  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34 silhouette IoU' && g.pass), '34 view evaluated and passes (including auto flipH)');
-  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34_back silhouette IoU' && g.pass), '34_back view evaluated and passes');
-  console.log('CLI OK');
+  writeFileSync(join(dir, 'angled-ref.json'), JSON.stringify(angledRef));
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify(angledAsset));
+  const angled = run('ref-compare.ts', ['angled-ref.json', 'tris.json']);
+  assert.equal(angled.status, 0, angled.stdout + angled.stderr);
+  assert.deepEqual(parseResult(angled.stdout)?.angles, { '34': frontCamera, '34_back': rearCamera });
+  console.log('Reference CLI OK: nested single and sheet masks, shared triangle JSON, and both angled views');
 }
 console.log('REFCHECK OK');

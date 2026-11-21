@@ -16,7 +16,7 @@ npx tsx scripts/qa-asset.ts --module ./myKernel.ts --export buildMyTris --params
 npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 ```
 
-The builder returns `Tris` (9 numbers per triangle, CCW from outside), `{ tris }`, or named parts `{ body: Tris, legs: Tris }`. Named parts are better: the gates then name the part at fault. `scripts/fixtures/crate.qa.ts` is the smallest complete example.
+The builder and `--tris` accept a bare triangle array (9 numbers per triangle, CCW from outside), `{ tris }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Named parts let the gates identify the part at fault. Use the same JSON with `mesh-stats` and `ref-compare`. Include hex `colors` in a wrapper to run the reference palette gate. `scripts/fixtures/crate.qa.ts` gives a complete named-parts builder.
 
 Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
 

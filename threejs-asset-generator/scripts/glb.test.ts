@@ -1,7 +1,7 @@
 // scripts/glb.test.ts: the writer must round-trip a good asset AND the gates must fail on each defect they exist for. Run: npx tsx scripts/glb.test.ts
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import * as nodeModule from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,14 +103,44 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
   assert.equal(run().code, 1); assert.equal(run('--tris', bad, '--color', '2,0,0').code, 1, 'colour out of range');
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
 
-  // 7. v4.2 export-rigged-glb.ts end-to-end (vertex colors + pivot + AnimationClip round-trip via GLTFExporter -> GLTFLoader)
+}
+
+// 7. Rigged export from an external working directory, with no NODE_PATH in the child.
+{
+  const out = mkdtempSync(join(tmpdir(), 'glb external '));
   const rigCli = join(here, 'export-rigged-glb.ts');
-  const rigMod = join(out, 'riggedSample.ts');
-  writeFileSync(rigMod, `
-    export function buildSample(_params: Record<string, unknown>, THREE: any) {
+  const env = { ...process.env };
+  delete env.NODE_PATH;
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const checkTrack = async (file: string, clipName: string, trackName: string, times: number[]) => {
+    const disk = readFileSync(join(out, file));
+    const buffer = disk.buffer.slice(disk.byteOffset, disk.byteOffset + disk.byteLength);
+    const { animations } = await new GLTFLoader().parseAsync(buffer, '');
+    assert.deepEqual(animations.map((clip) => clip.name), [clipName]);
+    assert.deepEqual(animations[0].tracks.map((track) => track.name), [trackName]);
+    assert.deepEqual(Array.from(animations[0].tracks[0].times), times);
+  };
+  const runRigged = (module: string, file: string, ...args: string[]) => {
+    const res = spawnTsx(rigCli, ['--module', module, '--out', file, ...args], { cwd: out, env });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    const result = parseResult(res.stdout)!;
+    assert.equal(result.ok, true);
+    const disk = readFileSync(join(out, file));
+    assert.equal(result.out, join(out, file));
+    assert.equal(disk.toString('ascii', 0, 4), 'glTF');
+    assert.equal(result.bytes, disk.length);
+    assert.deepEqual(result.after, result.before);
+    assert.ok(result.gates?.length && result.gates.every((gate) => gate.pass));
+    return result;
+  };
+
+  const injected = 'riggedSample.ts';
+  writeFileSync(join(out, injected), `
+    export function buildSample(params: { size: number }, THREE: any) {
+      if (process.env.NODE_PATH !== undefined || params.size !== 0.5) throw new Error('unexpected export environment');
       const root = new THREE.Group(); root.name = 'sample_root';
       const pivot = new THREE.Group(); pivot.name = 'head'; pivot.position.set(0, 1, 0); root.add(pivot);
-      const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5).toNonIndexed();
+      const geo = new THREE.BoxGeometry(params.size, params.size, params.size).toNonIndexed();
       const colors = new Float32Array(geo.attributes.position.count * 3).fill(0.5);
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true }));
@@ -121,11 +151,65 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
       return { root, animations: [clip] };
     }
   `);
-  const rigOut = join(out, 'sample_rigged.glb');
-  const rigRes = spawnTsx(rigCli, ['--module', rigMod, '--export', 'buildSample', '--out', rigOut], { cwd: join(here, '..') });
-  assert.equal(rigRes.status, 0, `${rigRes.stdout}${rigRes.stderr}`);
-  const rigParsed = parseResult(rigRes.stdout)!;
-  assert.equal(rigParsed.ok, true);
+  const rigParsed = runRigged(injected, 'sample-rigged.glb', '--export', 'buildSample', '--params', '{"size":0.5}');
   assert.deepEqual(rigParsed.clips, ['Nod']);
+  assert.deepEqual(rigParsed.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 1 });
+  await checkTrack('sample-rigged.glb', 'Nod', 'head.quaternion', [0, 0.5, 1]);
+  const blocked = spawnTsx(rigCli, ['--module', injected, '--params', '{"size":0.5}', '--out', join(injected, 'bad.glb')], { cwd: out, env });
+  assert.equal(blocked.status, 1);
+  assert.match(String(parseResult(blocked.stdout)?.error), /cannot write or re-open/);
+
+  if (typeof nodeModule.registerHooks === 'function') {
+    writeFileSync(join(out, 'dimensions.ts'), 'export const size: number = 2;');
+    const skin = 'bare-import.ts';
+    writeFileSync(join(out, skin), `
+      import * as THREE from 'three';
+      import { size } from './dimensions';
+      export function buildSkin() {
+        if (process.env.NODE_PATH !== undefined) throw new Error('NODE_PATH was set');
+        const root = new THREE.Group();
+        const geometry = new THREE.BoxGeometry(size, size, size);
+        const count = geometry.attributes.position.count;
+        const weights = new Float32Array(count * 4);
+        for (let i = 0; i < count; i++) weights[i * 4] = 1;
+        geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+        geometry.setAttribute('skinWeight', new THREE.BufferAttribute(weights, 4));
+        const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial());
+        const joint = new THREE.Bone();
+        joint.name = 'joint';
+        mesh.add(joint);
+        mesh.bind(new THREE.Skeleton([joint]));
+        root.add(mesh);
+        root.userData.animations = [new THREE.AnimationClip('Joint move', 1, [
+          new THREE.VectorKeyframeTrack('joint.position', [0, 1], [0, 0, 0, 0, 0.1, 0]),
+        ])];
+        return root;
+      }
+    `);
+    const skinned = runRigged(join(out, skin), 'sample-skinned.glb');
+    assert.deepEqual(skinned.clips, ['Joint move']);
+    assert.deepEqual(skinned.before, { tris: 12, meshes: 1, skins: 1, bones: 1, vertexColorMeshes: 0 });
+    assert.equal(skinned.gates?.find((gate) => gate.gate === 'RG5 skin/bones')?.pass, true);
+    await checkTrack('sample-skinned.glb', 'Joint move', 'joint.position', [0, 1]);
+
+    const esm = join(out, 'esm');
+    mkdirSync(esm);
+    writeFileSync(join(esm, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(esm, 'size.txt'), '2');
+    writeFileSync(join(esm, 'asset.js'), `
+      import { readFileSync } from 'node:fs';
+      import { BoxGeometry, Mesh, MeshStandardMaterial } from 'three';
+      export default function build() {
+        const size = Number(readFileSync(new URL('./size.txt', import.meta.url), 'utf8'));
+        if (size !== 2 || process.env.NODE_PATH !== undefined) throw new Error('unexpected export environment');
+        return new Mesh(new BoxGeometry(size, size, size), new MeshStandardMaterial());
+      }
+    `);
+    const js = runRigged(join('esm', 'asset.js'), join('results', 'sample-js.glb'));
+    assert.deepEqual(js.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 0 });
+    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS');
+  } else {
+    console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
+  }
 }
 console.log('GLB OK');

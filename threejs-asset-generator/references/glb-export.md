@@ -66,4 +66,8 @@ For assets that need vertex colours, materials, skins, or clips, use the bundled
 npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
 ```
 
-The builder may return a `THREE.Object3D` (with optional `root.userData.animations`) or `{ root, animations }`. Always build a fresh rest-pose instance excluding gizmos and runtime VFX. Procedural textures, visual playback, and target-engine import need an asset-specific check. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.
+The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
+
+Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
+
+Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` can omit scalar Euler tracks such as `.rotation[x]`. RG4 verifies clip names and counts. Validate track playback, procedural textures, and target-engine import with an asset-specific check. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.

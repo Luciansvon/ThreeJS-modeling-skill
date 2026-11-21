@@ -3,8 +3,8 @@
 //   Any asset via tris:  npx tsx scripts/qa-asset.ts --tris tris.json            (tris.json as in references/reference-matching.md §5)
 // Options: --budget 2000  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
 // Q6 grounding: on for --tris (the final asset). Off for --module (a raw kernel is grounded later by groundAsset) unless --grounded or --footprint.
-// --module needs a function (params) => Tris | { tris } | { part: Tris, ... }; it is built several times, which enables Q8 determinism and Q9 seed 0.
-// --tris reads { tris } | { part: Tris } | Tris from a file; Q8 and Q9 cannot run there and are reported as UNVERIFIED.
+// --module rebuilds the asset to check Q8 determinism and Q9 seed 0; --tris reports both as UNVERIFIED.
+// Both accept Tris, { tris }, named parts { name: Tris, ... }, or { parts: { name: Tris, ... } }.
 // Writes review.png (2 x 2: front | side / top | 3/4): LOOK at it. Prints the gate table; last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';

@@ -17,7 +17,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
    - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
    - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
-4. `view` the printed `ref-<view>-mask.png` once. Wrong silhouette (background leaked in, part missing)? Change `--tol` and run again. A bad mask makes every later number meaningless, so this is the only intake check that may not be skipped.
+4. Open each printed mask once and check for leaked background or missing parts. Adjust `--tol` and repeat intake if needed. All masks are written beside the JSON. For example, `--out refs/round-1/asset.json` writes `refs/round-1/asset-front-mask.png`. Each JSON view has a sibling-relative `mask` name. The last `@@RESULT` line gives absolute paths in `out` and `views.<view>.mask`.
 
 ## 2 The loop
 
@@ -31,7 +31,7 @@ Build coarse to fine. After EVERY step run the compare, not only at the end:
 | D Detail | chamfer, atlas, AO, small parts (`references/detail.md`) | G4 checklist |
 
 Each iteration:
-1. `fs.writeFileSync('tris.json', JSON.stringify({ tris, colors }))` from your generator driver (see §5), then `npx tsx scripts/ref-compare.ts ref.json tris.json`.
+1. Write `tris.json` from your generator driver using a format from §5, then run `npx tsx scripts/ref-compare.ts ref.json tris.json`.
 2. Read the output. It lists PASS/FAIL per gate and the hint for each failure.
 3. Fix **only the first failing gate**. Change one group of parameters (for example only leg length and body depth), then compare again.
 4. On a failing IoU gate `view` `diff-<view>.png` once: red is missing in the model, blue is extra. Name the part that is wrong before touching code.
@@ -49,13 +49,14 @@ Stop rules: max 3 rounds per gate. After 3 rounds without reaching the threshold
 | G3 palette | every reference colour with 5% or more share has a colour within RGB distance 60 | all | retune that one colour |
 | G4 checklist | the signature features from `ref-spec.md` (visual) | all present | add or reshape that feature |
 
-- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down. Angled `34` / `34_back` views project from front/rear 3/4 angles (38°/142° azimuth, 16° elevation) and automatically use the 3/4 concept-art threshold (`IoU >= 0.70`, aspect within `14%`) so you never need to mislabel a 3/4 image as an orthographic `side` view.
+- The CLI reports when a mirrored reference gives the higher IoU. A +Z-facing asset faces left in `side` and down in `top`.
+- Angled views `34` and `34_back` start at 38° and 142° azimuth respectively, both at 16° elevation. They sample azimuth offsets of 0°, ±6°, ±12° and elevation offsets of 0°, ±6°. The comparison chooses the highest IoU among cameras within the 14% aspect tolerance. If all fail aspect, it reports the highest-IoU camera for diagnosis. The canonical camera wins ties within either group. The selected camera supplies both G2 measurements and the diff PNG. The IoU threshold is 0.70. The gate text and `@@RESULT.angles` list the selected angles and offsets.
 - G4 is the only visual gate. Take ONE screenshot per milestone (end of B, end of D), same camera angle as the reference, reference and render in the same message, and tick each signature feature. If you cannot render, use the diff PNGs and say that G4 was checked from silhouettes only.
 - Thresholds live in `THRESH` in `scripts/refcheck.ts`. Loosen them (IoU 0.7) only for photos with strong perspective and say so in the report.
 
 ## 4 Efficiency rules
 
-- Numbers first, pictures last. The compare run takes well under a second and costs a few lines of output; an image view costs far more. View images only for the mask check, a failing IoU diff and the G4 milestones.
+- Use the numeric compare at each build step. Open images for the mask check, a failing IoU diff and the G4 milestones.
 - Never re-read the reference image after intake. Use `ref-spec.md` and `ref.json`.
 - Compare after every step, but run only gates that exist for that step; gates for later steps are not failures yet. Ignore a G3 FAIL during step A.
 - One failing gate per round, one parameter group per change. Two changes at once make the next number unreadable.
@@ -82,7 +83,7 @@ export function groupToTris(root: THREE.Object3D): number[] {
 // in the driver: fs.writeFileSync('tris.json', JSON.stringify({ tris: groupToTris(asset), colors: ['#8a5a2b', '#d9c9a3'] }));
 ```
 
-Pass the hex colours you used (`colors`) to enable G3. Pose the asset in its rest pose before collecting.
+Pose the asset in its rest pose before collecting. QA, mesh stats and reference comparison accept the same triangle JSON. Use a bare array, `{ tris, colors? }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Include the hex palette as `colors` to enable G3.
 
 ## 6 Final report (always include)
 
