@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Fast Preview</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      font: 16px/1.5 system-ui, sans-serif;
+      color: #19201e;
+      background: #f2f4f0;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    main { max-width: 1120px; margin: auto; padding: clamp(16px, 4vw, 44px); }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -.035em; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button, select {
+      padding: 8px 14px;
+      border: 1px solid #b5beb5;
+      border-radius: 6px;
+      background: #fff;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+    :is(button, select, input):focus-visible { outline: 3px solid #1c664d; outline-offset: 3px; }
+    .primary { border-color: #164434; background: #164434; color: #fff; }
+    button:disabled { opacity: .55; cursor: default; }
+    #stage {
+      position: relative;
+      min-height: 260px;
+      height: min(68vh, 720px);
+      overflow: hidden;
+      border: 1px solid #b5beb5;
+      border-radius: 10px;
+      background: #dce2db;
+    }
+    #stage[data-dragging] { outline: 3px solid #1c664d; outline-offset: 2px; }
+    model-viewer { display: block; width: 100%; height: 100%; }
+    #stage-message {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+      pointer-events: none;
+    }
+    #status { margin: 10px 0 0; overflow-wrap: anywhere; }
+    #animation {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+    #playback { min-width: 78px; }
+    .clip-picker, .timeline-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .clip-picker { flex: 0 1 240px; }
+    .clip-picker select { min-width: 0; width: 100%; }
+    .timeline-control { flex: 1 1 280px; }
+    #timeline { min-width: 0; width: 100%; accent-color: #164434; }
+    #time { min-width: 13ch; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Fast Preview</h1>
+      <div class="actions">
+        <button type="button" id="reset" disabled>Reset view</button>
+        <button type="button" id="open" class="primary">Open GLB</button>
+        <input type="file" id="file" accept=".glb,model/gltf-binary" hidden>
+      </div>
+    </header>
+    <section id="stage" aria-label="3D model preview">
+      <model-viewer id="viewer" camera-controls camera-orbit="0deg 75deg 105%" animation-crossfade-duration="0" touch-action="pan-y" alt="3D asset preview"></model-viewer>
+      <p id="stage-message">Drop a GLB here or choose one with Open GLB.</p>
+    </section>
+    <section id="animation" aria-label="Animation playback" hidden>
+      <button type="button" id="playback">Play</button>
+      <label class="clip-picker">Clip <select id="clip" aria-label="Animation clip"></select></label>
+      <div class="timeline-control">
+        <input type="range" id="timeline" min="0" max="0" step="any" value="0" aria-label="Animation timeline">
+        <span id="time">0.00 / 0.00 s</span>
+      </div>
+    </section>
+    <p id="status" role="status">The viewer uses your browser to load the selected file.</p>
+  </main>
+  <script type="module">
+    const viewer = document.querySelector('#viewer');
+    const stage = document.querySelector('#stage');
+    const stageMessage = document.querySelector('#stage-message');
+    const status = document.querySelector('#status');
+    const fileInput = document.querySelector('#file');
+    const reset = document.querySelector('#reset');
+    const animation = document.querySelector('#animation');
+    const play = document.querySelector('#playback');
+    const clip = document.querySelector('#clip');
+    const timeline = document.querySelector('#timeline');
+    const time = document.querySelector('#time');
+    const initialOrbit = viewer.getAttribute('camera-orbit');
+    // Looping clips wrap at the exact duration. Seek just inside the final frame.
+    const lastFrameRatio = 1 - 1e-6;
+    let viewerLibrary;
+    let loadRequest = 0;
+    let modelUrl;
+    let fileName;
+    let playbackFrame = 0;
+
+    function setStatus(message, showOnStage = true) {
+      status.textContent = message;
+      stageMessage.textContent = message;
+      stageMessage.hidden = !showOnStage;
+    }
+
+    function renderTimeline() {
+      const elapsed = Math.max(0, Math.min(viewer.currentTime, viewer.duration));
+      timeline.value = String(elapsed);
+      time.textContent = elapsed.toFixed(2) + ' / ' + viewer.duration.toFixed(2) + ' s';
+      timeline.setAttribute('aria-valuetext', time.textContent);
+      playbackFrame = viewer.paused ? 0 : requestAnimationFrame(renderTimeline);
+    }
+
+    function syncPlayback() {
+      cancelAnimationFrame(playbackFrame);
+      playbackFrame = 0;
+      play.textContent = viewer.paused ? 'Play' : 'Pause';
+      if (!animation.hidden) renderTimeline();
+    }
+
+    function hidePlayback() {
+      animation.hidden = true;
+      if (modelUrl) viewer.pause();
+      cancelAnimationFrame(playbackFrame);
+      playbackFrame = 0;
+    }
+
+    async function selectClip() {
+      const request = loadRequest;
+      const name = clip.value;
+      play.disabled = timeline.disabled = true;
+      viewer.pause();
+      viewer.animationName = name;
+      await viewer.updateComplete;
+      if (request !== loadRequest || animation.hidden || clip.value !== name) return;
+      viewer.currentTime = 0;
+      timeline.max = String(viewer.duration);
+      play.disabled = timeline.disabled = viewer.duration <= 0;
+      syncPlayback();
+    }
+
+    async function openModel(file) {
+      if (!file) return;
+      if (!/\.glb$/i.test(file.name)) {
+        status.textContent = 'Choose a .glb file.';
+        return;
+      }
+      const request = ++loadRequest;
+      hidePlayback();
+      reset.disabled = true;
+      setStatus('Loading ' + file.name + '…');
+      try {
+        viewerLibrary ??= import('https://cdn.jsdelivr.net/npm/@google/model-viewer@4.4.0/dist/model-viewer.min.js');
+        await viewerLibrary;
+      } catch {
+        viewerLibrary = undefined;
+        if (request === loadRequest) setStatus('Viewer unavailable. Check the connection or open the four-view PNG.');
+        return;
+      }
+      if (request !== loadRequest) return;
+      const previousUrl = modelUrl;
+      modelUrl = URL.createObjectURL(file);
+      fileName = file.name;
+      viewer.src = modelUrl;
+      if (previousUrl) URL.revokeObjectURL(previousUrl);
+    }
+
+    document.querySelector('#open').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      openModel(fileInput.files[0]);
+      fileInput.value = '';
+    });
+
+    stage.addEventListener('dragover', event => {
+      if (!event.dataTransfer.types.includes('Files')) return;
+      event.preventDefault();
+      stage.toggleAttribute('data-dragging', true);
+    });
+    stage.addEventListener('dragleave', event => {
+      if (!(event.relatedTarget instanceof Node) || !stage.contains(event.relatedTarget)) stage.removeAttribute('data-dragging');
+    });
+    stage.addEventListener('drop', event => {
+      event.preventDefault();
+      stage.removeAttribute('data-dragging');
+      openModel(event.dataTransfer.files[0]);
+    });
+
+    viewer.addEventListener('load', () => {
+      reset.disabled = false;
+      setStatus(fileName + ' · Drag to orbit. Right-drag or two-finger drag to pan. Scroll or pinch to zoom.', false);
+      const names = viewer.availableAnimations;
+      clip.replaceChildren(...names.map(name => new Option(name, name)));
+      animation.hidden = !names.length;
+      if (names.length) selectClip();
+    });
+    viewer.addEventListener('error', () => {
+      hidePlayback();
+      reset.disabled = true;
+      setStatus('Could not display ' + fileName + '. Try another GLB or open the four-view PNG.');
+    });
+    reset.addEventListener('click', () => {
+      viewer.cameraOrbit = initialOrbit;
+      viewer.cameraTarget = 'auto auto auto';
+      viewer.fieldOfView = 'auto';
+      viewer.jumpCameraToGoal();
+    });
+    clip.addEventListener('change', selectClip);
+    play.addEventListener('click', () => {
+      if (viewer.paused) {
+        if (viewer.currentTime >= viewer.duration * lastFrameRatio) viewer.currentTime = 0;
+        viewer.play();
+      } else {
+        viewer.pause();
+      }
+    });
+    timeline.addEventListener('input', () => {
+      const position = Number(timeline.value);
+      viewer.currentTime = Math.min(position, viewer.duration * lastFrameRatio);
+      syncPlayback();
+    });
+    for (const event of ['play', 'pause', 'finished']) viewer.addEventListener(event, syncPlayback);
+  </script>
+</body>
+</html>

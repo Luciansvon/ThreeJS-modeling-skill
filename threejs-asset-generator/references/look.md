@@ -1,8 +1,8 @@
 # Low-poly look and natural shapes
 
-Reference for `threejs-asset-generator`. Read it when you write materials, colors, flat shading, vertex jitter. Section numbers match `SKILL.md`.
+Reference for `threejs-asset-generator`. Read it when choosing a material, texture, palette, flat shading, or vertex jitter. Section numbers match `SKILL.md`.
 
-Contents: §4 Low-poly look (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`)
+Contents: §4 Low-poly look (`lowpoly.ts`) and texture choices · §5 Vertex jitter (`jitter.ts`)
 
 ## 4. Low-poly look
 
@@ -16,6 +16,20 @@ Contents: §4 Low-poly look (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`)
 - Since r181 PBR energy conservation, and since r187 PMREM, shading differs slightly between versions. Judge a palette by relative contrast, not by absolute screenshots.
 
 **Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly. Writing `hex / 255` yourself produces washed-out colors.
+
+### Choose the texture path
+
+| Need at the target camera distance | Use |
+| --- | --- |
+| Silhouette, flat color blocks, or gloss are enough | Solid material, vertex colors, and scalar roughness or metalness. Keep simple bollards and distant barriers UV-free. |
+| A pattern or marking is visible, or an exact label was requested | Reuse suitable supplied art. Otherwise use seeded pixels for repeatable patterns, vector paths or authored artwork for exact lettering and logos. |
+| Original image detail such as painted fur markings or an irregular weathered surface | If an image tool is available in this session and can return a usable image, call it for the needed map. If unavailable, provide a procedural approximation or a color placeholder plus a handoff prompt. |
+
+For image generation, specify the material, palette, coverage, scale, and UV region or tile. Request a flat, straight-on base-color image with even illumination, with shadows, highlights, and mockup backgrounds excluded. Ask for edge-to-edge repetition only for a tiling map. Give seams room in an atlas and keep lettering in an exact editable layer.
+
+Save the selected image as a fixed asset and load it outside the seeded builder. Pass the loaded texture in as an explicit input so preview and export use the same data. Use the UV and atlas workflow in [rigging and UVs](rigging-biped.md#67-uv-and-seeded-textures) and [detail](detail.md). In Three.js mark ordinary PNG or JPEG base-color and emissive maps as `SRGBColorSpace`, and normal, roughness, and metalness maps as `NoColorSpace`. Add data maps for a specific material requirement and validate them separately. Use the smallest useful resolution within [the target budget](budget.md).
+
+Report the image file or procedural source, the material slot, and which part it covers. Inspect the actual mesh for UV alignment, scale, seams, and legibility. If GLB is requested, use [the Three.js export path](glb-export.md#threejs-export-route) and inspect the reloaded material and target map. Keep image creation, mesh application, and export checks as separate evidence.
 
 **One mesh per material, colors in vertices.** Paint each part with a vertex color and merge all parts that share a material. A part that must move on its own (a limb, a head, a door) is the exception: merge per bone, not per asset (§6.4). A tree becomes 2 meshes instead of 60, and the colors stay editable through parameters.
 

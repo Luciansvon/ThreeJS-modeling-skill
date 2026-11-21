@@ -1,11 +1,17 @@
 ---
 name: threejs-asset-generator
-description: Procedural low-poly 3D assets in Three.js r170+ with seeded deterministic builders, parameter schemas, flat-shaded vertex-color meshes, custom geometry with correct winding, mirrored parts, rigged biped and creature kernels, composites, standalone code export, and matching a reference image. Not for loading glTF files.
+description: Procedural low-poly 3D assets in Three.js r170+ with seeded deterministic builders, parameter schemas, flat-shaded vertex-color meshes, custom geometry with correct winding, mirrored parts, rigged biped and creature kernels, composites, textures, standalone code export, and matching a reference image. Not for loading glTF files.
 ---
 
 # Three.js Procedural Low-Poly Asset Generator
 
+This harness edition assumes a workspace and Node.js. Use the bundled builders and CLI gates to collect evidence from the actual asset.
+
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
+
+**Surface detail:** Start with solid material or vertex colors. Add an image map only for a requested or visible detail that needs one. Use the session's image generator when original artwork is the right fit, then keep its output as a fixed input to the builder.
+
+**Preview choice:** When the user asks for a preview without choosing a mode, offer **Fast Preview** (orbit, pan, check textures, play or scrub embedded clips) and **Full Preview** (editable parameters, rig inspection, animation authoring, or expressions). Share a fast result if already available and use the requested mode. See `references/studio-preview.md`.
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -17,7 +23,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 
 | You are doing | Read | Code |
 |---|---|---|
-| Materials, colors, flat shading, jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
+| Materials, flat shading, procedural or image-generated textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
 | Creature, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
 | Anything that animates, humanoid, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
@@ -28,7 +34,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 | A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts` |
 | Is it too heavy, platform budget, LOD `detail` (§17) | `references/budget.md` | `scripts/mesh-stats.ts`, `src/lod.ts` |
 | Rig, animation clips, drift, expressions (§18) | `references/rig-check.md` | `scripts/rig-check.ts` |
-| Interactive browser preview studio for textured/rigged assets | `references/studio-preview.md` | |
+| Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html) |
 | Complete small example | `references/examples.md` | |
 | Before saying an asset is done: QA gates, review image (§13) | `references/qa-gates.md` | `scripts/qa-asset.ts` |
 
@@ -147,7 +153,7 @@ Lifecycle and export
 - [ ] Wrapper group grounds the asset at Y = 0; `disposeAsset` is called on every rebuild
 - [ ] Meshes are named; triangle count is inside budget
 - [ ] Exporter uses a real TS transpiler, includes helpers once, and has zero imports except `three` (`three/addons` only if `mergeGeometries` is used)
-- [ ] GLB asked for: `scripts/export-glb.ts` exit 0 (QA Q1 to Q5 and E1 to E6), path and gate table in the answer, "not opened in a third-party viewer; geometry only" repeated as UNVERIFIED
+- [ ] GLB asked for: choose the export path in §16. Report the file, checks performed on its bytes, and any unchecked visual or import stages.
 - [ ] Platform given or `detail` added: `scripts/mesh-stats.ts` (`--lods` for LOD) exit 0, profile and kind named, `not checked` repeated; `detail` default 2 leaves the existing asset unchanged
 - [ ] Export target (module, import map, classic global) matches where the code will run
 - [ ] Parity test passes: `generate(params)` and the exported module give the same fingerprint
@@ -191,7 +197,9 @@ Full procedure and scripts: `references/reference-matching.md`. The rules, in or
 
 ## 16. GLB file (when the user wants a `.glb`)
 
-Run `qa-asset.ts` first, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`). It re-runs Q1 to Q5, writes one named mesh per part with flat normals, reads the file back and checks E1 to E6. Geometry only: no colours, UVs, rig or clips. Say in the answer that no third-party viewer opened the file. Details and limits: `references/glb-export.md`.
+For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`). It reruns Q1 to Q5 and verifies the output with E1 to E6.
+
+When the GLB must retain colors, UVs, maps, rigging, or clips, export the built Three.js group with `GLTFExporter` and reopen the result with `GLTFLoader`. Check the requested attributes and report evidence for the exact file. See `references/glb-export.md`.
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
@@ -199,4 +207,4 @@ Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --pr
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 
-Run `npx tsx scripts/rig-check.ts --meta char_metadata.json` to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & in-place horizontal drift · R5 static expression mapping · R6 slide clearance. JSON checks do not verify visual textures or engine-native import: inspect textured/animated characters in a browser studio (`references/studio-preview.md`). Details: `references/rig-check.md`.
+Run `npx tsx scripts/rig-check.ts --meta char_metadata.json` to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & in-place horizontal drift · R5 static expression mapping · R6 slide clearance. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.

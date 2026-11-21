@@ -2,7 +2,7 @@
 
 Reference for `threejs-asset-generator`. Read it when the user wants a `.glb` file of an asset (to open in Blender, a viewer, an engine, or `GLTFLoader`). For standalone **code** export and Three.js versions, see `references/export.md` (§11, §12).
 
-Contents: Run it · What the file contains · The gates (E1 to E6) · The Done report · What it does not cover · THREE-side route (UNVERIFIED)
+Contents: Run it · What the file contains · The gates (E1 to E6) · The Done report · What it does not cover · Three.js export route
 
 Scripts (run them, do not read them): `scripts/export-glb.ts`; library `scripts/glb.ts` (`partsToGlb`, `readGlb`, `glbGates`); test `scripts/glb.test.ts`. Needs `tsx` only, no `three`. Same output contract as the other scripts: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 
@@ -47,7 +47,7 @@ E1 to E6 are checked on the file **re-read from disk**, not on the buffer in mem
 When you export a GLB, the answer must contain:
 1. The path of the file and its size.
 2. The gate table of the last run (QA Q1 to Q5 and E1 to E6).
-3. Everything under `UNVERIFIED`, repeated. At minimum: the GLB was **not opened in a third-party loader or viewer**, and **materials, vertex colours, UVs, rigging and animation are not exported**.
+3. Everything under `UNVERIFIED` that remains after any separate loader test. The CLI emits one default material and geometry. Use the Three.js route below for assets that need vertex colours, rich materials, rigging, or animation.
 
 If the user needs to see the result, say how to check it: drag the file into a glTF viewer or Blender, and confirm the part names appear as objects.
 
@@ -58,6 +58,8 @@ If the user needs to see the result, say how to check it: drag the file into a g
 - **No Draco or meshopt, no indices.** Files are larger than an optimised export. A 20 000-triangle asset is about 1.4 MB.
 - **Not the live scene.** It exports the pure triangle arrays, not a `THREE.Group` with its modifiers, instancing or materials.
 
-## THREE-side route (UNVERIFIED)
+## Three.js export route
 
-For an asset that only exists as a `THREE.Group` (materials, vertex colours, a skinned rig), the usual route is `GLTFExporter` from `three/addons/exporters/GLTFExporter.js` with `{ binary: true }`. It is not run or tested in this skill, because `three` is not installed in the sandbox. Treat any statement about it as UNVERIFIED until `npm i three` and a parity test (export, `GLTFLoader.parse`, compare `assetFingerprint` and triangle counts) pass. Known open questions are listed under "Not verified" in `references/detail.md` (`DataTexture` through `GLTFExporter`).
+For assets that need vertex colours, materials, skins, or clips, use `GLTFExporter` from `three/addons/exporters/GLTFExporter.js` on a fresh Three.js group in rest pose. Pass `{ binary: true, animations: clips }` to `parseAsync`. Reopen the returned `ArrayBuffer` with `GLTFLoader.parseAsync(bytes, '')`, compare the mesh names, bounds and triangle counts, then compare the attributes, bones, and clip names and keyframes required by the brief. Save and test the exact exported bytes.
+
+A Three.js r180 smoke test round-tripped a static vertex-colour attribute, material roughness, a one-bone skin, and one clip. Procedural textures, visual playback, and target-engine import need an asset-specific test. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.

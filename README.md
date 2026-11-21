@@ -1,8 +1,21 @@
-# ThreeJS Modeling Skill (`threejs-asset-generator` v4)
+# ThreeJS Modeling Skill
 
 Procedural low-poly 3D asset generator skill for **Three.js (r170+)**. It combines seeded deterministic geometry builders, automated mesh QA gates, a 4-panel software preview renderer, platform polygon/memory budget & LOD checks, and standalone `.glb` export without requiring Blender.
 
-> **Folder note:** The skill lives under [`threejs-asset-generator/`](./threejs-asset-generator/) so its directory name matches `name: threejs-asset-generator` in [`SKILL.md`](./threejs-asset-generator/SKILL.md) (enforced by `tools/validate-skills.ts`).
+## Choose an edition
+
+| Edition | Use it in | What it provides |
+| --- | --- | --- |
+| [Harness](./threejs-asset-generator/SKILL.md) | Codex, Claude Code, Gemini CLI, or another agent with a workspace and terminal | TypeScript builders, image reference intake, mesh QA, software preview, polygon and memory budgets, LOD checks, rig/clip metadata validation, and geometry-only GLB export. |
+| [Web chat](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | Copyable procedural model, dimensioned blockouts, optional SVG and CPU checks using the host's capabilities, and GLB where the session can generate and check the actual file. |
+
+For a harness, place the complete `threejs-asset-generator/` folder in the harness's skill directory and install its dependencies there. Keep the folder name and its `SKILL.md` together.
+
+For web chat, paste the complete web `SKILL.md` into a conversation or the project's instructions. In Gemini it can be used as [Gem instructions](https://support.google.com/gemini/answer/15146780?co=GENIE.Platform%3DDesktop&hl=en). Where Claude's [custom skill upload](https://support.claude.com/en/articles/12512180-use-skills-in-claude) is enabled, zip the `threejs-asset-generator-web/` folder and upload that ZIP. The plain chat workflow also works by pasting the file.
+
+Both editions start with material or vertex colors. If an asset needs original image detail, the agent can use the active session's image generator and preserve the resulting map as an input. Text-only sessions can supply procedural texture source or a placeholder. See [texture choices](./threejs-asset-generator/references/look.md#choose-the-texture-path).
+
+For a quick look, open the [Fast Preview HTML](./threejs-asset-generator/assets/fast-preview.html) in a browser and select the final GLB. Orbit, pan, zoom, and play or scrub embedded clips. Choose Full Preview for live parameters, rig inspection, clip authoring, or expressions. See [preview modes and fallbacks](./threejs-asset-generator/references/studio-preview.md).
 
 ---
 
@@ -50,7 +63,7 @@ Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 20, 2026 — **v4.
   - **v4.1 Field-Test Patch:** Added border flood-fill masking and `--sheet --grid` turnaround sheet splitting in `scripts/refcheck.ts` / `scripts/ref-intake.ts`, pure JSON rig/clip/expression/slide validator (`scripts/rig-check.ts`, R1–R6, `references/rig-check.md`), interactive HTML studio guide (`references/studio-preview.md`), and root `threejs-asset-generator/package.json`.
 - **Pending:**
   - **Phase 7:** Reusable asset recipes
-  - **Phase 8:** Final packaging (`AGENTS.md`, `CLAUDE.md`, description tuning, and install targets)
+  - **Phase 8 remaining:** Description tuning and release packaging.
 
 ---
 
@@ -59,17 +72,14 @@ Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 20, 2026 — **v4.
 ```text
 ThreeJS-modeling-skill/
 ├── README.md                        # Repository overview & detailed credits
+├── AGENTS.md                        # Maintenance rules for both editions
+├── AUDIT.md                         # v4.1 findings and evidence
 ├── THIRD_PARTY_NOTICES.md           # Verbatim MIT License notice for EL4CTEO/blender-skills
 ├── .gitignore                       # Ignored dependencies and generated outputs
 ├── .gitattributes                   # Consistent LF line endings
-└── threejs-asset-generator/         # Core skill package (72 files)
-    ├── package.json                 # Dependencies (tsx, three, optional sharp) & npm scripts
-    ├── SKILL.md                     # Main router and conventions (202 lines, ~3965 tokens)
-    ├── HANDOFF.md                   # Detailed progress log (v4.1) and unverified notes
-    ├── references/                  # 15 topic guides (geometry, look, QA, budgets, GLB, rig-check, studio-preview)
-    ├── src/                         # 24 builder modules, LOD helpers, and unit tests
-    ├── scripts/                     # 23 CLI scripts, fixtures & tests (QA, PNG, review, stats, GLB export, rig-check)
-    └── tools/                       # 7 validation, trigger-check, and test-runner scripts
+├── threejs-asset-generator/         # Harness skill, references, builders and CLI
+└── threejs-asset-generator-web/
+    └── SKILL.md                     # Self-contained web chat instructions
 ```
 
 ---
@@ -79,11 +89,11 @@ ThreeJS-modeling-skill/
 Install dependencies once inside `threejs-asset-generator/` (`npm install`, optional `sharp` only needed for JPEG/WebP references) and run commands from inside `threejs-asset-generator/`:
 
 ```bash
-# Run skill validation, trigger checks, and pure unit tests (11 pass, 1 skip without three)
-npx tsx tools/check.ts
+# Validate the harness, run trigger checks and tests, and fail on skipped tests
+npm run check:strict
 
-# Strict mode (treats skipped `three`-dependent tests as failures)
-npx tsx tools/check.ts --strict
+# From a repository checkout, validate the standalone web edition as well
+npm run validate -- ../threejs-asset-generator-web
 
 # Intake a multi-view turnaround sheet (border flood-fill on by default)
 npx tsx scripts/ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json
@@ -105,8 +115,6 @@ See [`references/`](./threejs-asset-generator/references/) and fixture templates
 
 ---
 
-## Unverified Scope
+## Verification scope
 
-As documented in [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md):
-- Tests and paths requiring the `three` package (`src/detailThree.test.ts`, `GLTFExporter`, and `groupToTris`) have not been executed yet because `three` was not installed in the sandbox environment.
-- Exported `.glb` files have not yet been tested in third-party viewers (`GLTFLoader`, Blender, or `model-viewer`).
+See the [v4.1 audit](./AUDIT.md) for tests run, exporter limitations, and remaining release checks. The [handoff](./threejs-asset-generator/HANDOFF.md) records the earlier implementation history.
