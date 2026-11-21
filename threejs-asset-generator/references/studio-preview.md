@@ -1,16 +1,24 @@
-# Interactive HTML studio preview pattern
+# Fast and Full Preview
 
-Reference for `threejs-asset-generator`. Read it when building a single-file interactive Three.js preview studio to inspect textured, rigged, or animated assets in a browser.
+Reference for `threejs-asset-generator`. Read it when the user wants to see or interact with an asset.
 
-Contents: 1 When to build a studio · 2 Required controls · 3 Lighting and contrast · 4 Export and round-trip verify
+Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting and contrast · 4 Export and round-trip verify
 
-## 1. When to build a studio
+## 1. Choose a preview
 
-Pure triangle QA (`scripts/qa-asset.ts`) and `review.png` verify geometry, winding, symmetry and grounding, but cannot inspect procedural canvas textures, facial expression swaps, or live animation playback. Wrap the asset in a standalone HTML studio whenever textures, expressions, or animations must be checked visually.
+When the request leaves the mode open, offer both choices in one sentence. For example, “Fast Preview lets you rotate the final model and try its animation clips. Full Preview adds editable parameters, rig inspection, and expression controls. Which do you want?” Share any fast result that is already ready and continue the asset work while the user decides. Follow an explicit mode choice directly. Use Fast for requests like “quick look”, “check the label”, or “play the exported run clip”. Use Full for authoring controls or detailed rig and expression review.
 
-## 2. Required controls
+**Fast Preview.** Reuse the [Fast Preview HTML](../assets/fast-preview.html) for existing GLB files. Open the HTML in a browser and select or drop the exact file into it. Drag to orbit, right-drag or drag with two fingers to pan, and scroll or pinch to zoom. The viewer displays the materials, textures, and labels in the loaded GLB. When the file contains animation clips, pick a clip, press Play/Pause, or drag the timeline to inspect a frame. The viewer starts paused. It needs a WebGL-capable browser and a connection to load the viewer library. For GLB output with textures or clips, choose the Three.js export route in [GLB export](glb-export.md#threejs-export-route).
 
-- **6-view turnaround camera presets:** Front (`+Z`), 3/4, Side (`+X`), Back (`-Z`), Top (`+Y`), Bottom (`-Y`), framed far enough back that the full asset (ears to boots) sits cleanly above any bottom dock.
+When the model is still being built or the interactive viewer is unavailable, show `review.png` from the [geometry checks](qa-gates.md). Its four views distinguish parts by color. If color accuracy, texture, or text legibility matters, inspect and capture a frame from the actual GLB viewer and report those checks separately.
+
+**Full Preview.** Reuse an existing studio where available. Build a standalone HTML studio when the user requests live parameter tuning, clip authoring or comparison, pose and root-motion inspection, or facial expressions. Model previews keep the same geometry and materials as export.
+
+## 2. Full Preview controls
+
+Choose controls for the asset and the requested review.
+
+- **Up to six turnaround camera presets:** Front (`+Z`), 3/4, Side (`+X`), Back (`-Z`), Top (`+Y`), Bottom (`-Y`), framed far enough back that the full asset fits.
 - **Parameter controls from schema:** Auto-render sliders and colour pickers directly from the asset's `parameters` array, including `seed` and `detail` (`src/lod.ts`, `0..2`).
 - **Live QA telemetry HUD:** Show triangles, meshes, pivots, active LOD level, winding (`ALL CCW`), ground `Y`, horizontal drift, track finiteness, and slide clearance.
 - **Rig & animation dock (when animated):** Play/pause, scrub bar, individual clip buttons plus `RefPose`, pivot gizmos toggle, and expression swap buttons (`neutral` / `happy` / `focused`) with optional clip auto-sync.

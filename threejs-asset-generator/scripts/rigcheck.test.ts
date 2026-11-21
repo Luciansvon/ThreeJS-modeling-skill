@@ -46,6 +46,9 @@ const failedNames = (m: RigMeta) => rigGates(m).gates.filter((g) => !g.pass).map
 
 // 1. valid character passes all 6 gates
 assert.deepEqual(failedNames(baseMeta()), [], 'valid rig passes R1 to R6');
+const valid = rigGates(baseMeta());
+assert.equal(valid.gates.length, 6, 'valid rig evaluates all six gates');
+assert.deepEqual(valid.skipped, [], 'valid rig has complete evidence');
 
 // 2. each defect triggers its own gate
 const cyclic = baseMeta(); cyclic.rig!.hierarchy!.push({ parent: 'head_pivot', child: 'root_body_pivot' });
@@ -63,11 +66,34 @@ assert.ok(failedNames(drift).includes('R4 tracks & drift'), 'horizontal drift ca
 const nonMono = baseMeta(); nonMono.animations![0].tracks![0].times = [0, 0.5, 0.5];
 assert.ok(failedNames(nonMono).includes('R4 tracks & drift'), 'duplicate timestamp caught by R4');
 
+const shortTrack = baseMeta(); shortTrack.animations![0].tracks![0].values = [0, 0.24, 0];
+assert.ok(failedNames(shortTrack).includes('R4 tracks & drift'), 'three position timestamps require nine values');
+
+const shortRotation = baseMeta(); shortRotation.animations![0].tracks![1].values = [0, 0, 0, 1];
+assert.ok(failedNames(shortRotation).includes('R4 tracks & drift'), 'two quaternion timestamps require eight values');
+
+const negativeDrift = baseMeta(); negativeDrift.qa!.maxHorizDrift = -1;
+assert.ok(failedNames(negativeDrift).includes('R4 tracks & drift'), 'negative drift magnitude is invalid');
+
 const badExpr = baseMeta(); badExpr.face!.animationExpressionMapping!.Slide = 'angry';
 assert.ok(failedNames(badExpr).includes('R5 expressions'), 'unmapped expression caught by R5');
 
+const partialFace = baseMeta(); delete partialFace.face!.textureResolution;
+const partialFaceResult = rigGates(partialFace);
+assert.ok(!partialFaceResult.gates.some((g) => g.gate === 'R5 expressions'), 'missing resolution cannot pass the full expression gate');
+assert.ok(partialFaceResult.skipped.some((s) => s.includes('textureResolution')), 'missing expression resolution is reported');
+partialFace.face!.animationExpressionMapping!.Slide = 'angry';
+assert.ok(failedNames(partialFace).includes('R5 expressions'), 'a known mapping failure stays a failure with partial data');
+
 const badSlide = baseMeta(); badSlide.qa!.slideMinY = -0.04;
 assert.ok(failedNames(badSlide).includes('R6 slide clearance'), 'floor-clipping slide caught by R6');
+
+const partialSlide = baseMeta(); delete partialSlide.qa!.slideMinY;
+const partialResult = rigGates(partialSlide);
+assert.ok(!partialResult.gates.some((g) => g.gate === 'R6 slide clearance'), 'one valid slide measure cannot pass the full gate');
+assert.ok(partialResult.skipped.some((s) => s.includes('slideMinY')), 'missing slide measure is reported');
+partialSlide.qa!.slideDropPct = 10;
+assert.ok(failedNames(partialSlide).includes('R6 slide clearance'), 'a known slide failure stays a failure with partial data');
 
 // 3. CLI end-to-end
 const dir = mkdtempSync(join(tmpdir(), 'rigcheck-'));

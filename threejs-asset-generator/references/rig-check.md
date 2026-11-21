@@ -19,11 +19,11 @@ npx tsx scripts/rig-check.ts --meta char_metadata.json [--max-pivots 16] [--allo
 | R1 hierarchy | unique `pivotNames`, single root, valid parent-child edges, acyclic tree, count <= `--max-pivots` (default 16) | missing root, cycle, typo in parent/child edge, too many pivots |
 | R2 rest-pose | every pivot has a finite `[x, y, z]` entry in `rig.restLocalPositions` | `NaN` or missing pivot entry |
 | R3 clips | unique clip names, finite positive `durationSeconds`, inspection clip (`RefPose`) excluded from export | `RefPose` accidentally baked into gameplay GLB, zero duration |
-| R4 tracks & drift | strictly increasing finite timestamps, finite values, targets exist in `pivotNames`, horizontal root X/Z drift <= `1e-5` m | duplicate timestamps at clip end, root moving horizontally instead of in-place |
+| R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets, horizontal root X/Z drift <= `1e-5` m where supplied or measurable | truncated track, duplicate timestamp, horizontal root movement |
 | R5 expressions | square power-of-two `textureResolution` (e.g. `512x512`), `defaultExpressionInGlb` and every clip expression mapping exist | unmapped expression name or non-square resolution |
 | R6 slide clearance | `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m | slide animation does not duck enough, or feet/tail clip below the floor |
 
-Any section omitted from the JSON (`restLocalPositions`, `animations`, `tracks`, `face`, `qa`) is reported under `not checked`, never guessed.
+Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 needs both slide measurements. R5 and R6 still report failures in the data that was supplied.
 
 ## Metadata JSON shape
 

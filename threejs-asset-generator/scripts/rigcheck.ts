@@ -17,6 +17,7 @@ export type RigMeta = {
     expressions?: string[];
     animationExpressionMapping?: Record<string, string>;
   };
+  files?: { expressions?: Record<string, unknown> };
   qa?: {
     maxHorizDrift?: number;
     slideDropPct?: number;
@@ -117,19 +118,33 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
 
   // R4 tracks & horizontal drift
   const trackClips = (clips ?? []).filter((c) => Array.isArray(c.tracks) && c.tracks.length > 0);
-  const hasDrift = typeof meta.qa?.maxHorizDrift === 'number';
+  const suppliedDrift = meta.qa?.maxHorizDrift;
+  const hasDrift = suppliedDrift !== undefined;
   if (trackClips.length || hasDrift) {
     const tIssues: string[] = [];
     let totalTracks = 0;
+    let hasRootPosition = false;
     for (const c of trackClips) {
       for (const tr of c.tracks!) {
         totalTracks++;
         const target = tr.name.includes('.') ? tr.name.slice(0, tr.name.lastIndexOf('.')) : tr.name;
         if (pivotSet.size && !pivotSet.has(target)) tIssues.push(`${c.name}: unknown track target "${target}"`);
-        if (!tr.times.length || !tr.values.length) { tIssues.push(`${c.name}/${tr.name}: empty track`); continue; }
+        if (!Array.isArray(tr.times) || !Array.isArray(tr.values) || !tr.times.length || !tr.values.length) {
+          tIssues.push(`${c.name}/${tr.name}: missing or empty track samples`);
+          continue;
+        }
+        const valuesPerKey = tr.values.length / tr.times.length;
+        const isPosition = tr.name.endsWith('.position');
+        const isVector3 = isPosition || tr.name.endsWith('.scale');
+        const isQuaternion = tr.name.endsWith('.quaternion');
+        if (!Number.isInteger(valuesPerKey) || (isVector3 && valuesPerKey !== 3) || (isQuaternion && valuesPerKey !== 4)) {
+          tIssues.push(`${c.name}/${tr.name}: ${tr.values.length} values do not match ${tr.times.length} timestamps`);
+          continue;
+        }
         if (tr.times.some((v) => !Number.isFinite(v)) || tr.values.some((v) => !Number.isFinite(v))) tIssues.push(`${c.name}/${tr.name}: non-finite sample`);
         for (let i = 1; i < tr.times.length; i++) if (!(tr.times[i] > tr.times[i - 1])) { tIssues.push(`${c.name}/${tr.name}: non-increasing timestamps`); break; }
-        if (tr.name.endsWith('.position') && target === roots[0] && tr.values.length >= 3) {
+        if (isPosition && target === roots[0]) {
+          hasRootPosition = true;
           const x0 = tr.values[0], z0 = tr.values[2];
           let d = 0;
           for (let i = 0; i + 2 < tr.values.length; i += 3) d = Math.max(d, Math.abs(tr.values[i] - x0), Math.abs(tr.values[i + 2] - z0));
@@ -138,59 +153,74 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
       }
     }
     if (hasDrift) {
-      const d = meta.qa!.maxHorizDrift!;
-      if (!Number.isFinite(d) || d > maxDrift) tIssues.push(`maxHorizDrift ${d} exceeds ${maxDrift}m`);
+      if (!Number.isFinite(suppliedDrift) || suppliedDrift < 0 || suppliedDrift > maxDrift) {
+        tIssues.push(`maxHorizDrift ${suppliedDrift} must be between 0 and ${maxDrift}m`);
+      }
     }
+    if (!hasRootPosition && !hasDrift) skipped.push('R4 horizontal root drift (no root position track or qa.maxHorizDrift provided)');
+    const checks = [];
+    if (totalTracks) checks.push(`${totalTracks} track(s) checked for finite, ordered samples and matching value counts`);
+    if (hasRootPosition) checks.push(`root track drift <= ${maxDrift}m`);
+    if (hasDrift) checks.push(`supplied maxHorizDrift <= ${maxDrift}m`);
     gates.push({
       gate: 'R4 tracks & drift',
-      value: tIssues.length ? tIssues.join('; ') : `${totalTracks ? `${totalTracks} tracks finite/monotonic, ` : ''}horizontal drift <= ${maxDrift}m`,
+      value: tIssues.length ? tIssues.join('; ') : checks.join(', '),
       pass: tIssues.length === 0,
-      hint: 'bake strictly increasing Float32 timestamps and keep root motion strictly in-place (X/Z constant)',
+      hint: 'bake one value tuple per strictly increasing timestamp and keep root motion in-place (X/Z constant)',
     });
   } else skipped.push('R4 tracks & drift (no per-clip tracks or qa.maxHorizDrift provided)');
 
   // R5 expressions
   if (meta.face) {
     const fIssues: string[] = [];
-    const allowed = new Set<string>(meta.face.expressions ?? Object.keys((meta as any).files?.expressions ?? {}));
-    if (!allowed.size && meta.face.defaultExpressionInGlb) allowed.add(meta.face.defaultExpressionInGlb);
-    const res = meta.face.textureResolution;
-    if (res) {
-      const [rw, rh] = res;
-      const pow2 = (n: number) => Number.isInteger(n) && n >= 64 && (n & (n - 1)) === 0;
-      if (!pow2(rw) || !pow2(rh) || rw !== rh) fIssues.push(`textureResolution ${rw}x${rh} should be square power-of-two >= 64`);
+    const { defaultExpressionInGlb: defaultExpression, textureResolution: res, animationExpressionMapping: mapping } = meta.face;
+    const allowed = new Set(meta.face.expressions ?? Object.keys(meta.files?.expressions ?? {}));
+    const missing = [
+      !allowed.size && 'face.expressions or files.expressions',
+      !defaultExpression && 'face.defaultExpressionInGlb',
+      res === undefined && 'face.textureResolution',
+    ].filter(Boolean);
+    const pow2 = (n: number) => Number.isSafeInteger(n) && n >= 64 && n === 2 ** Math.round(Math.log2(n));
+    if (res !== undefined && (!Array.isArray(res) || res.length !== 2 || res[0] !== res[1] || !pow2(res[0]))) {
+      fIssues.push('textureResolution should be square power-of-two >= 64');
     }
-    if (meta.face.defaultExpressionInGlb && allowed.size && !allowed.has(meta.face.defaultExpressionInGlb)) {
-      fIssues.push(`defaultExpressionInGlb "${meta.face.defaultExpressionInGlb}" not in expressions`);
+    if (defaultExpression && allowed.size && !allowed.has(defaultExpression)) {
+      fIssues.push(`defaultExpressionInGlb "${defaultExpression}" not in expressions`);
     }
-    const map = meta.face.animationExpressionMapping ?? {};
-    for (const [clipName, expr] of Object.entries(map)) {
+    for (const [clipName, expr] of Object.entries(mapping ?? {})) {
       if (allowed.size && !allowed.has(expr)) fIssues.push(`mapping ${clipName}->"${expr}" not in expressions`);
     }
     for (const c of clips ?? []) {
       if (c.expression && allowed.size && !allowed.has(c.expression)) fIssues.push(`clip ${c.name} expression "${c.expression}" not in expressions`);
     }
-    gates.push({
-      gate: 'R5 expressions',
-      value: fIssues.length ? fIssues.join('; ') : `${allowed.size} expression(s)${res ? `, ${res[0]}x${res[1]}` : ''}, all clip mappings valid`,
-      pass: fIssues.length === 0,
-      hint: 'keep static expression PNGs square power-of-two (e.g. 512x512) and map every clip to a declared expression',
-    });
+    if (missing.length) skipped.push(`R5 expressions (missing ${missing.join(', ')})`);
+    if (fIssues.length || !missing.length) {
+      gates.push({
+        gate: 'R5 expressions',
+        value: fIssues.length ? fIssues.join('; ') : `${allowed.size} declared expression(s), ${res!.join('x')}, supplied clip mappings valid`,
+        pass: fIssues.length === 0,
+        hint: 'keep static expression PNGs square power-of-two (e.g. 512x512) and map clips to declared expressions',
+      });
+    }
   } else skipped.push('R5 expressions (no face section in metadata)');
 
   // R6 slide clearance
-  if (typeof meta.qa?.slideDropPct === 'number' || typeof meta.qa?.slideMinY === 'number') {
-    const sIssues: string[] = [];
-    const drop = meta.qa!.slideDropPct, minY = meta.qa!.slideMinY;
-    if (typeof drop === 'number' && (!Number.isFinite(drop) || drop < minSlideDrop)) sIssues.push(`slide drop ${drop?.toFixed(1)}% < ${minSlideDrop}%`);
-    if (typeof minY === 'number' && (!Number.isFinite(minY) || minY < minSlideY)) sIssues.push(`slide minY ${minY?.toFixed(3)}m < ${minSlideY}m (clips below floor)`);
+  const drop = meta.qa?.slideDropPct, minY = meta.qa?.slideMinY;
+  const sIssues: string[] = [];
+  if (drop !== undefined && (!Number.isFinite(drop) || drop < minSlideDrop)) sIssues.push(`slide drop ${drop}% must be finite and >= ${minSlideDrop}%`);
+  if (minY !== undefined && (!Number.isFinite(minY) || minY < minSlideY)) sIssues.push(`slide minY ${minY}m must be finite and >= ${minSlideY}m`);
+  if (drop === undefined || minY === undefined) {
+    const missing = [drop === undefined && 'qa.slideDropPct', minY === undefined && 'qa.slideMinY'].filter(Boolean);
+    skipped.push(`R6 slide clearance (missing ${missing.join(' and ')})`);
+  }
+  if (sIssues.length || (drop !== undefined && minY !== undefined)) {
     gates.push({
       gate: 'R6 slide clearance',
-      value: sIssues.length ? sIssues.join('; ') : `drop ${drop?.toFixed(1) ?? '?'}%, minY ${minY?.toFixed(3) ?? '?'}m`,
+      value: sIssues.length ? sIssues.join('; ') : `drop ${drop}%, minY ${minY}m`,
       pass: sIssues.length === 0,
       hint: 'raise root Y slightly or bend legs/tail upward at Slide peak so lowest Y stays >= -0.025m while height drops >= 22%',
     });
-  } else skipped.push('R6 slide clearance (no qa.slideDropPct / qa.slideMinY provided)');
+  }
 
   return {
     gates,
