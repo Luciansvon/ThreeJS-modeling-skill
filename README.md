@@ -7,17 +7,21 @@ Procedural low-poly 3D asset generator skill for **Three.js (r170+)**. It combin
 | Edition | Use it in | What it provides |
 | --- | --- | --- |
 | [Harness](./threejs-asset-generator/SKILL.md) | Codex, Claude Code, Gemini CLI, or another agent with a workspace and terminal | TypeScript builders, image reference intake, mesh QA, software preview, polygon and memory budgets, LOD checks, rig/clip metadata validation, and geometry-only GLB export. |
-| [Web chat](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | The harness guides, builders, tools, and sample tests in Markdown. Uses available preview and CPU capabilities and reports requested stages that remain blocked at the end. |
+| [Web Full](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | The harness workflow, guides, builders, tools, and test source in Markdown. Runs the stages supported by the current session. |
 
 For a harness, place the complete `threejs-asset-generator/` folder in the harness's skill directory and install its dependencies there. Keep the folder name and its `SKILL.md` together.
 
-For web chat, paste the web `SKILL.md` into the conversation or project instructions and attach the [Markdown references](./threejs-asset-generator-web/references/). In Gemini, use the entrypoint as [Gem instructions](https://support.google.com/gemini/answer/15146780?co=GENIE.Platform%3DDesktop&hl=en) and add the relevant Markdown files. In Claude, upload the entire `threejs-asset-generator-web/` folder as a ZIP where [custom skills](https://support.claude.com/en/articles/12512180-use-skills-in-claude) are enabled.
+For web chat, paste the Web Full `SKILL.md` into the conversation or project instructions and attach the Markdown references. If the host limits attachments, start with `runtime.md` and add the modeling, verification, or source packs relevant to the brief. [Markdown references](./threejs-asset-generator-web/references/)
 
-Start with the [runtime guide](./threejs-asset-generator-web/references/runtime.md) and attach the packs you need if the host limits attachments. Code inside the packs can be read as Markdown. The session's actual capabilities determine which tools can run. When a tool fails, the agent continues the available work and puts any unresolved requested stages in a final **Blocked** report.
+In Gemini, use `SKILL.md` as the Gem instructions and add the Markdown references. In Claude, where custom skills are enabled, zip and upload the entire `threejs-asset-generator-web/` folder. [Gem setup](https://support.google.com/gemini/answer/15146780?co=GENIE.Platform%3DDesktop&hl=en), [Claude custom skills](https://support.claude.com/en/articles/12512180-use-skills-in-claude)
+
+## Model delivery
+
+Both editions start with the brief and reference views, build one seeded model, choose surface detail, and verify the requested results before delivery. Web Full uses tools already available in the session. If a tool fails, the agent uses a fallback and continues independent work. A final **Blocked** report gives each unresolved requested stage, its cause, what was delivered in its place, and what would complete it. [Web asset pipeline](./threejs-asset-generator-web/references/runtime.md#asset-pipeline)
 
 Both editions start with material or vertex colors. If an asset needs original image detail, the agent can use the active session's image generator and preserve the resulting map as an input. Text-only sessions can supply procedural texture source or a placeholder. See [texture choices](./threejs-asset-generator/references/look.md#choose-the-texture-path).
 
-For a quick look, open the [Fast Preview HTML](./threejs-asset-generator/assets/fast-preview.html) in a browser and select the final GLB. Orbit, pan, zoom, and play or scrub embedded clips. Choose Full Preview for live parameters, rig inspection, clip authoring, or expressions. See [preview modes and fallbacks](./threejs-asset-generator/references/studio-preview.md).
+Choose Fast Preview for a quick look at the final GLB. Orbit, pan, zoom, inspect its textures, and play or scrub embedded clips. Choose Full Preview for live parameters, rig inspection, clip authoring, or expressions. The agent prepares the chosen mode. [Fast Preview HTML](./threejs-asset-generator/assets/fast-preview.html), [preview modes and fallbacks](./threejs-asset-generator/references/studio-preview.md)
 
 ---
 
@@ -122,4 +126,4 @@ See [`references/`](./threejs-asset-generator/references/) and fixture templates
 
 ## Verification scope
 
-See the [v4.1 audit](./AUDIT.md) for tests run, exporter limitations, and remaining release checks. The [handoff](./threejs-asset-generator/HANDOFF.md) records the earlier implementation history.
+The audit records the v4.1 tests, the Web Full pack checks, and the limits of the evidence. The handoff records the harness implementation history. [Audit](./AUDIT.md), [harness handoff](./threejs-asset-generator/HANDOFF.md)

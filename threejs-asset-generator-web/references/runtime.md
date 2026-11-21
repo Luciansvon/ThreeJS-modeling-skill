@@ -1,6 +1,14 @@
 # Web runtime and fallback guide
 
-Contents: Choose capabilities · Tool alternatives · Final Blocked report
+Contents: Asset pipeline · Choose capabilities · Tool alternatives · Final Blocked report
+
+## Asset pipeline
+
+1. **Read the brief.** Record target, required outputs, dimensions, and available reference views. Label assumptions about missing views or measurements.
+2. **Build one model.** Create a seeded builder with named parts and consistent units, axes, and pivot. Use it for the requested detail levels, rig, preview, and export.
+3. **Choose surface detail.** Use material or vertex colors when shape and palette carry the look. Bind a supplied, procedural, or session-generated map when surface detail matters. Use the same map in the preview and export. [Texture rules](../SKILL.md#choose-surface-detail)
+4. **Gather evidence.** Apply the harness gates and thresholds to the model data you can inspect. Label calculations **Derived**, checks with observed inputs and results **Verified**, and checks without evidence **Unchecked**. [Verification guide](verification-guide.md)
+5. **Deliver the chosen preview and output.** Offer Fast and Full when the preview mode is open. Prepare the selected mode using the same model, or use an available fallback. If binary export is possible, reopen the actual GLB. Deliver completed work first and end with any unresolved requested stages. [Preview rules](../SKILL.md#offer-a-preview-mode), [Blocked report](#final-blocked-report)
 
 ## Choose capabilities
 
