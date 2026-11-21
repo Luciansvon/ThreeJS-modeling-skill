@@ -1,6 +1,6 @@
 # Test source and third-party notices
 
-Contents: src/biped.test.ts · src/creatures.test.ts · src/detail.pure.test.ts · src/detailThree.test.ts · src/lod.test.ts · src/qa.kernel.test.ts · scripts/budget.test.ts · scripts/glb.test.ts · scripts/qacheck.test.ts · scripts/refcheck.test.ts · scripts/rigcheck.test.ts · tools/tools.test.ts · tools/trigger-cases.json · THIRD_PARTY_NOTICES.md
+Contents: src/biped.test.ts · src/creatures.test.ts · src/detail.pure.test.ts · src/detailThree.test.ts · src/lod.test.ts · src/qa.kernel.test.ts · src/skinnedRig.test.ts · scripts/budget.test.ts · scripts/glb.test.ts · scripts/qacheck.test.ts · scripts/refcheck.test.ts · scripts/rigcheck.test.ts · scripts/studio.test.ts · tools/tools.test.ts · tools/trigger-cases.json · THIRD_PARTY_NOTICES.md
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -411,6 +411,271 @@ for (const sides of [5, 7]) assert.equal(gate({ a: tubeTris(spine, [0.3, 0.4, 0.
 console.log('QA KERNEL OK');
 ~~~
 
+## src/skinnedRig.test.ts
+
+~~~typescript source-excerpt
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+import { assetStats } from '../scripts/budget';
+import { boundsOf, flatten, normalizeParts, qaGates } from '../scripts/qacheck';
+import { rigGates } from '../scripts/rigcheck';
+import { attachCurveSkinWeights, bakeClip30fps, buildBoneHierarchy, extractQaArtifacts } from './skinnedRig';
+
+const close = (actual: number, expected: number, tolerance = 1e-6) => {
+  assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} differs from ${expected}`);
+};
+
+// Early and late rings of a folded chain can overlap in XYZ and still need different weights.
+{
+  const { rootBone, bones, boneOrder } = buildBoneHierarchy([
+    { name: 'hips', worldPos: [1, 0, 0] },
+    { name: 'early', parent: 'hips', worldPos: [0, 0, 0] },
+    { name: 'fin', parent: 'hips', worldPos: [1, 1, 0] },
+    { name: 'fold', parent: 'early', worldPos: [0, 0, -1] },
+    { name: 'late', parent: 'fold', worldPos: [0, 0, 0] },
+  ]);
+  assert.equal(bones.early.parent, rootBone);
+  assert.deepEqual(bones.early.position.toArray(), [-1, 0, 0]);
+  assert.deepEqual(bones.fin.position.toArray(), [0, 1, 0]);
+  assert.deepEqual(bones.late.position.toArray(), [0, 0, 1]);
+  assert.deepEqual(bones.late.getWorldPosition(new THREE.Vector3()).toArray(), [0, 0, 0]);
+  assert.deepEqual(boneOrder, ['hips', 'early', 'fin', 'fold', 'late']);
+  assert.throws(() => buildBoneHierarchy([{ name: 'child', parent: 'unknown', worldPos: [0, 0, 0] }]), /parents? .*before/i);
+  assert.throws(() => buildBoneHierarchy([{ name: 'a', worldPos: [0, 0, 0] }, { name: 'b', worldPos: [0, 0, 0] }]), /single root/);
+  assert.throws(() => buildBoneHierarchy([{ name: 'a', worldPos: [0, 0, 0] }, { name: 'a', parent: 'a', worldPos: [0, 0, 0] }]), /Duplicate/);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, 0.2, 0, 0, 0.2, 0, 0, 0.2, -0.5, 0, 0.2, -0.5, 0, 0.2, 0,
+  ], 3));
+  geometry.setIndex([0, 2, 1, 1, 3, 4]);
+  const chain = ['early', 'fold', 'late'];
+  const samples = { vertexT: [0, 1, 0.3, 0.7, 0.5], boneT: [0.1, 0.5, 0.9] };
+  assert.equal(attachCurveSkinWeights(geometry, boneOrder, chain, samples), geometry);
+  const index = geometry.getAttribute('skinIndex');
+  const weight = geometry.getAttribute('skinWeight');
+  assert.equal(index.count, 5);
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => [index.getX(i), index.getY(i)]), [[1, 0], [4, 0], [1, 3], [3, 4], [3, 4]]);
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => [weight.getX(i), weight.getY(i)]), [[1, 0], [1, 0], [0.5, 0.5], [0.5, 0.5], [1, 0]]);
+  assert.throws(() => attachCurveSkinWeights(geometry, boneOrder, chain, { ...samples, vertexT: [0, 1] }), /vertex count/);
+  assert.throws(() => attachCurveSkinWeights(geometry, boneOrder, chain, { ...samples, boneT: [0.2, 0.2, 1] }), /strictly increasing/);
+  assert.throws(() => attachCurveSkinWeights(geometry, boneOrder, chain, { ...samples, vertexT: [0, 1, -0.1, 0.2, 0.3] }), /\[0, 1\]/);
+  assert.equal(geometry.getAttribute('skinWeight'), weight);
+
+  const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial());
+  const root = new THREE.Group().add(rootBone, mesh);
+  root.updateMatrixWorld(true);
+  mesh.bind(new THREE.Skeleton(boneOrder.map((name) => bones[name])));
+  bones.late.position.x += 2;
+  root.updateMatrixWorld(true);
+  close(mesh.getVertexPosition(0, new THREE.Vector3()).x, 0);
+  close(mesh.getVertexPosition(1, new THREE.Vector3()).x, 2);
+  close(mesh.getVertexPosition(3, new THREE.Vector3()).x, 1);
+
+  attachCurveSkinWeights(geometry, boneOrder, ['fin'], { vertexT: samples.vertexT, boneT: [0.5] });
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => geometry.getAttribute('skinIndex').getX(i)), [2, 2, 2, 2, 2]);
+}
+
+function tailAsset() {
+  const { rootBone, bones, boneOrder } = buildBoneHierarchy([
+    { name: 'hips', worldPos: [0, 1, 0] },
+    { name: 'tail', parent: 'hips', worldPos: [0, 1, -1] },
+    { name: 'tailTip', parent: 'tail', worldPos: [0, 2, -1] },
+  ]);
+  const geometry = new THREE.BoxGeometry(0.2, 1, 0.2).translate(0, 1.5, -1);
+  const position = geometry.getAttribute('position');
+  const vertexT = Array.from({ length: position.count }, (_, i) => position.getY(i) - 1);
+  attachCurveSkinWeights(geometry, boneOrder, ['tail', 'tailTip'], { vertexT, boneT: [0, 1] });
+
+  const map = new THREE.DataTexture(new Uint8Array(8 * 4 * 4), 8, 4);
+  map.name = 'tail_atlas';
+  const skin = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({ name: 'hide', map }));
+  skin.name = 'body';
+  const rigid = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ name: 'hide', map }));
+  rigid.name = 'body';
+  rigid.position.set(0, 0.75, 0.2);
+  bones.hips.add(rigid);
+
+  const root = new THREE.Group().add(rootBone, skin);
+  root.name = 'TailAsset';
+  root.updateMatrixWorld(true);
+  skin.bind(new THREE.Skeleton(boneOrder.map((name) => bones[name])));
+  root.position.y = -1; // Ground the wrapper after binding.
+  return { root, bones, skin, rigid };
+}
+
+// Real Three.js poses. A vertical tail must pitch toward -Z before yaw can move its tip along X.
+{
+  const { root, bones, skin } = tailAsset();
+  const sampled: number[] = [];
+  const angle: [number, number, number] = [-Math.PI / 2, 0, 0];
+  const swayPose = { rotations: { tail: angle } };
+  const sway = bakeClip30fps('TailSway', 1, bones, (u) => {
+    sampled.push(u);
+    angle[1] = Math.sin(2 * Math.PI * u) * Math.PI / 3;
+    return swayPose;
+  });
+  assert.equal(sampled.length, 30);
+  assert.equal(sampled[0], 0);
+  assert.equal(sway.tracks[0].times.length, 31);
+  assert.equal(sway.tracks[0].times[30], 1);
+  assert.deepEqual(sway.tracks[0].values.slice(-4), sway.tracks[0].values.slice(0, 4));
+  const yawOnly = bakeClip30fps('YawOnly', 1, bones, () => ({ rotations: { tail: [0, Math.PI / 3, 0] } }));
+  const alternate = bakeClip30fps('OtherOrder', 1, bones, () => ({ rotations: { tail: [-Math.PI / 2, Math.PI / 3, 0] } }), { eulerOrder: 'XYZ' });
+  const topVertex = Array.from({ length: skin.geometry.getAttribute('position').count }, (_, i) => i)
+    .find((i) => skin.geometry.getAttribute('position').getY(i) === 2)!;
+  const tipAt = (clip: THREE.AnimationClip, t: number) => {
+    const mixer = new THREE.AnimationMixer(root);
+    mixer.clipAction(clip).setLoop(THREE.LoopOnce, 1).play();
+    mixer.setTime(t);
+    root.updateMatrixWorld(true);
+    const tip = bones.tailTip.getWorldPosition(new THREE.Vector3());
+    const surface = skin.getVertexPosition(topVertex, new THREE.Vector3()).applyMatrix4(skin.matrixWorld);
+    mixer.stopAllAction();
+    return { tip, surface };
+  };
+  const neutral = tipAt(sway, 0).tip;
+  close(neutral.z, -2);
+  close(neutral.y, 0);
+  close(tipAt(yawOnly, 0.25).tip.x, 0);
+  close(tipAt(alternate, 0.25).tip.x, 0);
+  const { tip: left, surface: leftSurface } = tipAt(sway, 0.25);
+  const { tip: right, surface: rightSurface } = tipAt(sway, 0.75);
+  assert.ok(leftSurface.x < -0.7 && rightSurface.x > 0.7);
+  close(left.x, -Math.sqrt(3) / 2, 0.003);
+  close(right.x, Math.sqrt(3) / 2, 0.003);
+  close(left.y, 0);
+  close(right.y, 0);
+  close(left.z, right.z);
+  const mixer = new THREE.AnimationMixer(root);
+  const action = mixer.clipAction(sway).setLoop(THREE.LoopOnce, 1);
+  action.clampWhenFinished = true;
+  action.play();
+  mixer.setTime(sway.duration);
+  close(bones.tailTip.getWorldPosition(new THREE.Vector3()).distanceTo(neutral), 0);
+}
+
+// Delayed channels still get tracks, and angle wraps never take the long quaternion path.
+{
+  const { bones } = tailAsset();
+  const branch = bakeClip30fps('BranchWrap', 0.8, bones, (u) => ({
+    rotations: { tail: [0, 0.4 + (u >= 0.5 ? Math.PI * 2 : 0), 0] },
+    rootOffset: u > 0 ? [0, 0.2, 0] : undefined,
+    scales: u > 0 ? { tailTip: [1, 0.15, 1] } : undefined,
+  }), { fps: 20 });
+  const [positions, quaternions, scales] = branch.tracks;
+  assert.equal(positions.name, 'hips.position');
+  assert.equal(quaternions.times.length, 17);
+  assert.equal(scales.name, 'tailTip.scale');
+  assert.deepEqual(Array.from(positions.values.slice(0, 3)), [0, 1, 0]);
+  assert.deepEqual(Array.from(scales.values.slice(0, 3)), [1, 1, 1]);
+  close(positions.values[4], 1.2);
+  close(scales.values[4], 0.15);
+  for (const track of branch.tracks) {
+    const size = track.getValueSize();
+    assert.deepEqual(track.values.slice(0, size), track.values.slice(-size));
+  }
+  const spin = bakeClip30fps('FullTurn', 1, bones, (u) => ({ rotations: { tail: [0, u * Math.PI * 2, 0] } }));
+  const spinValues = spin.tracks[0].values;
+  const a = new THREE.Quaternion(), b = new THREE.Quaternion();
+  for (let i = 4; i < spinValues.length; i += 4) {
+    assert.ok(a.fromArray(spinValues, i - 4).dot(b.fromArray(spinValues, i)) > 0);
+  }
+  close(a.fromArray(spinValues, 0).dot(b), -1); // Opposite encodings of the same orientation.
+  const times = bakeClip30fps('FractionalDuration', 1.15, bones, (u) => ({ rootOffset: [u, 0, 0] })).tracks[0].times;
+  assert.equal(times.length, 36);
+  for (let i = 0; i <= 34; i++) assert.equal(times[i], Math.fround(i / 30));
+  assert.equal(times[35], Math.fround(1.15));
+  const integral = bakeClip30fps('IntegralFrameCount', 0.14, bones, () => ({ rootOffset: [0, 0, 0] }), { fps: 100 });
+  assert.equal(integral.tracks[0].times.length, 15); // The floating-point product is slightly above 14.
+  assert.throws(() => bakeClip30fps('Bad', 0, bones, () => ({})), /positive/);
+  assert.throws(() => bakeClip30fps('Bad', 1, bones, () => ({ rotations: { unknown: [0, 0, 0] } })), /Unknown rotation bone/);
+}
+
+{
+  const { root, bones, skin } = tailAsset();
+  const dip = bakeClip30fps('FloorDip', 1, bones, (u) => {
+    const eased = Math.sin(Math.PI * u) ** 2;
+    return { rootOffset: [0, -0.3 * eased, 0], rotations: { tail: [-Math.PI / 2 * eased, 0, 0] } };
+  });
+  const scene = new THREE.Scene();
+  scene.position.y = 100;
+  scene.add(root);
+  root.userData.animations = [dip];
+  root.userData.self = root.userData;
+
+  const preview = new THREE.AnimationMixer(root);
+  preview.clipAction(dip).play();
+  preview.setTime(0.23);
+  scene.updateMatrixWorld(true);
+  skin.computeBoundingBox();
+  const state = () => ({
+    hip: bones.hips.position.toArray(), tail: bones.tail.rotation.toArray(),
+    boneWorld: bones.tailTip.matrixWorld.toArray(), bindInverse: skin.bindMatrixInverse.toArray(),
+    box: skin.boundingBox!.min.toArray(), mixerTime: preview.time,
+  });
+  const before = state();
+  const artifacts = extractQaArtifacts({ root, bones, motionMode: 'free' });
+  assert.deepEqual(state(), before);
+  assert.equal(root.parent, scene);
+  assert.equal(root.userData.self, root.userData);
+  assert.deepEqual(Object.keys(artifacts.tris), ['body', 'body_2']);
+  assert.equal(artifacts.tris.body.length, 12 * 9);
+  assert.equal(artifacts.tris.body_2.length, 12 * 9);
+
+  const parts = normalizeParts(JSON.parse(JSON.stringify(artifacts.tris)));
+  close(boundsOf(flatten(parts)).min[1], 0);
+  assert.ok(qaGates(parts).gates.every((gate) => gate.pass));
+  const stats = assetStats(parts, JSON.parse(JSON.stringify(artifacts.meshMeta)));
+  assert.deepEqual([stats.triangles, stats.meshes, stats.bones, stats.materials, stats.drawCalls], [24, 2, 3, 2, 2]);
+  assert.deepEqual(stats.textures.map(({ name, w, h }) => [name, w, h]), [['tail_atlas', 8, 4]]);
+  assert.equal(artifacts.meshMeta.parts?.body.bone, 'hips');
+
+  const rig = JSON.parse(JSON.stringify(artifacts.rigMetadata)) as typeof artifacts.rigMetadata;
+  assert.deepEqual(rig.rig?.hierarchy, [{ parent: 'hips', child: 'tail' }, { parent: 'tail', child: 'tailTip' }]);
+  assert.deepEqual(rig.rig?.restLocalPositions?.hips, [0, 1, 0]);
+  assert.equal(rig.animations?.[0].loop, true);
+  assert.equal(rig.animations?.[0].tracks?.[0].name, 'hips.position');
+  close(rig.qa!.clipMinY!, -0.4);
+  const gates = rigGates(rig, { kind: 'creature' }).gates;
+  assert.deepEqual(gates.filter((gate) => !gate.pass).map((gate) => gate.gate), ['R6 floor clearance']);
+
+  // A one-shot ending at its deepest point and a narrow dip between default frames must both be sampled.
+  const end = new THREE.AnimationClip('EndDip', 1, [new THREE.VectorKeyframeTrack('hips.position', [0, 1], [0, 1, 0, 0, 0.25, 0])]);
+  const fast = new THREE.AnimationClip('FastDip', 1, [
+    new THREE.VectorKeyframeTrack('hips.position', [0, 0.123, 0.124, 1], [0, 1, 0, 0, 0.1, 0, 0, 1, 0, 0, 1, 0]),
+  ]);
+  const endRig = extractQaArtifacts({ root, bones, animations: [end] }).rigMetadata;
+  assert.equal(endRig.animations?.[0].loop, false);
+  close(endRig.qa!.clipMinY!, -0.75);
+  close(extractQaArtifacts({ root, bones, animations: [dip, end, fast] }).rigMetadata.qa!.clipMinY!, -0.9);
+  assert.equal(extractQaArtifacts({ root, bones, animations: [] }).rigMetadata.qa?.clipMinY, undefined);
+  const invalid = new THREE.AnimationClip('Invalid', 1, [new THREE.VectorKeyframeTrack('body.position', [0], [0, 0, 0])]);
+  assert.throws(() => extractQaArtifacts({ root, bones, animations: [invalid] }), /unique rig bone/);
+  assert.deepEqual(state(), before);
+}
+
+{
+  const { root, bones } = tailAsset();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, -10, 0, 1, -10, 0, 0, -10, 1,
+    0, 2, 0, 1, 2, 0, 0, 2, 1,
+    0, -20, 0, 1, -20, 0, 0, -20, 1,
+  ], 3));
+  geometry.addGroup(0, 6, 0);
+  geometry.addGroup(6, 3, 1);
+  geometry.setDrawRange(3, 6);
+  const sheet = new THREE.Mesh(geometry, [new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial({ visible: false })]);
+  sheet.name = 'sheet';
+  root.add(sheet);
+  const { tris } = extractQaArtifacts({ root, bones });
+  assert.deepEqual(tris.sheet, [0, 1, 0, 1, 1, 0, 0, 1, 1]);
+}
+
+console.log('SKINNED RIG OK (folded weights, YXZ motion, loop wrap, posed QA and metadata contracts)');
+~~~
+
 ## scripts/budget.test.ts
 
 ~~~typescript source-excerpt
@@ -556,8 +821,8 @@ console.log('BUDGET OK');
 ~~~typescript source-excerpt
 // scripts/glb.test.ts: the writer must round-trip a good asset AND the gates must fail on each defect they exist for. Run: npx tsx scripts/glb.test.ts
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import * as nodeModule from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -659,14 +924,44 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
   assert.equal(run().code, 1); assert.equal(run('--tris', bad, '--color', '2,0,0').code, 1, 'colour out of range');
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
 
-  // 7. v4.2 export-rigged-glb.ts end-to-end (vertex colors + pivot + AnimationClip round-trip via GLTFExporter -> GLTFLoader)
+}
+
+// 7. Rigged export from an external working directory, with no NODE_PATH in the child.
+{
+  const out = mkdtempSync(join(tmpdir(), 'glb external '));
   const rigCli = join(here, 'export-rigged-glb.ts');
-  const rigMod = join(out, 'riggedSample.ts');
-  writeFileSync(rigMod, `
-    export function buildSample(_params: Record<string, unknown>, THREE: any) {
+  const env = { ...process.env };
+  delete env.NODE_PATH;
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const checkTrack = async (file: string, clipName: string, trackName: string, times: number[]) => {
+    const disk = readFileSync(join(out, file));
+    const buffer = disk.buffer.slice(disk.byteOffset, disk.byteOffset + disk.byteLength);
+    const { animations } = await new GLTFLoader().parseAsync(buffer, '');
+    assert.deepEqual(animations.map((clip) => clip.name), [clipName]);
+    assert.deepEqual(animations[0].tracks.map((track) => track.name), [trackName]);
+    assert.deepEqual(Array.from(animations[0].tracks[0].times), times);
+  };
+  const runRigged = (module: string, file: string, ...args: string[]) => {
+    const res = spawnTsx(rigCli, ['--module', module, '--out', file, ...args], { cwd: out, env });
+    assert.equal(res.status, 0, `${res.stdout}${res.stderr}`);
+    const result = parseResult(res.stdout)!;
+    assert.equal(result.ok, true);
+    const disk = readFileSync(join(out, file));
+    assert.equal(result.out, join(out, file));
+    assert.equal(disk.toString('ascii', 0, 4), 'glTF');
+    assert.equal(result.bytes, disk.length);
+    assert.deepEqual(result.after, result.before);
+    assert.ok(result.gates?.length && result.gates.every((gate) => gate.pass));
+    return result;
+  };
+
+  const injected = 'riggedSample.ts';
+  writeFileSync(join(out, injected), `
+    export function buildSample(params: { size: number }, THREE: any) {
+      if (process.env.NODE_PATH !== undefined || params.size !== 0.5) throw new Error('unexpected export environment');
       const root = new THREE.Group(); root.name = 'sample_root';
       const pivot = new THREE.Group(); pivot.name = 'head'; pivot.position.set(0, 1, 0); root.add(pivot);
-      const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5).toNonIndexed();
+      const geo = new THREE.BoxGeometry(params.size, params.size, params.size).toNonIndexed();
       const colors = new Float32Array(geo.attributes.position.count * 3).fill(0.5);
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true }));
@@ -677,12 +972,66 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
       return { root, animations: [clip] };
     }
   `);
-  const rigOut = join(out, 'sample_rigged.glb');
-  const rigRes = spawnTsx(rigCli, ['--module', rigMod, '--export', 'buildSample', '--out', rigOut], { cwd: join(here, '..') });
-  assert.equal(rigRes.status, 0, `${rigRes.stdout}${rigRes.stderr}`);
-  const rigParsed = parseResult(rigRes.stdout)!;
-  assert.equal(rigParsed.ok, true);
+  const rigParsed = runRigged(injected, 'sample-rigged.glb', '--export', 'buildSample', '--params', '{"size":0.5}');
   assert.deepEqual(rigParsed.clips, ['Nod']);
+  assert.deepEqual(rigParsed.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 1 });
+  await checkTrack('sample-rigged.glb', 'Nod', 'head.quaternion', [0, 0.5, 1]);
+  const blocked = spawnTsx(rigCli, ['--module', injected, '--params', '{"size":0.5}', '--out', join(injected, 'bad.glb')], { cwd: out, env });
+  assert.equal(blocked.status, 1);
+  assert.match(String(parseResult(blocked.stdout)?.error), /cannot write or re-open/);
+
+  if (typeof nodeModule.registerHooks === 'function') {
+    writeFileSync(join(out, 'dimensions.ts'), 'export const size: number = 2;');
+    const skin = 'bare-import.ts';
+    writeFileSync(join(out, skin), `
+      import * as THREE from 'three';
+      import { size } from './dimensions';
+      export function buildSkin() {
+        if (process.env.NODE_PATH !== undefined) throw new Error('NODE_PATH was set');
+        const root = new THREE.Group();
+        const geometry = new THREE.BoxGeometry(size, size, size);
+        const count = geometry.attributes.position.count;
+        const weights = new Float32Array(count * 4);
+        for (let i = 0; i < count; i++) weights[i * 4] = 1;
+        geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+        geometry.setAttribute('skinWeight', new THREE.BufferAttribute(weights, 4));
+        const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial());
+        const joint = new THREE.Bone();
+        joint.name = 'joint';
+        mesh.add(joint);
+        mesh.bind(new THREE.Skeleton([joint]));
+        root.add(mesh);
+        root.userData.animations = [new THREE.AnimationClip('Joint move', 1, [
+          new THREE.VectorKeyframeTrack('joint.position', [0, 1], [0, 0, 0, 0, 0.1, 0]),
+        ])];
+        return root;
+      }
+    `);
+    const skinned = runRigged(join(out, skin), 'sample-skinned.glb');
+    assert.deepEqual(skinned.clips, ['Joint move']);
+    assert.deepEqual(skinned.before, { tris: 12, meshes: 1, skins: 1, bones: 1, vertexColorMeshes: 0 });
+    assert.equal(skinned.gates?.find((gate) => gate.gate === 'RG5 skin/bones')?.pass, true);
+    await checkTrack('sample-skinned.glb', 'Joint move', 'joint.position', [0, 1]);
+
+    const esm = join(out, 'esm');
+    mkdirSync(esm);
+    writeFileSync(join(esm, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(esm, 'size.txt'), '2');
+    writeFileSync(join(esm, 'asset.js'), `
+      import { readFileSync } from 'node:fs';
+      import { BoxGeometry, Mesh, MeshStandardMaterial } from 'three';
+      export default function build() {
+        const size = Number(readFileSync(new URL('./size.txt', import.meta.url), 'utf8'));
+        if (size !== 2 || process.env.NODE_PATH !== undefined) throw new Error('unexpected export environment');
+        return new Mesh(new BoxGeometry(size, size, size), new MeshStandardMaterial());
+      }
+    `);
+    const js = runRigged(join('esm', 'asset.js'), join('results', 'sample-js.glb'));
+    assert.deepEqual(js.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 0 });
+    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS');
+  } else {
+    console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
+  }
 }
 console.log('GLB OK');
 ~~~
@@ -812,14 +1161,13 @@ console.log('QACHECK OK');
 ~~~typescript source-excerpt
 // npx tsx refcheck.test.ts   (runs end-to-end with pure-Node PNG support, no `sharp` required)
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import { writePngRgba, decodePngRgba } from './png';
 import { parseResult, spawnTsx } from './result';
-import { silhouette, maskIoU, bestIoU, maskFromRGBA, keepLargest, flipH, dominantColors, paletteGap, proportions, compareToRef, maskToB64, frameMask, splitGridSheet, type Tris } from './refcheck';
+import { silhouette, maskIoU, bestIoU, maskFromRGBA, keepLargest, flipH, dominantColors, paletteGap, proportions, compareToRef, maskToB64, frameMask, splitGridSheet, diffRGBA, THRESH, type RefData, type Tris } from './refcheck';
 
 const box = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): Tris => {
   const x = [cx - sx / 2, cx + sx / 2], y = [cy - sy / 2, cy + sy / 2], z = [cz - sz / 2, cz + sz / 2], P = (i: number, j: number, k: number) => [x[i], y[j], z[k]];
@@ -885,6 +1233,69 @@ const good = compareToRef(wide, ref, ['#c82828', '#2828c8', '#fafafa']); assert.
 const bad = compareToRef(box(0, 0.5, 0, 1, 1, 1), ref, ['#00ff00']); assert.ok(bad.gates.filter((g) => !g.pass).length >= 3);
 assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
 
+// Asymmetric shapes at the angular sweep limits pick the matching camera for both G2 gates and the diff.
+const angledAsset = [...L, ...box(-0.6, 0.7, 0.8, 0.3, 0.4, 1.2)];
+const frontCamera = { azimuthDeg: 50, elevationDeg: 10, azimuthOffsetDeg: 12, elevationOffsetDeg: -6 };
+const rearCamera = { azimuthDeg: 130, elevationDeg: 22, azimuthOffsetDeg: -12, elevationOffsetDeg: 6 };
+const frontAngle = silhouette(angledAsset, '34', 64, frontCamera);
+const rearAngle = silhouette(angledAsset, '34_back', 64, rearCamera);
+const angledRef: RefData = {
+  views: {
+    '34': { w: 64, h: 64, aspect: frontAngle.aspect, data: maskToB64(frontAngle.mask) },
+    '34_back': { w: 64, h: 64, aspect: rearAngle.aspect, data: maskToB64(flipH(rearAngle.mask)) },
+  },
+  palette: [],
+};
+{
+  const before = angledAsset.slice();
+  assert.ok(bestIoU(silhouette(angledAsset, '34').mask, frontAngle.mask, '34').iou < 0.95);
+  assert.ok(bestIoU(silhouette(angledAsset, '34_back').mask, rearAngle.mask, '34_back').iou < 0.95);
+  const sweep = compareToRef(angledAsset, angledRef);
+  assert.deepEqual(sweep.angles, { '34': frontCamera, '34_back': rearCamera });
+  assert.ok(sweep.gates.every((gate) => gate.pass), JSON.stringify(sweep.gates));
+  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]/);
+  assert.match(sweep.gates[3].value, /reference mirrored: flipH/);
+  assert.deepEqual(sweep.diffs['34'], diffRGBA(frontAngle.mask, frontAngle.mask));
+  assert.deepEqual(sweep.diffs['34_back'], diffRGBA(rearAngle.mask, rearAngle.mask));
+  assert.deepEqual(angledAsset, before, 'compare must leave the triangles intact');
+}
+
+// A perfect mask match can miss the measured aspect. Prefer the best overlap within tolerance.
+{
+  const highestIoU = { azimuthDeg: 142, elevationDeg: 10, azimuthOffsetDeg: 0, elevationOffsetDeg: -6 };
+  const exactMask = silhouette(angledAsset, '34_back', 64, highestIoU);
+  const measuredAspect = silhouette(angledAsset, '34_back').aspect;
+  assert.ok(Math.abs(exactMask.aspect / measuredAspect - 1) > THRESH.aspect34);
+  const rear = { w: 64, h: 64, data: maskToB64(exactMask.mask), aspect: measuredAspect };
+  const preferred = compareToRef(angledAsset, { views: { '34_back': rear }, palette: [] });
+  assert.deepEqual(preferred.angles['34_back'], { azimuthDeg: 130, elevationDeg: 10, azimuthOffsetDeg: -12, elevationOffsetDeg: -6 });
+  assert.ok(preferred.gates.every((gate) => gate.pass), JSON.stringify(preferred.gates));
+
+  // With an unattainable aspect, report the highest IoU so the failing aspect stays visible.
+  const diagnostic = compareToRef(angledAsset, { views: { '34_back': { ...rear, aspect: 100 } }, palette: [] });
+  assert.deepEqual(diagnostic.angles['34_back'], highestIoU);
+  assert.deepEqual(diagnostic.gates.map((gate) => gate.pass), [false, true]);
+}
+
+// Every camera ties in IoU and satisfies the relaxed aspect tolerance. Canonical wins.
+{
+  const blank = { w: 64, h: 64, data: maskToB64({ w: 64, h: 64, data: new Uint8Array(64 * 64) }), aspect: 1 };
+  const tied = compareToRef(angledAsset, { views: { '34': blank, '34_back': blank }, palette: [] }, [], { ...THRESH, aspect34: 1 });
+  assert.deepEqual(tied.angles, {
+    '34': { azimuthDeg: 38, elevationDeg: 16, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 },
+    '34_back': { azimuthDeg: 142, elevationDeg: 16, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 },
+  });
+}
+
+for (const view of ['front', 'side', 'top'] as const) {
+  const fixed = silhouette(angledAsset, view);
+  assert.deepEqual(fixed, silhouette(angledAsset, view, 64, frontCamera), `${view} is a fixed projection`);
+  const reference = { views: { [view]: { w: 64, h: 64, data: maskToB64(fixed.mask), aspect: fixed.aspect } }, palette: [] };
+  const compared = compareToRef(angledAsset, reference);
+  assert.deepEqual(compared.angles, {});
+  assert.equal(compared.gates[1].value, '1.00');
+}
+
 // CLI end-to-end (works with pure-Node PNG writer/reader, no sharp needed)
 {
   const dir = mkdtempSync(join(tmpdir(), 'refcheck-')), here = dirname(fileURLToPath(import.meta.url));
@@ -893,9 +1304,29 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
   const dec = decodePngRgba(readFileSync(join(dir, 'ref.png')))!;
   assert.equal(dec.width, 300); assert.equal(dec.height, 200);
   const run = (file: string, args: string[]) => spawnTsx(join(here, file), args, { cwd: dir, env: process.env });
-  const a = run('ref-intake.ts', ['front=ref.png', '--out', 'ref.json', '--w', '2']); assert.equal(a.status, 0, a.stderr + a.stdout); assert.ok(existsSync(join(dir, 'ref-front-mask.png')));
+  const singleFile = join('results', 'single', 'asset-ref.json'), singlePath = join(dir, singleFile);
+  const a = run('ref-intake.ts', ['front=ref.png', '--out', singleFile, '--w', '2']);
+  assert.equal(a.status, 0, a.stderr + a.stdout);
   assert.match(a.stdout, /aspect 2\.00/); assert.match(a.stdout, /#b45a28/);
-  const ar = parseResult(a.stdout)!; assert.ok(ar.ok && ar.tool === 'ref-intake' && Math.abs((ar.views as any).front.aspect - 2) < 0.05, 'ref-intake result line');
+  const checkMasks = (stdout: string, out: string, names: string[], stem: string) => {
+    const result = parseResult(stdout)!;
+    assert.equal(result.tool, 'ref-intake');
+    assert.equal(result.ok, true);
+    assert.equal(result.out, out);
+    const manifest = JSON.parse(readFileSync(out, 'utf8')) as RefData;
+    const views = result.views as Record<string, { aspect: number; mask: string }>;
+    assert.deepEqual(Object.keys(views), names);
+    assert.deepEqual(Object.keys(manifest.views), names);
+    for (const name of names) {
+      const view = manifest.views[name as keyof RefData['views']]!;
+      assert.equal(view.mask, `${stem}-${name}-mask.png`);
+      assert.equal(views[name].mask, join(dirname(out), view.mask));
+      const decoded = decodePngRgba(readFileSync(views[name].mask))!;
+      assert.equal(decoded.width, view.w);
+      assert.equal(decoded.height, view.h);
+    }
+  };
+  checkMasks(a.stdout, singlePath, ['front'], 'asset-ref');
 
   // turnaround sheet mode (--sheet --grid 2x1 --views front,side)
   const sheet = new Uint8Array(400 * 120 * 4); sheet.fill(255);
@@ -906,31 +1337,56 @@ assert.ok(bad.diffs.front!.length === 64 * 64 * 4);
     sheet.set(right.subarray(y * 200 * 4, (y + 1) * 200 * 4), (y * 400 + 200) * 4);
   }
   writePngRgba(join(dir, 'sheet.png'), sheet, 400, 120);
-  const sh = run('ref-intake.ts', ['--sheet', 'sheet.png', '--grid', '2x1', '--views', 'front,side', '--out', 'sheet.json']);
+  const sheetPath = join(dir, 'results', 'sheet', 'turnaround.json');
+  const sh = run('ref-intake.ts', ['--sheet', 'sheet.png', '--grid', '2x1', '--views', 'front,side', '--out', sheetPath]);
   assert.equal(sh.status, 0, sh.stderr + sh.stdout);
-  assert.ok(existsSync(join(dir, 'ref-side-mask.png')));
+  checkMasks(sh.stdout, sheetPath, ['front', 'side'], 'turnaround');
+  const blocked = run('ref-intake.ts', ['ref.png', '--out', 'results']);
+  assert.equal(blocked.status, 1, blocked.stderr + blocked.stdout);
+  assert.match(String(parseResult(blocked.stdout)?.error), /--out points to a directory/);
+  assert.deepEqual(readdirSync(dir).sort(), ['ref.png', 'results', 'sheet.png'], 'nested intake must leave cwd clean');
 
-  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ tris: box(0, 0.5, 0, 2, 1, 1), colors: ['#b45a28'] }));
-  const ok = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.ok(existsSync(join(dir, 'diff-front.png')));
+  const defaultIntake = run('ref-intake.ts', ['ref.png']);
+  assert.equal(defaultIntake.status, 0, defaultIntake.stderr + defaultIntake.stdout);
+  checkMasks(defaultIntake.stdout, join(dir, 'ref.json'), ['front'], 'ref');
+
+  // A single named-parts JSON with palette works for QA, budgets, and reference matching.
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ parts: { body: wide }, colors: ['#b45a28'] }));
+  const qa = run('qa-asset.ts', ['--tris', 'tris.json', '--no-render']);
+  assert.equal(qa.status, 0, qa.stdout + qa.stderr);
+  assert.deepEqual((parseResult(qa.stdout)?.stats as Record<string, unknown>).parts, { body: 12 });
+  const stats = run('mesh-stats.ts', ['--tris', 'tris.json']);
+  assert.equal(stats.status, 0, stats.stdout + stats.stderr);
+  assert.equal((parseResult(stats.stdout)?.stats as Record<string, unknown>).triangles, 12);
+  const ok = run('ref-compare.ts', [singleFile, 'tris.json']); assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.ok(existsSync(join(dir, 'diff-front.png')));
   const okr = parseResult(ok.stdout)!; assert.ok(okr.ok && okr.tool === 'ref-compare' && okr.gates!.length > 0 && okr.gates!.every((g) => g.pass), 'ref-compare result line');
+  assert.equal(okr.gates?.find((gate) => gate.gate === 'G3 palette')?.pass, true);
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify({ parts: { body: wide, broken: [1, null] } }));
+  const malformed = [
+    run('qa-asset.ts', ['--tris', 'tris.json', '--no-render']),
+    run('mesh-stats.ts', ['--tris', 'tris.json']),
+    run('ref-compare.ts', [singleFile, 'tris.json']),
+  ];
+  for (const error of malformed) {
+    assert.equal(error.status, 1);
+    assert.match(String(parseResult(error.stdout)?.error), /parts\.broken/);
+  }
+
   writeFileSync(join(dir, 'tris.json'), JSON.stringify({ tris: box(0, 0.5, 0, 1, 1, 1), colors: ['#00ff00'] }));
   const no = run('ref-compare.ts', ['ref.json', 'tris.json']); assert.equal(no.status, 2); assert.match(no.stdout, /FAIL/);
   const nor = parseResult(no.stdout)!; assert.ok(!nor.ok && nor.gates!.some((g) => !g.pass), 'failing compare reports ok:false');
   const miss = run('ref-compare.ts', ['nope.json', 'tris.json']); assert.equal(miss.status, 1); assert.equal(parseResult(miss.stdout)!.ok, false);
+  writeFileSync(join(dir, 'invalid-ref.json'), '{}');
+  const invalid = run('ref-compare.ts', ['invalid-ref.json', 'tris.json']);
+  assert.equal(invalid.status, 1);
+  assert.match(String(parseResult(invalid.stdout)?.error), /cannot compare invalid-ref\.json/);
 
-  // v4.2: 34 and 34_back views are evaluated in ref-compare (no longer silently skipped)
-  const s34 = silhouette(wide, '34'), s34b = silhouette(wide, '34_back');
-  const ref34 = {
-    views: {
-      '34': { w: 64, h: 64, data: maskToB64(flipH(s34.mask)), aspect: s34.aspect },
-      '34_back': { w: 64, h: 64, data: maskToB64(s34b.mask), aspect: s34b.aspect },
-    },
-    palette: dc,
-  };
-  const cmp34 = compareToRef(wide, ref34, ['#c82828', '#2828c8', '#fafafa']);
-  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34 silhouette IoU' && g.pass), '34 view evaluated and passes (including auto flipH)');
-  assert.ok(cmp34.gates.some((g) => g.gate === 'G2 34_back silhouette IoU' && g.pass), '34_back view evaluated and passes');
-  console.log('CLI OK');
+  writeFileSync(join(dir, 'angled-ref.json'), JSON.stringify(angledRef));
+  writeFileSync(join(dir, 'tris.json'), JSON.stringify(angledAsset));
+  const angled = run('ref-compare.ts', ['angled-ref.json', 'tris.json']);
+  assert.equal(angled.status, 0, angled.stdout + angled.stderr);
+  assert.deepEqual(parseResult(angled.stdout)?.angles, { '34': frontCamera, '34_back': rearCamera });
+  console.log('Reference CLI OK: nested single and sheet masks, shared triangle JSON, and both angled views');
 }
 console.log('REFCHECK OK');
 ~~~
@@ -1089,6 +1545,62 @@ const miss = run(); assert.equal(miss.status, 1);
 }
 
 console.log('RIGCHECK OK');
+~~~
+
+## scripts/studio.test.ts
+
+~~~typescript source-excerpt
+import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseResult, spawnTsx } from './result';
+
+const temp = realpathSync(tmpdir());
+const dir = mkdtempSync(join(temp, 'three studio '));
+try {
+  const module = join(dir, 'asset builder.ts');
+  const out = join(dir, 'review', 'index.html');
+  const params = { seed: 0, label: '</script><script>throw new Error("unexpected")</script>' };
+  writeFileSync(join(dir, 'material.ts'), `export const colour = '#9012ac';`);
+  writeFileSync(module, `
+    import * as THREE from 'three';
+    import { colour } from './material';
+    export function build({ seed, label }: { seed: number, label: string }) {
+      const root = new THREE.Mesh(new THREE.BoxGeometry(1 + seed, 1, 1), new THREE.MeshStandardMaterial({ color: colour }));
+      root.name = label;
+      return root;
+    }
+  `);
+  const pack = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
+    '--module', module, '--params', JSON.stringify(params), '--out', out,
+  ], { timeout: 15_000 });
+  assert.equal(pack.status, 0, pack.stdout + pack.stderr);
+  const packed = parseResult(pack.stdout);
+  assert.equal(packed?.ok, true);
+  assert.deepEqual(packed?.params, params);
+  const html = readFileSync(out, 'utf8');
+  assert.match(html, /<canvas id="view"/);
+  assert.match(html, /#9012ac/);
+  assert.match(html, /Three\.js license/);
+  assert.equal(html.match(/<\/script\s*>/gi)?.length, 1);
+  assert.doesNotMatch(html, /<script\b[^>]+src\s*=/i);
+
+  const png = join(dir, 'studio-contact-sheet.png');
+  const capture = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
+    '--studio', out, '--out', png, '--browser', join(dir, 'browser-does-not-exist'),
+  ], { timeout: 15_000 });
+  assert.equal(capture.status, 2, capture.stdout + capture.stderr);
+  const captured = parseResult(capture.stdout);
+  assert.equal(captured?.status, 'UNVERIFIED');
+  assert.equal(captured?.out, null);
+  assert.equal(existsSync(png), false);
+  console.log('Studio self-contained bundle and browser-unavailable result verified.');
+} finally {
+  assert.equal(dirname(dir), temp);
+  rmSync(dir, { recursive: true, force: true });
+}
 ~~~
 
 ## tools/tools.test.ts
@@ -1256,6 +1768,8 @@ console.log('TOOLS OK');
     { "prompt": "Help me explore options for a procedural low-poly spider or kraken creature with multi-limb rigs in Three.js", "expect": "$self" },
     { "prompt": "Create a procedural low-poly vehicle with spinning wheels, vertex colors, and seeded variations in Three.js", "expect": "$self" },
     { "prompt": "Build a deterministic procedural low-poly building with custom geometry and recessed windows", "expect": "$self" },
+    { "prompt": "Create a procedural Three.js sea serpent with a smooth skinned tail, a looping swim clip, and rigged GLB export", "expect": "$self" },
+    { "prompt": "Build a seeded low-poly creature in Three.js and generate a studio preview from the same asset builder as the GLB", "expect": "$self" },
     { "prompt": "Load a .glb model with GLTFLoader and play its embedded animation", "expect": "gltf-model-loader" },
     { "prompt": "Open Blender, bake the textures and export a GLB for Three.js", "expect": "threejs-blender-bridge" },
     { "prompt": "Add OrbitControls, bloom postprocessing and soft shadows to my existing scene", "expect": "three-scene-ui" },

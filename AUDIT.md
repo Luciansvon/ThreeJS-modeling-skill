@@ -1,4 +1,4 @@
-# ThreeJS Modeling Skill v4.1 audit
+# ThreeJS Modeling Skill audits
 
 Audited upstream revision [`7e3afd4`](https://github.com/Luciansvon/ThreeJS-modeling-skill/commit/7e3afd4b3ec222da618778294f0892757f969f07), the November 20, 2026 field-test patch. Tests used Windows with Node 24.14.1, Three.js r180, tsx 4.23.15, and sharp 0.33.5.
 
@@ -49,6 +49,38 @@ Follow-up fixes from the Thunder Dragon blind-test evaluation (Gemini 4 Neon Hig
 | 3/4 Reference Match & Rigged GLB | Added `34` and `34_back` projection matching (auto `flipH`, IoU ≥ 0.70) to [refcheck.ts](threejs-asset-generator/scripts/refcheck.ts) and [ref-intake.ts](threejs-asset-generator/scripts/ref-intake.ts); added official `GLTFExporter` → disk → `GLTFLoader` CLI [export-rigged-glb.ts](threejs-asset-generator/scripts/export-rigged-glb.ts) (`npm run export-rigged-glb`). | Added tests in [refcheck.test.ts](threejs-asset-generator/scripts/refcheck.test.ts) and [glb.test.ts](threejs-asset-generator/scripts/glb.test.ts). |
 | Web Full Sync & Triggers | Added 3 trigger cases (multi-limb creature exploration, vehicle, building) in [trigger-cases.json](threejs-asset-generator/tools/trigger-cases.json) and repacked `threejs-asset-generator-web/references/`. | `npm run check:web` verified **74 source chapters** across 5 Markdown packs; `npm run check:strict` passed **12/12 test files** (0 failed, 0 skipped) and **16/16 trigger cases**. |
 
+## v4.3 implementation and review
+
+Baseline `d39eaaa` was checked on Windows with Node 24.14.1, Three.js r180, and installed Chrome. The release adds the following behavior.
+
+| Area | What was exercised |
+| --- | --- |
+| Skinned rigs | Test cases cover folded curves with authored vertex parameters, real tail movement after `YXZ` straightening, fractional-duration 30 fps sampling, and loop closure. The guide example passed QA, mesh stats, and rig metadata checks. A lowered animation measured −0.20 m and failed the floor-clearance check. [Rig builder tests](threejs-asset-generator/src/skinnedRig.test.ts) |
+| Reference and export tools | Regression tests confirm nested intake paths and a shared JSON shape across QA, stats, and comparison. The export tests load external TS and JS from their original paths without `NODE_PATH` and reopen a skinned GLB with quaternion and position tracks. [Reference tests](threejs-asset-generator/scripts/refcheck.test.ts), [GLB tests](threejs-asset-generator/scripts/glb.test.ts) |
+| Studio and export parity | The archived dragon builder produced an HTML preview and a GLB with the same geometry fingerprint, 2,872 triangles, 11 meshes, 19 bones, and four clips with 20 tracks each. A separate effect module changed pixels at the selected action peak and did not enter the model export. [Studio guide](threejs-asset-generator/references/studio-preview.md) |
+| Browser and framing | Opened the packaged studio in Chrome with the network offline. Playback advanced, scrubbing moved to the selected time, and orbit and pan changed the actual canvas. Header and controls stayed outside the canvas at 960 px and 390 px. The captured four-panel sheet showed both sides, mid-swim at 1.00 s, and action at 0.53 s with test effects, with zero page, console, or WebGL errors. The browser reported ReadPixels performance warnings during capture. |
+
+The older dragon builder also produced QA artifacts through `extractQaArtifacts`. The applicable geometry and budget gates passed, the kernel reproduced the `2872 / 1352 / 752` triangle levels, and the rig passed for its authored `free` motion mode with measured `clipMinY` of +0.0647 m. The detached triangle-file check left Q8 and Q9 unverified, the vertex-colour asset had no B3 textures to evaluate, and the rig had no R5 expression data.
+
+The reference-angle comparison replayed the same input files. The front silhouette score moved from 0.6324 to 0.7005 at azimuth 44° and elevation 10°, passing the 0.70 threshold. The rear improved from 0.3635 to 0.3877 at 136° and 10°. Its aspect passed and its overlap still failed, so the rear silhouette remains a finding for that asset. [Reference matching](threejs-asset-generator/references/reference-matching.md)
+
+### Release checks
+
+Run from `threejs-asset-generator/` after installing the dependencies.
+
+```text
+npm run pack:web
+npm run check:web
+npm run check:strict
+npm run validate -- ..
+npm run validate -- ../threejs-asset-generator-web
+```
+
+- Strict verification passed all **14 test files** with zero failures or skips and **18/18** trigger cases.
+- Both skill manifests passed with zero errors and warnings. The harness entrypoint measured approximately **4,590** tokens against the 5,000 limit.
+- Web Full reproduced **84 source chapters** across five Markdown packs with `stale: []`. An independent comparison found zero missing, extra, or changed chapters after newline normalization. The web runtime continues with available tools and reports blocked requested stages at the end. [Web runtime](threejs-asset-generator-web/references/runtime.md)
+- The shared B.I.M.A-DEV-INFRA repository audit checked **98 files** with zero findings. A local link check resolved **47 links and headings** across the edited guides.
+
 ## Limits of this audit
 
-The samples check file and model data. A live v4.2 blind-test re-run, textured and animated visual appearance in target engines, and the workflow inside live ChatGPT, Gemini, and Claude accounts still need end-to-end testing.
+The v4.3 replay reuses the v4.2 asset source. A fresh blind generation run is still required to measure v4.3 model quality and build time. Target-engine appearance and the workflow in live ChatGPT, Gemini, and Claude accounts remain unverified. Rigged-export gate RG4 checks clip names and counts. The channel checks in this audit exercise baked quaternion and position tracks. Bake rotation channels to quaternions for GLB delivery. [Rigged export route](threejs-asset-generator/references/glb-export.md#threejs-export-route)

@@ -258,7 +258,11 @@ For assets that need vertex colours, materials, skins, or clips, use the bundled
 npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
 ```
 
-The builder may return a `THREE.Object3D` (with optional `root.userData.animations`) or `{ root, animations }`. Always build a fresh rest-pose instance excluding gizmos and runtime VFX. Procedural textures, visual playback, and target-engine import need an asset-specific check. See `references/studio-preview.md` for the browser APIs and preview workflow, and `references/detail.md` for texture cases.
+The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
+
+Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
+
+Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` can omit scalar Euler tracks such as `.rotation[x]`. RG4 verifies clip names and counts. Validate track playback, procedural textures, and target-engine import with an asset-specific check. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.
 ~~~
 
 ## references/qa-gates.md
@@ -282,7 +286,7 @@ npx tsx scripts/qa-asset.ts --module ./myKernel.ts --export buildMyTris --params
 npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 ```
 
-The builder returns `Tris` (9 numbers per triangle, CCW from outside), `{ tris }`, or named parts `{ body: Tris, legs: Tris }`. Named parts are better: the gates then name the part at fault. `scripts/fixtures/crate.qa.ts` is the smallest complete example.
+The builder and `--tris` accept a bare triangle array (9 numbers per triangle, CCW from outside), `{ tris }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Named parts let the gates identify the part at fault. Use the same JSON with `mesh-stats` and `ref-compare`. Include hex `colors` in a wrapper to run the reference palette gate. `scripts/fixtures/crate.qa.ts` gives a complete named-parts builder.
 
 Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
 
@@ -360,7 +364,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
    - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
    - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
-4. `view` the printed `ref-<view>-mask.png` once. Wrong silhouette (background leaked in, part missing)? Change `--tol` and run again. A bad mask makes every later number meaningless, so this is the only intake check that may not be skipped.
+4. Open each printed mask once and check for leaked background or missing parts. Adjust `--tol` and repeat intake if needed. All masks are written beside the JSON. For example, `--out refs/round-1/asset.json` writes `refs/round-1/asset-front-mask.png`. Each JSON view has a sibling-relative `mask` name. The last `@@RESULT` line gives absolute paths in `out` and `views.<view>.mask`.
 
 ## 2 The loop
 
@@ -374,7 +378,7 @@ Build coarse to fine. After EVERY step run the compare, not only at the end:
 | D Detail | chamfer, atlas, AO, small parts (`references/detail.md`) | G4 checklist |
 
 Each iteration:
-1. `fs.writeFileSync('tris.json', JSON.stringify({ tris, colors }))` from your generator driver (see §5), then `npx tsx scripts/ref-compare.ts ref.json tris.json`.
+1. Write `tris.json` from your generator driver using a format from §5, then run `npx tsx scripts/ref-compare.ts ref.json tris.json`.
 2. Read the output. It lists PASS/FAIL per gate and the hint for each failure.
 3. Fix **only the first failing gate**. Change one group of parameters (for example only leg length and body depth), then compare again.
 4. On a failing IoU gate `view` `diff-<view>.png` once: red is missing in the model, blue is extra. Name the part that is wrong before touching code.
@@ -392,13 +396,14 @@ Stop rules: max 3 rounds per gate. After 3 rounds without reaching the threshold
 | G3 palette | every reference colour with 5% or more share has a colour within RGB distance 60 | all | retune that one colour |
 | G4 checklist | the signature features from `ref-spec.md` (visual) | all present | add or reshape that feature |
 
-- The mirrored reference is tried automatically (the reference may face the other way); the output says so. Side view: a +Z-facing asset faces left. Top view: it faces down. Angled `34` / `34_back` views project from front/rear 3/4 angles (38°/142° azimuth, 16° elevation) and automatically use the 3/4 concept-art threshold (`IoU >= 0.70`, aspect within `14%`) so you never need to mislabel a 3/4 image as an orthographic `side` view.
+- The CLI reports when a mirrored reference gives the higher IoU. A +Z-facing asset faces left in `side` and down in `top`.
+- Angled views `34` and `34_back` start at 38° and 142° azimuth respectively, both at 16° elevation. They sample azimuth offsets of 0°, ±6°, ±12° and elevation offsets of 0°, ±6°. The comparison chooses the highest IoU among cameras within the 14% aspect tolerance. If all fail aspect, it reports the highest-IoU camera for diagnosis. The canonical camera wins ties within either group. The selected camera supplies both G2 measurements and the diff PNG. The IoU threshold is 0.70. The gate text and `@@RESULT.angles` list the selected angles and offsets.
 - G4 is the only visual gate. Take ONE screenshot per milestone (end of B, end of D), same camera angle as the reference, reference and render in the same message, and tick each signature feature. If you cannot render, use the diff PNGs and say that G4 was checked from silhouettes only.
 - Thresholds live in `THRESH` in `scripts/refcheck.ts`. Loosen them (IoU 0.7) only for photos with strong perspective and say so in the report.
 
 ## 4 Efficiency rules
 
-- Numbers first, pictures last. The compare run takes well under a second and costs a few lines of output; an image view costs far more. View images only for the mask check, a failing IoU diff and the G4 milestones.
+- Use the numeric compare at each build step. Open images for the mask check, a failing IoU diff and the G4 milestones.
 - Never re-read the reference image after intake. Use `ref-spec.md` and `ref.json`.
 - Compare after every step, but run only gates that exist for that step; gates for later steps are not failures yet. Ignore a G3 FAIL during step A.
 - One failing gate per round, one parameter group per change. Two changes at once make the next number unreadable.
@@ -425,7 +430,7 @@ export function groupToTris(root: THREE.Object3D): number[] {
 // in the driver: fs.writeFileSync('tris.json', JSON.stringify({ tris: groupToTris(asset), colors: ['#8a5a2b', '#d9c9a3'] }));
 ```
 
-Pass the hex colours you used (`colors`) to enable G3. Pose the asset in its rest pose before collecting.
+Pose the asset in its rest pose before collecting. QA, mesh stats and reference comparison accept the same triangle JSON. Use a bare array, `{ tris, colors? }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Include the hex palette as `colors` to enable G3.
 
 ## 6 Final report (always include)
 
@@ -525,7 +530,7 @@ JSON checks cannot verify visual skinning deformations, texture alignment on the
 
 Reference for `threejs-asset-generator`. Read it when the user wants to see or interact with an asset.
 
-Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting and contrast · 4 Export and round-trip verify
+Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting, VFX, and framing · 4 Export and round-trip verify · 5 Final visual and animation checks
 
 ## 1. Choose a preview
 
@@ -537,6 +542,21 @@ When the model is still being built or the interactive viewer is unavailable, sh
 
 **Full Preview.** Reuse an existing studio where available. Build a standalone HTML studio when the user requests live parameter tuning, clip authoring or comparison, pose and root-motion inspection, or facial expressions. Model previews keep the same geometry and materials as export.
 
+### Package one asset builder
+
+Use `pack-studio` to open a TS or JS builder in an HTML preview with three-quarter presets, orbit and pan, clip selection, playback, and scrubbing. Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
+
+```bash
+npm run pack-studio -- --module ./asset.ts --export buildAsset --out ./index.html
+npm run export-rigged-glb -- --module ./asset.ts --export buildAsset --out ./asset.glb
+```
+
+Pass the same `--params` JSON object to both commands for a specific seed or configuration. The packer bundles browser-compatible imports, and locally imported image files are embedded as data URLs. Await the texture loads inside an asynchronous builder before returning the model. A builder that requests external assets at runtime still depends on those URLs. Add parameter editors, rig gizmos, or expressions when the brief calls for them.
+
+In Windows PowerShell 5, use the script directly with escaped JSON quotes, for example `node --import tsx scripts/pack-studio.ts --module ./asset.ts --out ./index.html --params '{\"seed\":1}'`. Use the same quoting with `scripts/export-rigged-glb.ts` for export.
+
+Use `--front-side right` to match a reference facing screen right in the front preset. The packaged viewer reserves a separate header and control bar and frames the rest pose or selected clip using up to 25 sampled poses per clip. Increase `--margin` from its default `1.18` if the asset needs more breathing room, and inspect the exact longest pose.
+
 ## 2. Full Preview controls
 
 Choose controls for the asset and the requested review.
@@ -544,9 +564,9 @@ Choose controls for the asset and the requested review.
 - **Up to six turnaround camera presets:** Front (`+Z`), 3/4 Front, 3/4 Back, Side (`+X`), Back (`-Z`), Top (`+Y`), framed far enough back that the full asset (including horns, tail tips, and peak animation poses) fits cleanly inside the safe center area without colliding with top/bottom HUD bars.
 - **Match reference 3/4 facing:** When built from a reference image, place the `3/4 Front` camera on the same side so the asset faces the same screen direction (left or right) as the reference image for direct visual comparison.
 - **Non-overlapping HUD layout:** Never let an open parameter drawer overlap the live QA telemetry card or obscure the hero's head/tail; keep parameter drawers collapsible (collapsed by default on narrow viewports) on the opposite side from the QA card.
-- **Stylized low-poly VFX (optional, runtime-only):** When the brief asks for effects (lightning, fire, frost, aura), build them from faceted low-poly primitives or crisp additive ribbons in a separate `_studio_vfx` group (never parented under the exported asset root). Keep bloom/flash intensity restrained so the model's silhouette and flat-shaded facets remain readable at peak action.
+- **Stylized low-poly VFX (optional, runtime-only):** Keep effects in a scene-level `_studio_vfx` group beside the asset. Use faceted shapes or tapered ribbons and check the silhouette at peak action. [Gradient VFX on light and dark backdrops](#gradient-vfx-on-light-and-dark-backdrops)
 - **Parameter controls from schema:** Auto-render sliders and colour pickers directly from the asset's `parameters` array, including `seed` and `detail` (`src/lod.ts`, `0..2`).
-- **Live QA telemetry HUD:** Show triangles, meshes, pivots, active LOD level, winding (`ALL CCW`), ground `Y`, horizontal drift, track finiteness, and slide clearance.
+- **Live QA telemetry HUD:** Show observed triangle and mesh counts. Add measured grounding, winding, drift, and other QA results when available. Mark checks without evidence as `Unchecked`.
 - **Rig & animation dock (when animated):** Play/pause, scrub bar, individual clip buttons plus `RefPose`, pivot gizmos toggle, and expression swap buttons (`neutral` / `happy` / `focused`) with optional clip auto-sync.
 
 ## 3. Lighting and contrast
@@ -555,9 +575,53 @@ Choose controls for the asset and the requested review.
 - Support both dark and light studio backdrops. When using Tailwind CDN, stick to standard opacity utilities (`bg-zinc-900/90`, `bg-zinc-900/95` — avoid arbitrary steps like `/88` or `/92` without brackets) so dark HUD panels keep crisp contrast on light backdrops.
 - On light backdrops, give bright cream features (inner ears, white highlights) a clear dark outer border so they never blend into the background.
 
+### Gradient VFX on light and dark backdrops
+
+Use two layers for visible lightning or similar emissive ribbons. Draw a wider blue, cyan, or gold shell with `NormalBlending`, `transparent: true`, `depthTest: true`, and `depthWrite: false`. Taper its opacity at the edges and ends, with a soft Fresnel accent on a 3D shell if useful. Draw a much thinner, brighter tinted core inside the shell. On a light backdrop a wide solid additive pass can clip to white, so use the color and alpha ramp to keep the effect readable. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
+
+Pause at the action peak on both light and dark backgrounds. Keep the effect brightest at its source or tip and lower the intensity wherever it obscures the face, markings, or animated limbs. Attach `_studio_vfx` beside the model root and pass only the fresh model root and its animation clips to GLB export.
+
+With the packer, pass `--vfx ./effect.ts`. Export a `createStudioVfx({ root, asset, params, group, THREE })` function that adds its meshes to the supplied `group`. It can return an `update({ clip, time, duration })` callback to sync the effect to playback and to captured frames. The preview's effect module stays outside the model builder and GLB command.
+
+### Frame the full motion inside the HUD
+
+Measure world-space model bounds at rest and across the requested clips. Include sampled poses at the longest tail extension, widest wing reach, and peak action. Update animation and world transforms before measuring posed vertices. Union these bounds and use their center `C` and half-diagonal `r` as a conservative framing sphere. Use the asset root as the measurement input so the ground, effects, and helpers stay out of the model envelope. [Three.js posed mesh vertices](https://threejs.org/docs/pages/Mesh.html#getVertexPosition)
+
+Reserve screen space for panels and buttons. Around the projected target, find an unobstructed centered rectangle with half-width `safeHalfW` and half-height `safeHalfH` in pixels. For a viewport `W × H`, use its vertical effective field of view `fovY` in radians and compute the initial perspective distance as follows. [Three.js perspective camera](https://threejs.org/manual/pages/cameras.html)
+
+```text
+verticalSlope = tan(fovY / 2)
+horizontalSlope = verticalSlope * W / H
+safeSlope = min(horizontalSlope * 2 * safeHalfW / W,
+                verticalSlope * 2 * safeHalfH / H)
+distance = 1.12 * r / sin(atan(safeSlope))
+camera = C + normalize(viewDirection) * distance
+```
+
+Use the distance as a starting fit. Open both three-quarter presets and scrub to the widest poses. Check horn, whisker, wing, and tail tips against the title card and bottom controls. On resize or drawer changes, refit the safe area or move the HUD outside the render area.
+
 ## 4. Export and round-trip verify
 
 - Always build a fresh, clean asset instance in rest pose before calling `GLTFExporter` (never export live gizmos, wireframe/silhouette overrides, or circular `userData`).
 - Provide an in-RAM round-trip verify button (`GLTFExporter` -> `GLTFLoader.parse`) that confirms clip count/names, pivot hierarchy, mesh count, and binary size without triggering a file download.
 - Export static expression PNGs separately (`512x512`) alongside a metadata JSON file compatible with `scripts/rig-check.ts` (`references/rig-check.md`).
+
+## 5. Final visual and animation checks
+
+When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to the action peak. Use the available viewer for the requested preview mode.
+
+1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
+2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
+3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
+4. **Peak action.** Inspect the intended action frame and effects, if requested. Make sure the model remains readable in the actual lighting.
+
+Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
+
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Set the clip names and the intended action peak in seconds. Add `--vfx` to require visible effects in that frame. Use `--browser` if you need to point to a particular browser executable.
+
+```bash
+npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --action LightningBurst --peak 0.53
+```
+
+Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.
 ~~~

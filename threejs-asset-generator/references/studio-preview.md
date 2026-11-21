@@ -2,7 +2,7 @@
 
 Reference for `threejs-asset-generator`. Read it when the user wants to see or interact with an asset.
 
-Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting and contrast · 4 Export and round-trip verify
+Contents: 1 Choose a preview · 2 Full Preview controls · 3 Lighting, VFX, and framing · 4 Export and round-trip verify · 5 Final visual and animation checks
 
 ## 1. Choose a preview
 
@@ -14,6 +14,21 @@ When the model is still being built or the interactive viewer is unavailable, sh
 
 **Full Preview.** Reuse an existing studio where available. Build a standalone HTML studio when the user requests live parameter tuning, clip authoring or comparison, pose and root-motion inspection, or facial expressions. Model previews keep the same geometry and materials as export.
 
+### Package one asset builder
+
+Use `pack-studio` to open a TS or JS builder in an HTML preview with three-quarter presets, orbit and pan, clip selection, playback, and scrubbing. Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
+
+```bash
+npm run pack-studio -- --module ./asset.ts --export buildAsset --out ./index.html
+npm run export-rigged-glb -- --module ./asset.ts --export buildAsset --out ./asset.glb
+```
+
+Pass the same `--params` JSON object to both commands for a specific seed or configuration. The packer bundles browser-compatible imports, and locally imported image files are embedded as data URLs. Await the texture loads inside an asynchronous builder before returning the model. A builder that requests external assets at runtime still depends on those URLs. Add parameter editors, rig gizmos, or expressions when the brief calls for them.
+
+In Windows PowerShell 5, use the script directly with escaped JSON quotes, for example `node --import tsx scripts/pack-studio.ts --module ./asset.ts --out ./index.html --params '{\"seed\":1}'`. Use the same quoting with `scripts/export-rigged-glb.ts` for export.
+
+Use `--front-side right` to match a reference facing screen right in the front preset. The packaged viewer reserves a separate header and control bar and frames the rest pose or selected clip using up to 25 sampled poses per clip. Increase `--margin` from its default `1.18` if the asset needs more breathing room, and inspect the exact longest pose.
+
 ## 2. Full Preview controls
 
 Choose controls for the asset and the requested review.
@@ -21,9 +36,9 @@ Choose controls for the asset and the requested review.
 - **Up to six turnaround camera presets:** Front (`+Z`), 3/4 Front, 3/4 Back, Side (`+X`), Back (`-Z`), Top (`+Y`), framed far enough back that the full asset (including horns, tail tips, and peak animation poses) fits cleanly inside the safe center area without colliding with top/bottom HUD bars.
 - **Match reference 3/4 facing:** When built from a reference image, place the `3/4 Front` camera on the same side so the asset faces the same screen direction (left or right) as the reference image for direct visual comparison.
 - **Non-overlapping HUD layout:** Never let an open parameter drawer overlap the live QA telemetry card or obscure the hero's head/tail; keep parameter drawers collapsible (collapsed by default on narrow viewports) on the opposite side from the QA card.
-- **Stylized low-poly VFX (optional, runtime-only):** When the brief asks for effects (lightning, fire, frost, aura), build them from faceted low-poly primitives or crisp additive ribbons in a separate `_studio_vfx` group (never parented under the exported asset root). Keep bloom/flash intensity restrained so the model's silhouette and flat-shaded facets remain readable at peak action.
+- **Stylized low-poly VFX (optional, runtime-only):** Keep effects in a scene-level `_studio_vfx` group beside the asset. Use faceted shapes or tapered ribbons and check the silhouette at peak action. [Gradient VFX on light and dark backdrops](#gradient-vfx-on-light-and-dark-backdrops)
 - **Parameter controls from schema:** Auto-render sliders and colour pickers directly from the asset's `parameters` array, including `seed` and `detail` (`src/lod.ts`, `0..2`).
-- **Live QA telemetry HUD:** Show triangles, meshes, pivots, active LOD level, winding (`ALL CCW`), ground `Y`, horizontal drift, track finiteness, and slide clearance.
+- **Live QA telemetry HUD:** Show observed triangle and mesh counts. Add measured grounding, winding, drift, and other QA results when available. Mark checks without evidence as `Unchecked`.
 - **Rig & animation dock (when animated):** Play/pause, scrub bar, individual clip buttons plus `RefPose`, pivot gizmos toggle, and expression swap buttons (`neutral` / `happy` / `focused`) with optional clip auto-sync.
 
 ## 3. Lighting and contrast
@@ -32,8 +47,52 @@ Choose controls for the asset and the requested review.
 - Support both dark and light studio backdrops. When using Tailwind CDN, stick to standard opacity utilities (`bg-zinc-900/90`, `bg-zinc-900/95` — avoid arbitrary steps like `/88` or `/92` without brackets) so dark HUD panels keep crisp contrast on light backdrops.
 - On light backdrops, give bright cream features (inner ears, white highlights) a clear dark outer border so they never blend into the background.
 
+### Gradient VFX on light and dark backdrops
+
+Use two layers for visible lightning or similar emissive ribbons. Draw a wider blue, cyan, or gold shell with `NormalBlending`, `transparent: true`, `depthTest: true`, and `depthWrite: false`. Taper its opacity at the edges and ends, with a soft Fresnel accent on a 3D shell if useful. Draw a much thinner, brighter tinted core inside the shell. On a light backdrop a wide solid additive pass can clip to white, so use the color and alpha ramp to keep the effect readable. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
+
+Pause at the action peak on both light and dark backgrounds. Keep the effect brightest at its source or tip and lower the intensity wherever it obscures the face, markings, or animated limbs. Attach `_studio_vfx` beside the model root and pass only the fresh model root and its animation clips to GLB export.
+
+With the packer, pass `--vfx ./effect.ts`. Export a `createStudioVfx({ root, asset, params, group, THREE })` function that adds its meshes to the supplied `group`. It can return an `update({ clip, time, duration })` callback to sync the effect to playback and to captured frames. The preview's effect module stays outside the model builder and GLB command.
+
+### Frame the full motion inside the HUD
+
+Measure world-space model bounds at rest and across the requested clips. Include sampled poses at the longest tail extension, widest wing reach, and peak action. Update animation and world transforms before measuring posed vertices. Union these bounds and use their center `C` and half-diagonal `r` as a conservative framing sphere. Use the asset root as the measurement input so the ground, effects, and helpers stay out of the model envelope. [Three.js posed mesh vertices](https://threejs.org/docs/pages/Mesh.html#getVertexPosition)
+
+Reserve screen space for panels and buttons. Around the projected target, find an unobstructed centered rectangle with half-width `safeHalfW` and half-height `safeHalfH` in pixels. For a viewport `W × H`, use its vertical effective field of view `fovY` in radians and compute the initial perspective distance as follows. [Three.js perspective camera](https://threejs.org/manual/pages/cameras.html)
+
+```text
+verticalSlope = tan(fovY / 2)
+horizontalSlope = verticalSlope * W / H
+safeSlope = min(horizontalSlope * 2 * safeHalfW / W,
+                verticalSlope * 2 * safeHalfH / H)
+distance = 1.12 * r / sin(atan(safeSlope))
+camera = C + normalize(viewDirection) * distance
+```
+
+Use the distance as a starting fit. Open both three-quarter presets and scrub to the widest poses. Check horn, whisker, wing, and tail tips against the title card and bottom controls. On resize or drawer changes, refit the safe area or move the HUD outside the render area.
+
 ## 4. Export and round-trip verify
 
 - Always build a fresh, clean asset instance in rest pose before calling `GLTFExporter` (never export live gizmos, wireframe/silhouette overrides, or circular `userData`).
 - Provide an in-RAM round-trip verify button (`GLTFExporter` -> `GLTFLoader.parse`) that confirms clip count/names, pivot hierarchy, mesh count, and binary size without triggering a file download.
 - Export static expression PNGs separately (`512x512`) alongside a metadata JSON file compatible with `scripts/rig-check.ts` (`references/rig-check.md`).
+
+## 5. Final visual and animation checks
+
+When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to the action peak. Use the available viewer for the requested preview mode.
+
+1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
+2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
+3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
+4. **Peak action.** Inspect the intended action frame and effects, if requested. Make sure the model remains readable in the actual lighting.
+
+Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
+
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Set the clip names and the intended action peak in seconds. Add `--vfx` to require visible effects in that frame. Use `--browser` if you need to point to a particular browser executable.
+
+```bash
+npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --action LightningBurst --peak 0.53
+```
+
+Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.

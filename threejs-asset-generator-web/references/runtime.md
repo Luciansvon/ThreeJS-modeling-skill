@@ -1,6 +1,6 @@
 # Web runtime and fallback guide
 
-Contents: Asset pipeline · Choose capabilities · Tool alternatives · Final Blocked report
+Contents: Asset pipeline · Choose capabilities · Tool alternatives · Visual evidence · Final Blocked report
 
 ## Asset pipeline
 
@@ -37,6 +37,12 @@ When a capability fails, record the exact error or observed limitation, use an a
 | Export and reopen GLB | GLB guide, geometry writer, and browser exporter route | If binary output is unavailable, deliver the complete Three.js builder and its inputs. When the session can create the requested bytes, reopen that file and check expected geometry and attributes. Keep the requested download or any missing round-trip check for the final report. |
 
 For a real comparison, use the matching gates, platform budgets, and tolerances from the source chapters. A manual review can support the design while a numeric gate remains unchecked.
+
+## Visual evidence
+
+Use any viewer already available in the session to open the delivered model. Inspect `3/4 Front` and `3/4 Back` in the actual materials, a frame halfway through the requested movement clip, and its main action clip at the intended peak. At the peak, check requested effects against the background and check that the model stays clear of the preview controls. Record what you observed in each available view and report browser or rendering errors when the viewer exposes them. [Verification and studio guide](verification-guide.md)
+
+When interactive inspection is unavailable, use any existing render or draw a schematic from the model data. Record which visual and playback checks are **Unchecked**. Put only unresolved requested outputs in the final **Blocked** report and deliver the remaining work.
 
 ## Final Blocked report
 

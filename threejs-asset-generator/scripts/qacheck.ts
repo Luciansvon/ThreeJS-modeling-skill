@@ -1,5 +1,5 @@
 // scripts/qacheck.ts: pure QA gates over triangle arrays (9 numbers per triangle, CCW seen from outside). No THREE, no DOM, no fs. Node-testable.
-// A "build" is anything that returns Tris | { tris } | Record<string, Tris> (named parts). Parts let the winding and closed-mesh gates
+// A "build" returns Tris, { tris }, named parts, or { parts: named parts }. Parts let the winding and closed-mesh gates
 // skip zero-thickness sheets (wings, flags) with `open`, while every closed part is still held to them.
 // Gate ids: Q1 finite · Q2 degenerate · Q3 winding · Q4 closed · Q5 budget · Q6 grounding · Q7 symmetry (opt-in) · Q8 determinism · Q9 seed 0
 // (Q10 visible faces comes from the rendered review image, see qa-asset.ts and review.ts.)
@@ -20,17 +20,27 @@ export type QAOptions = {
 export const DEFAULTS = { budget: 2000, weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
 
 const num = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number');
-/** Accepts Tris, { tris }, or { name: Tris, ... } and returns named parts. Throws with a readable message on anything else. */
+/** Normalize the triangle formats used by the QA, budget, export, and reference tools. */
 export function normalizeParts(out: unknown): Parts {
   if (num(out)) return { asset: out };
   if (out && typeof out === 'object') {
     const o = out as Record<string, unknown>;
     if (num(o.tris)) return { asset: o.tris };
-    const parts: Parts = {};
-    for (const [k, v] of Object.entries(o)) if (num(v)) parts[k] = v;
-    if (Object.keys(parts).length) return parts;
+    const flat = Object.entries(o).filter((entry): entry is [string, Tris] => num(entry[1]));
+    if (flat.length) return Object.fromEntries(flat);
+
+    const wrapper = o.parts;
+    if (wrapper && typeof wrapper === 'object' && !Array.isArray(wrapper)) {
+      const named: [string, Tris][] = [];
+      for (const [name, tris] of Object.entries(wrapper)) {
+        if (!num(tris)) throw new Error(`parts.${name} must be an array of triangle coordinates`);
+        named.push([name, tris]);
+      }
+      if (!named.length) throw new Error('parts must contain at least one named triangle array');
+      return Object.fromEntries(named);
+    }
   }
-  throw new Error('builder must return number[] | { tris: number[] } | Record<string, number[]> (named triangle parts)');
+  throw new Error('builder must return number[], { tris: number[] }, named triangle parts, or { parts: named triangle parts }');
 }
 export const flatten = (parts: Parts): Tris => { const out: number[] = []; for (const k of Object.keys(parts)) for (const v of parts[k]) out.push(v); return out; };
 export const triCount = (t: Tris) => Math.floor(t.length / 9);

@@ -32,6 +32,8 @@ Save the selected image as a fixed asset and load it outside the seeded builder.
 
 Report the image file or procedural source, the material slot, and which part it covers. Inspect the actual mesh for UV alignment, scale, seams, and legibility. If GLB is requested, use [the Three.js export path](glb-export.md#threejs-export-route) and inspect the reloaded material and target map. Keep image creation, mesh application, and export checks as separate evidence.
 
+For preview effects, keep the model palette readable at the action peak. Check the shell color and thin core on light and dark backdrops, especially around pale markings. Use a separate scene group for preview effects and export the actual model materials. [Studio VFX recipe](studio-preview.md#gradient-vfx-on-light-and-dark-backdrops)
+
 **One mesh per material, colors in vertices.** Paint each part with a vertex color and merge all parts that share a material. A part that must move on its own (a limb, a head, a door) is the exception: merge per bone, not per asset (§6.4). A tree becomes 2 meshes instead of 60, and the colors stay editable through parameters.
 
 Code: `src/lowpoly.ts`. API:

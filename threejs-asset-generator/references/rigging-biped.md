@@ -2,7 +2,7 @@
 
 Reference for `threejs-asset-generator`. Read it before writing a character, anything that must animate, a humanoid, an extruded or beveled shape, or a textured asset. `SKILL.md §N` means a section of the main file; 6.2 and 6.3 are in `creatures.md`.
 
-Contents: 6.4 Rigged parts (`rig.ts`, clips) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets): `detail.md`.
+Contents: 6.4 Rigged parts and skinned chains (`rig.ts`, `skinnedRig.ts`, clips and QA) · 6.5 Biped helpers and 6.6 Directed extrude and bevel (`biped.ts`, tested) · 6.7 UV and seeded textures · tests. Detail pass (atlas, AO, sockets) in `detail.md`.
 
 ## 6.4 Rigged parts & choosing rigid vs skinned
 
@@ -82,6 +82,62 @@ const mixer = new THREE.AnimationMixer(root); mixer.clipAction(walk).play();   /
 
 Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x = 0.2` directly. For a static pose baked into the asset, apply it once after `build` and keep it deterministic (a pure function of the params).
 
+### Skinned chains, rest pose, and `YXZ` motion
+
+For a dragon, snake, fish, or tentacle, author the bind pose with a tail extending along local `-Z` for a creature facing `+Z`. Put the curl into the clips. If the reference requires a curled bind pose, use local X pitch in the clip to straighten the chain toward `-Z` before Y yaw swings it toward `±X`. With the default `YXZ` order and zero Z roll, pitch is applied before yaw. An initially upright `+Y` segment needs `-π/2` pitch to point to `-Z`. Do not use yaw alone on an upright tail. Scrub the clip and check the tip moves to both sides.
+
+- `buildBoneHierarchy(specs)` returns `rootBone`, `bones` by name, and `boneOrder` in input order. Each spec has `name`, optional `parent`, and `worldPos` in asset space. List a single root and put each parent before its children. Use `boneOrder` to construct the `THREE.Skeleton`.
+- `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings. Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
+- `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder })` defaults to 30 fps and `YXZ`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. The last key uses the first pose. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
+- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata`. Clips can also come from `root.userData.animations` or `root.animations`. Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
+
+Build, bind, ground, and extract a simple tail. This tube uses `getPointAt()` so its ring indices give the authored arc-length parameters. Save the example alongside `src/skinnedRig.ts` to run it.
+
+```ts
+import { writeFileSync } from 'node:fs';
+import * as THREE from 'three';
+import { attachCurveSkinWeights, bakeClip30fps, buildBoneHierarchy, extractQaArtifacts } from './skinnedRig';
+
+const curve = new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.2));
+const chain = ['tailBase', 'tailMid', 'tailTip'];
+const boneT = [0, 0.5, 1];
+const { rootBone, bones, boneOrder } = buildBoneHierarchy(chain.map((name, i) => ({
+  name,
+  parent: chain[i - 1],
+  worldPos: curve.getPointAt(boneT[i]).toArray(),
+})));
+
+const segments = 12;
+const sides = 6;
+const geometry = new THREE.TubeGeometry(curve, segments, 0.12, sides, false);
+const vertexT = Array.from({ length: geometry.getAttribute('position').count }, (_, i) => Math.floor(i / (sides + 1)) / segments);
+attachCurveSkinWeights(geometry, boneOrder, chain, { vertexT, boneT });
+const tail = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({ flatShading: true }));
+tail.name = 'tail';
+const root = new THREE.Group().add(rootBone, tail);
+root.updateMatrixWorld(true);
+tail.bind(new THREE.Skeleton(boneOrder.map((name) => bones[name])));
+root.position.y -= new THREE.Box3().setFromObject(root, true).min.y;
+
+const swim = bakeClip30fps('Swim', 1.2, bones, (u) => ({
+  rotations: { tailBase: [0, 0.28 * Math.sin(2 * Math.PI * u), 0], tailMid: [0, 0.44 * Math.sin(2 * Math.PI * u - 0.55), 0] },
+  rootOffset: [0, 0, 0],
+}));
+root.userData.animations = [swim];
+const artifacts = extractQaArtifacts({ root, bones });
+for (const [name, data] of Object.entries(artifacts)) writeFileSync(`${name}.json`, JSON.stringify(data));
+```
+
+Run the checks from the skill folder. The example tube has open ends, so pass `--open tail` only for that part.
+
+```bash
+npx tsx scripts/qa-asset.ts --tris tris.json --open tail
+npx tsx scripts/mesh-stats.ts --tris tris.json --meta meshMeta.json --profile web --kind creature
+npx tsx scripts/rig-check.ts --meta rigMetadata.json --kind creature
+```
+
+QA samples a detached copy in export space. Keep the asset's ground offset on its wrapper. Helper-built bones use their authored local positions with identity rest rotations and scales. Supply manually built bones in their rest pose. Extraction uses visible `Mesh` and `SkinnedMesh` triangles, including indexed geometry and material groups. Keep all skeleton bones under `root` and address their position, quaternion, or scale by unique bone name. Instanced or batched meshes and tracks on non-bone objects require separate QA. Mesh metadata uses the stats CLI's bone/material grouping and dimensions of loaded material textures. Floor clearance is the lowest transformed vertex from both rigid and skinned parts at 30 fps and at every clip key, including the endpoints. View deformations between samples in preview.
+
 ## 6.5 Biped helpers and 6.6 Directed extrude and bevel
 
 Pure kernels, no THREE import (`src/biped.ts`, builds on `organic.ts` from `creatures.md` with its vector helpers exported). Left is +X, forward is +Z (SKILL.md §0).
@@ -137,8 +193,8 @@ Code: `src/texture.ts`. API:
 - `disposeAsset` frees `material.map` (SKILL.md §9). A texture shared by several materials is disposed once per material, which is harmless.
 - Textured parts may be merged with `mergeFlat` only if they share the material **and** all have `uv`.
 
-## Tests (no Three.js, run with `tsx`)
+## Tests
 
-Test: `src/biped.test.ts` (run `tsx src/biped.test.ts`).
+Run `npx tsx src/biped.test.ts` for the pure kernels. Run `npx tsx src/skinnedRig.test.ts` with Three.js installed to check folded-curve weights, tail motion, loop closure, and the QA artifacts.
 
 Add to a project's tests as well: `RigBuilder` builds the same bone names and mesh count for the same params (run it with `three` installed), every bone mesh has `signedVolume > 0` per closed part before the merge, and `generate(params)` fingerprints equal the exported module's (SKILL.md §11), both at rest pose and after `mixer.setTime(0.25)`.

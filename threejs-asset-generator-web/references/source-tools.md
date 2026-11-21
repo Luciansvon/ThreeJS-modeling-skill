@@ -1,6 +1,6 @@
 # Tool and fixture source
 
-Contents: package.json · scripts/budget.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
+Contents: package.json · scripts/asset-builder.ts · scripts/budget.ts · scripts/capture-studio.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/pack-studio.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · scripts/studio/framing.ts · scripts/studio/index.html · scripts/studio/runtime.ts · scripts/studio/types.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "private": true,
   "type": "module",
   "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
@@ -25,17 +25,71 @@ Generated from the canonical harness files. Search by original file path and use
     "stats": "tsx scripts/mesh-stats.ts",
     "export-glb": "tsx scripts/export-glb.ts",
     "export-rigged-glb": "tsx scripts/export-rigged-glb.ts",
+    "pack-studio": "tsx scripts/pack-studio.ts",
+    "capture-studio": "tsx scripts/capture-studio.ts",
     "rig-check": "tsx scripts/rig-check.ts",
     "ref-intake": "tsx scripts/ref-intake.ts",
     "ref-compare": "tsx scripts/ref-compare.ts"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.0",
     "three": "^0.180.0"
   },
   "optionalDependencies": {
+    "playwright-core": "^1.58.0",
     "sharp": "^0.33.5"
   }
+}
+~~~
+
+## scripts/asset-builder.ts
+
+~~~typescript source-excerpt
+import type * as THREE from 'three';
+
+export function selectBuilder(
+  moduleExports: Record<string, unknown>,
+  requestedName?: string,
+  moduleLabel = 'module',
+  option = '--export',
+) {
+  const functions = Object.keys(moduleExports).filter((key) => typeof moduleExports[key] === 'function');
+  const name = requestedName ?? (functions.length === 1 ? functions[0] : moduleExports.default ? 'default' : undefined);
+  if (!name || typeof moduleExports[name] !== 'function') {
+    throw new Error(`pick the builder with ${option} <name>. Functions exported by ${moduleLabel}: ${functions.join(', ') || 'none'}`);
+  }
+  return {
+    name,
+    build: moduleExports[name] as (params: Record<string, unknown>, three: typeof THREE) => unknown,
+  };
+}
+
+export function unpackAsset(built: unknown): { root: THREE.Object3D; animations: THREE.AnimationClip[] } {
+  const result = built as { root?: THREE.Object3D; animations?: THREE.AnimationClip[] } | null | undefined;
+  const wrapped = result?.root?.isObject3D === true;
+  const root = wrapped ? result.root : (built as THREE.Object3D | undefined);
+  if (!root?.isObject3D) {
+    throw new Error('builder must return a THREE.Object3D or { root: THREE.Object3D, animations?: AnimationClip[] }');
+  }
+  const animations = Array.isArray(result?.animations) && (wrapped || result.animations.length > 0)
+    ? result.animations
+    : Array.isArray(root.userData?.animations) ? root.userData.animations : [];
+  return { root, animations };
+}
+
+export function countScene(root: THREE.Object3D) {
+  let tris = 0, meshes = 0, skins = 0, bones = 0, vertexColorMeshes = 0;
+  root.traverse((object) => {
+    if ((object as THREE.Bone).isBone) bones++;
+    if ((object as THREE.SkinnedMesh).isSkinnedMesh) skins++;
+    const { isMesh, geometry } = object as THREE.Mesh;
+    if (!isMesh || !geometry?.attributes?.position) return;
+    meshes++;
+    tris += (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
+    if (geometry.attributes.color) vertexColorMeshes++;
+  });
+  return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
 }
 ~~~
 
@@ -185,6 +239,282 @@ export async function lodGates(build: (p: Record<string, unknown>) => unknown | 
 }
 ~~~
 
+## scripts/capture-studio.ts
+
+~~~typescript source-excerpt
+import { constants } from 'node:fs';
+import { access, mkdir, stat, writeFile } from 'node:fs/promises';
+import { delimiter, dirname, extname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
+import type { Browser, Page } from 'playwright-core';
+import { decodePngRgba, encodePngRgba } from './png';
+import { emit } from './result';
+import type { StudioFrame, StudioFrameEvidence, StudioInfo } from './studio/types';
+
+const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--action Clip --peak seconds] [--vfx] [--browser executable]';
+const tool = 'capture-studio';
+const viewport = { width: 960, height: 600 };
+type Issue = { kind: string; message: string; source?: string };
+type MissingTile = { label: string; reason: string; status: 'UNVERIFIED' | 'NOT_APPLICABLE' };
+type Tile = { label: string; status: 'CAPTURED'; evidence: StudioFrameEvidence } | (MissingTile & { evidence: null });
+type PlannedTile = { label: string; frame: StudioFrame } | MissingTile;
+
+async function installedBrowsers(explicit?: string) {
+  const installDirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA];
+  const windows = installDirs.filter((path): path is string => Boolean(path)).flatMap((path) => [
+    join(path, 'Google', 'Chrome', 'Application', 'chrome.exe'), join(path, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ]);
+  const mac = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'];
+  const names = process.platform === 'win32'
+    ? ['chrome.exe', 'msedge.exe', 'chromium.exe']
+    : ['google-chrome', 'microsoft-edge', 'microsoft-edge-stable', 'chromium', 'chromium-browser'];
+  const fromPath = (process.env.PATH ?? '').split(delimiter).filter(Boolean).flatMap((path) => names.map((name) => join(path, name)));
+  const candidates = explicit ? [resolve(explicit)] : [...new Set([
+    ...(process.platform === 'win32' ? windows : process.platform === 'darwin' ? mac : []), ...fromPath,
+  ])];
+  const found = await Promise.all(candidates.map(async (path) => {
+    try {
+      await access(path, constants.X_OK);
+      return (await stat(path)).isFile() ? path : null;
+    } catch { return null; }
+  }));
+  return found.filter((path): path is string => path !== null);
+}
+
+function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?: number, vfx = false): PlannedTile[] {
+  const hasAnimations = info.clips.some((clip) => clip.duration > 0 && clip.tracks > 0);
+  const findClip = (name: string | undefined) => {
+    const matches = info.clips.filter((clip) => clip.name === name);
+    const clip = matches[0];
+    return matches.length === 1 && clip.duration > 0 && clip.tracks > 0 ? clip : undefined;
+  };
+  const walk = findClip(locomotion), attack = findClip(action);
+  const notApplicable = (label: string): MissingTile => ({
+    label, status: 'NOT_APPLICABLE', reason: 'This asset has no positive-duration animation clips.',
+  });
+  const unverified = (label: string, reason: string): MissingTile => ({ label, reason, status: 'UNVERIFIED' });
+  const missing = (name: string | undefined, option: string) => name === undefined
+    ? `Select an exact animated clip with ${option}.`
+    : `No unique, positive-duration animated clip named “${name}”.`;
+  let midway: PlannedTile;
+  if (walk) midway = { label: 'Mid locomotion', frame: { view: '34-front', clip: walk.name, time: walk.duration / 2 } };
+  else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
+  else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
+  let actionTile: PlannedTile;
+  if (!hasAnimations && action === undefined && peak === undefined && !vfx) actionTile = notApplicable('Action peak');
+  else if (!attack) actionTile = unverified('Action peak', missing(action, '--action'));
+  else if (peak === undefined || peak > attack.duration) {
+    actionTile = unverified('Action peak', `Set --peak to the authored peak time within 0–${attack.duration} seconds.`);
+  } else actionTile = { label: 'Action peak', frame: { view: '34-front', clip: attack.name, time: peak, vfx } };
+  return [
+    { label: '3/4 front', frame: { view: '34-front' } },
+    { label: '3/4 back', frame: { view: '34-back' } },
+    midway, actionTile,
+  ];
+}
+
+async function placeholder(page: Page, tile: MissingTile) {
+  await page.setContent(`<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+    body { margin: 0; background: #131b26; color: #f0f4f9; font: 20px system-ui, sans-serif; }
+    main { margin: 130px 90px; }
+    h1 { font-size: 32px; margin-bottom: 14px; }
+    strong { color: #ffcd90; }
+    p { color: #aebdd0; overflow-wrap: anywhere; }
+    </style></head><body><main><h1></h1><strong></strong><p></p></main></body></html>`);
+  await page.evaluate(({ label, reason, status }) => {
+    document.querySelector('h1')!.textContent = label;
+    document.querySelector('strong')!.textContent = status === 'NOT_APPLICABLE' ? 'NOT APPLICABLE' : status;
+    document.querySelector('p')!.textContent = reason;
+  }, tile);
+  return page.screenshot({ animations: 'disabled', timeout: 8000 });
+}
+
+function contactSheet(tiles: Buffer[]) {
+  const { width, height } = viewport;
+  const stride = width * 2 * 4;
+  const rgba = new Uint8Array(stride * height * 2);
+  for (const [index, input] of tiles.entries()) {
+    const tile = decodePngRgba(input);
+    if (!tile || tile.width !== width || tile.height !== height) throw new Error(`Could not decode the ${width} × ${height} PNG for tile ${index + 1}`);
+    const start = (index % 2) * width * 4 + Math.floor(index / 2) * height * stride;
+    for (let y = 0; y < height; y++) {
+      const row = y * width * 4;
+      rgba.set(tile.rgba.subarray(row, row + width * 4), start + y * stride);
+    }
+  }
+  return encodePngRgba(rgba, width * 2, height * 2);
+}
+
+const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+async function main() {
+  const { values } = parseArgs({ options: {
+    studio: { type: 'string' }, out: { type: 'string' }, locomotion: { type: 'string' },
+    action: { type: 'string' }, peak: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
+  } });
+  if (!values.studio || !values.out) throw new Error(usage);
+  if (extname(values.out).toLowerCase() !== '.png') throw new Error('--out must end in .png');
+  const studio = resolve(values.studio), out = resolve(values.out);
+  if (extname(studio).toLowerCase() !== '.html' || !(await stat(studio)).isFile()) throw new Error('--studio must point to a local HTML file');
+  const peak = values.peak === undefined ? undefined : Number(values.peak);
+  if (peak !== undefined && (!values.peak?.trim() || !Number.isFinite(peak) || peak < 0)) {
+    throw new Error('--peak must be a finite non-negative time in seconds');
+  }
+
+  const errors: Issue[] = [], warnings: Issue[] = [], launchErrors: Issue[] = [];
+  const unverified: string[] = [], tiles: Tile[] = [];
+  let browserPath: string | undefined, info: StudioInfo | undefined, written: number | undefined;
+  let status: 'PASS' | 'FAIL' | 'UNVERIFIED' = 'UNVERIFIED';
+  function finish() {
+    for (const error of errors) console.error(`${error.kind}: ${error.message}`);
+    for (const reason of unverified) console.log(`UNVERIFIED: ${reason}`);
+    if (written) console.log(`Wrote ${out} (${written} bytes, ${viewport.width * 2} × ${viewport.height * 2})`);
+    return emit({
+      tool, ok: status === 'PASS', status, studio, out: written ? out : null, bytes: written ?? 0,
+      browser: browserPath, info, tiles, errors, warnings, launchErrors, unverified,
+    });
+  }
+  function addIssue(list: Issue[], issue: Issue) {
+    if (!list.some(({ kind, message, source }) => kind === issue.kind && message === issue.message && source === issue.source)) list.push(issue);
+  }
+
+  const candidates = await installedBrowsers(values.browser);
+  if (!candidates.length) {
+    unverified.push(values.browser
+      ? `Browser executable not found: ${resolve(values.browser)}`
+      : 'No local Chrome, Edge, or Chromium executable found. Supply --browser <path>.');
+    return finish();
+  }
+  let chromium: typeof import('playwright-core').chromium;
+  try { ({ chromium } = await import('playwright-core')); }
+  catch (error) {
+    unverified.push(`Browser driver unavailable (${messageOf(error)}). Install optional dependencies to enable capture.`);
+    return finish();
+  }
+
+  let browser: Browser | undefined;
+  for (const executablePath of candidates) {
+    try {
+      browser = await chromium.launch({
+        executablePath, headless: true, timeout: 12_000,
+        args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+      });
+      browserPath = executablePath;
+      break;
+    } catch (error) { launchErrors.push({ kind: 'browser-launch', source: executablePath, message: messageOf(error) }); }
+  }
+  if (!browser) {
+    unverified.push('The browser executable could not start. See launchErrors for details.');
+    return finish();
+  }
+
+  let activePage: Page | undefined;
+  async function capture(browser: Browser) {
+    const page = await browser.newPage({ viewport, deviceScaleFactor: 1, locale: 'en-US', serviceWorkers: 'block' });
+    activePage = page;
+    const studioUrl = pathToFileURL(studio).href;
+    page.on('console', (event) => {
+      if (event.type() !== 'error' && event.type() !== 'warning') return;
+      const location = event.location();
+      const source = location.url ? `${location.url}:${location.lineNumber + 1}` : undefined;
+      const kind = event.type() === 'error' ? 'console-error' : 'console-warning';
+      addIssue(event.type() === 'error' ? errors : warnings, { kind, source, message: event.text() });
+    });
+    page.on('pageerror', (error) => addIssue(errors, { kind: 'pageerror', message: error.message }));
+    page.on('crash', () => addIssue(errors, { kind: 'crash', message: 'Studio page crashed' }));
+    page.on('requestfailed', (request) => addIssue(errors, {
+      kind: 'resource', source: request.url(), message: request.failure()?.errorText ?? 'Resource request failed',
+    }));
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.startsWith('file:') && url !== studioUrl) addIssue(errors, { kind: 'resource', source: url, message: 'Studio requested a separate local file' });
+    });
+    await page.route(/^https?:\/\//i, (route) => {
+      addIssue(errors, { kind: 'network', source: route.request().url(), message: 'Studio requested an external resource during offline capture' });
+      return route.abort();
+    });
+    await page.goto(studioUrl, { waitUntil: 'load', timeout: 18_000 });
+    await page.waitForFunction(() => document.documentElement.dataset.studioState !== 'loading', null, { timeout: 18_000 });
+    const boot = await page.evaluate(() => ({
+      info: window.threejsStudio?.version === 1 ? window.threejsStudio.info?.() : undefined,
+      diagnostics: window.threejsStudio?.getErrors?.() ?? [],
+      state: document.documentElement.dataset.studioState,
+    }));
+    info = boot.info;
+    for (const diagnostic of boot.diagnostics) addIssue(errors, diagnostic);
+    if (boot.state !== 'ready' || !info) {
+      if (boot.diagnostics.length && boot.diagnostics.every(({ kind }) => kind === 'webgl')) {
+        unverified.push('WebGL did not initialize. No model frames were captured.');
+      } else {
+        if (!errors.length) addIssue(errors, { kind: 'studio', message: 'The page did not expose a ready Three.js Studio capture API' });
+        status = 'FAIL';
+      }
+      return;
+    }
+
+    const plan = planTiles(info, values.locomotion, values.action, peak, values.vfx);
+    const frames: Buffer[] = [];
+    let fallback: Page | undefined;
+    for (const tile of plan) {
+      if ('reason' in tile) {
+        if (tile.status === 'UNVERIFIED') unverified.push(`${tile.label}: ${tile.reason}`);
+        tiles.push({ ...tile, evidence: null });
+        fallback ??= await browser.newPage({ viewport, deviceScaleFactor: 1 });
+        frames.push(await placeholder(fallback, tile));
+        continue;
+      }
+      const evidence = await page.evaluate((frame) => {
+        if (!window.threejsStudio?.setFrame) throw new Error('Studio capture API does not expose setFrame');
+        const result = window.threejsStudio.setFrame(frame);
+        if (document.documentElement.dataset.studioState !== 'ready') {
+          throw new Error(window.threejsStudio.getErrors().map(({ message }) => message).join(', ') || 'Studio frame could not render');
+        }
+        return result;
+      }, { ...tile.frame, label: tile.label });
+      frames.push(await page.screenshot({ animations: 'disabled', timeout: 8000 }));
+      tiles.push({ label: tile.label, status: 'CAPTURED', evidence });
+    }
+    if (values.vfx) {
+      const vfxEvidence = tiles[3]?.evidence?.vfx;
+      if (vfxEvidence === 'unavailable') unverified.push('Action VFX: the studio has no supplied VFX module.');
+      else if (vfxEvidence === 'no-visible-change') unverified.push('Action VFX: enabling the effect did not change any canvas pixels at the requested time.');
+      else if (!vfxEvidence) unverified.push('Action VFX: no action frame was available.');
+    }
+    const diagnostics = await page.evaluate(() => window.threejsStudio?.getErrors?.() ?? []);
+    for (const diagnostic of diagnostics) addIssue(errors, diagnostic);
+    const png = contactSheet(frames);
+    await mkdir(dirname(out), { recursive: true });
+    await writeFile(out, png);
+    written = png.byteLength;
+    status = errors.length ? 'FAIL' : unverified.length ? 'UNVERIFIED' : 'PASS';
+  }
+
+  try {
+    await capture(browser);
+  } catch (error) {
+    addIssue(errors, { kind: 'capture', message: messageOf(error) });
+    const diagnostics = await activePage?.evaluate(() => window.threejsStudio?.getErrors?.() ?? []).catch(() => []);
+    for (const diagnostic of diagnostics ?? []) addIssue(errors, diagnostic);
+    status = 'FAIL';
+  } finally {
+    await browser.close().catch((error) => {
+      addIssue(errors, { kind: 'browser-close', message: messageOf(error) });
+      status = 'FAIL';
+    });
+  }
+  return finish();
+}
+
+try {
+  process.exitCode = await main();
+} catch (error) {
+  const message = messageOf(error);
+  console.error(message);
+  process.exitCode = emit({ tool, ok: false, error: message }, 1);
+}
+~~~
+
 ## scripts/export-glb.ts
 
 ~~~typescript source-excerpt
@@ -256,9 +586,11 @@ process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, unverifi
 // Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}']
 // The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
 // Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import * as nodeModule from 'node:module';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { countScene, selectBuilder, unpackAsset } from './asset-builder';
 import { emit, type Gate } from './result';
 
 // Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
@@ -301,46 +633,46 @@ try {
   fail(`three / addons not available: ${(e as Error).message}`);
 }
 
-let built: any;
+// Let external builders resolve their own modules first. For missing Three.js imports,
+// resolve against this skill without relocating the builder or changing NODE_PATH.
+const hooks = nodeModule.registerHooks?.({
+  resolve(specifier, context, nextResolve) {
+    if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
+      return nextResolve(import.meta.resolve(specifier), context);
+    }
+  },
+});
+
+let asset: ReturnType<typeof unpackAsset>;
 try {
   const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
-  const fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
-  const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
-  if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
-  built = await (mod[name] as (p: Record<string, unknown>, t: typeof import('three')) => unknown)(params, THREE);
+  const { build } = selectBuilder(mod, opt('export'), modFile);
+  asset = unpackAsset(await build(params, THREE));
 } catch (e) {
   fail(`cannot build asset: ${(e as Error).message}`);
+} finally {
+  hooks?.deregister();
 }
 
-const root = built?.root?.isObject3D ? built.root : built;
-if (!root?.isObject3D) fail('builder must return a THREE.Object3D or { root: THREE.Object3D, animations?: AnimationClip[] }');
-const animations = Array.isArray(built?.animations) ? built.animations : (Array.isArray(root.userData?.animations) ? root.userData.animations : []);
-
-function countScene(obj: any) {
-  let tris = 0, meshes = 0, skins = 0, bones = 0, vertexColorMeshes = 0;
-  obj.traverse((o: any) => {
-    if (o.isBone) bones++;
-    if (o.isSkinnedMesh) skins++;
-    if (o.isMesh && o.geometry?.attributes?.position) {
-      meshes++;
-      const g = o.geometry;
-      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
-      if (g.attributes.color) vertexColorMeshes++;
-    }
-  });
-  return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
-}
-
+const { root, animations } = asset;
 const before = countScene(root);
-const exporter = new GLTFExporter();
-const buf: ArrayBuffer = await exporter.parseAsync(root, { binary: true, animations, onlyVisible: true });
 const outPath = resolve(outFile);
-writeFileSync(outPath, Buffer.from(buf));
-
-const diskBytes = readFileSync(outPath);
-const diskAb = diskBytes.buffer.slice(diskBytes.byteOffset, diskBytes.byteOffset + diskBytes.byteLength);
-const loader = new GLTFLoader();
-const reloaded = await loader.parseAsync(diskAb, '');
+let diskBytes: Buffer, reloaded: any;
+try {
+  const buf: ArrayBuffer = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, Buffer.from(buf));
+  diskBytes = readFileSync(outPath);
+  const diskAb = diskBytes.buffer.slice(diskBytes.byteOffset, diskBytes.byteOffset + diskBytes.byteLength);
+  reloaded = await new GLTFLoader().parseAsync(diskAb, '');
+} catch (e) {
+  fail(`cannot write or re-open ${outPath}: ${(e as Error).message}`);
+}
 const after = countScene(reloaded.scene);
 const inClips = animations.map((c: any) => c.name);
 const outClips = (reloaded.animations ?? []).map((c: any) => c.name);
@@ -612,6 +944,114 @@ console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST o
 process.exit(emit({ tool: 'mesh-stats', ok: failed.length === 0, gates, stats, skipped, unverified, platform, kind, levels }));
 ~~~
 
+## scripts/pack-studio.ts
+
+~~~typescript source-excerpt
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { basename, dirname, extname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { emit } from './result';
+import type { StudioConfig } from './studio/types';
+
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] --out index.html';
+const harness = fileURLToPath(new URL('../', import.meta.url));
+const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
+
+async function main() {
+  const { values } = parseArgs({ options: {
+    module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
+    out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
+    margin: { type: 'string' }, 'front-side': { type: 'string' },
+  } });
+  if (!values.module || !values.out) throw new Error(usage);
+  if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
+  if (values['vfx-export'] && !values.vfx) throw new Error('--vfx-export requires --vfx <module>');
+
+  let params: unknown;
+  try {
+    params = JSON.parse(values.params ?? '{}');
+  } catch (error) {
+    throw new Error(`--params is not valid JSON: ${(error as Error).message}`);
+  }
+  if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('--params must be a JSON object');
+  const margin = Number(values.margin ?? 1.18);
+  if (!Number.isFinite(margin) || margin < 1) throw new Error('--margin must be a finite number at least 1');
+  const frontSide = values['front-side'] ?? 'left';
+  if (frontSide !== 'left' && frontSide !== 'right') throw new Error('--front-side must be left or right');
+
+  const modulePath = resolve(values.module);
+  const vfxPath = values.vfx && resolve(values.vfx);
+  const out = resolve(values.out);
+  const config: StudioConfig = {
+    module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide,
+  };
+  const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
+  const configJson = JSON.stringify(config);
+  // Parse the JSON string to preserve parameter names such as "__proto__" as own properties.
+  const entry = `
+    import { startStudio } from ${scriptImport(runtime)};
+    await startStudio(
+      JSON.parse(${JSON.stringify(configJson)}),
+      () => import(${scriptImport(modulePath)}),
+      ${vfxPath ? `() => import(${scriptImport(vfxPath)})` : 'undefined'},
+      ${JSON.stringify(values['vfx-export']) ?? 'undefined'},
+    );
+  `;
+
+  const { build } = await import('esbuild');
+  const skipCanonicalResolve = Symbol('studio-three-resolve');
+  const bundle = await build({
+    stdin: { contents: entry, loader: 'ts', sourcefile: 'studio-entry.ts', resolveDir: harness },
+    bundle: true, platform: 'browser', format: 'esm', target: 'es2022',
+    minify: true, legalComments: 'inline', logLevel: 'silent', write: false, metafile: true,
+    absWorkingDir: harness,
+    loader: Object.fromEntries(['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.svg', '.ktx2'].map((ext) => [ext, 'dataurl'])),
+    plugins: [{
+      name: 'studio-three',
+      setup(build) {
+        // The studio, asset, and addons share the same Three.js instance, even for external asset paths.
+        build.onResolve({ filter: /^three(?:\/|$)/ }, (args) => {
+          if (args.pluginData === skipCanonicalResolve) return;
+          return build.resolve(args.path, { kind: args.kind, resolveDir: harness, pluginData: skipCanonicalResolve });
+        });
+      },
+    }],
+  });
+  const external = Object.values(bundle.metafile.outputs).flatMap((output) => output.imports.map((item) => item.path));
+  if (external.length) throw new Error(`Studio cannot bundle external imports: ${external.join(', ')}`);
+  if (bundle.outputFiles.length !== 1) throw new Error('Studio bundle must contain one inline script');
+  const script = bundle.outputFiles[0].text;
+  if (/<\/script/i.test(script)) throw new Error('Studio bundle contains an unescaped script closing tag');
+  const template = await readFile(new URL('./studio/index.html', import.meta.url), 'utf8');
+  const threeEntry = createRequire(import.meta.url).resolve('three');
+  const license = await readFile(resolve(dirname(threeEntry), '..', 'LICENSE'), 'utf8');
+  const html = template.replace('<!-- THREE_LICENSE -->', () => `<!-- Three.js license\n${license.trim()}\n-->`)
+    .replace('/* STUDIO_BUNDLE */', () => script);
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, html, 'utf8');
+
+  for (const warning of bundle.warnings) console.warn(`esbuild: ${warning.text}`);
+  console.log(`Wrote ${out} (${Buffer.byteLength(html)} bytes)`);
+  const unverified = ['Browser render and capture; run capture-studio to verify'];
+  console.log(`UNVERIFIED: ${unverified[0]}`);
+  return emit({
+    tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
+    builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide,
+    unverified,
+  });
+}
+
+try {
+  process.exitCode = await main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exitCode = emit({ tool: 'pack-studio', ok: false, error: message }, 1);
+}
+~~~
+
 ## scripts/package.json
 
 ~~~json source-excerpt
@@ -755,8 +1195,8 @@ export function decodePngRgba(buf: Buffer): { rgba: Uint8Array; width: number; h
 //   Any asset via tris:  npx tsx scripts/qa-asset.ts --tris tris.json            (tris.json as in references/reference-matching.md §5)
 // Options: --budget 2000  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
 // Q6 grounding: on for --tris (the final asset). Off for --module (a raw kernel is grounded later by groundAsset) unless --grounded or --footprint.
-// --module needs a function (params) => Tris | { tris } | { part: Tris, ... }; it is built several times, which enables Q8 determinism and Q9 seed 0.
-// --tris reads { tris } | { part: Tris } | Tris from a file; Q8 and Q9 cannot run there and are reported as UNVERIFIED.
+// --module rebuilds the asset to check Q8 determinism and Q9 seed 0; --tris reports both as UNVERIFIED.
+// Both accept Tris, { tris }, named parts { name: Tris, ... }, or { parts: { name: Tris, ... } }.
 // Writes review.png (2 x 2: front | side / top | 3/4): LOOK at it. Prints the gate table; last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -821,7 +1261,7 @@ process.exit(emit({ tool: 'qa-asset', ok: failed.length === 0, gates, stats, ski
 
 ~~~typescript source-excerpt
 // scripts/qacheck.ts: pure QA gates over triangle arrays (9 numbers per triangle, CCW seen from outside). No THREE, no DOM, no fs. Node-testable.
-// A "build" is anything that returns Tris | { tris } | Record<string, Tris> (named parts). Parts let the winding and closed-mesh gates
+// A "build" returns Tris, { tris }, named parts, or { parts: named parts }. Parts let the winding and closed-mesh gates
 // skip zero-thickness sheets (wings, flags) with `open`, while every closed part is still held to them.
 // Gate ids: Q1 finite · Q2 degenerate · Q3 winding · Q4 closed · Q5 budget · Q6 grounding · Q7 symmetry (opt-in) · Q8 determinism · Q9 seed 0
 // (Q10 visible faces comes from the rendered review image, see qa-asset.ts and review.ts.)
@@ -842,17 +1282,27 @@ export type QAOptions = {
 export const DEFAULTS = { budget: 2000, weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
 
 const num = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number');
-/** Accepts Tris, { tris }, or { name: Tris, ... } and returns named parts. Throws with a readable message on anything else. */
+/** Normalize the triangle formats used by the QA, budget, export, and reference tools. */
 export function normalizeParts(out: unknown): Parts {
   if (num(out)) return { asset: out };
   if (out && typeof out === 'object') {
     const o = out as Record<string, unknown>;
     if (num(o.tris)) return { asset: o.tris };
-    const parts: Parts = {};
-    for (const [k, v] of Object.entries(o)) if (num(v)) parts[k] = v;
-    if (Object.keys(parts).length) return parts;
+    const flat = Object.entries(o).filter((entry): entry is [string, Tris] => num(entry[1]));
+    if (flat.length) return Object.fromEntries(flat);
+
+    const wrapper = o.parts;
+    if (wrapper && typeof wrapper === 'object' && !Array.isArray(wrapper)) {
+      const named: [string, Tris][] = [];
+      for (const [name, tris] of Object.entries(wrapper)) {
+        if (!num(tris)) throw new Error(`parts.${name} must be an array of triangle coordinates`);
+        named.push([name, tris]);
+      }
+      if (!named.length) throw new Error('parts must contain at least one named triangle array');
+      return Object.fromEntries(named);
+    }
   }
-  throw new Error('builder must return number[] | { tris: number[] } | Record<string, number[]> (named triangle parts)');
+  throw new Error('builder must return number[], { tris: number[] }, named triangle parts, or { parts: named triangle parts }');
 }
 export const flatten = (parts: Parts): Tris => { const out: number[] = []; for (const k of Object.keys(parts)) for (const v of parts[k]) out.push(v); return out; };
 export const triCount = (t: Tris) => Math.floor(t.length / 9);
@@ -996,30 +1446,44 @@ export async function determinismGates(build: Build, params: Record<string, unkn
 ## scripts/ref-compare.ts
 
 ~~~typescript source-excerpt
-// scripts/ref-compare.ts: your generator's triangles vs ref.json. Run after EVERY build step (it takes well under a second).
-//   1. In your generator test/driver write the result:  fs.writeFileSync('tris.json', JSON.stringify({ tris, colors: ['#8a5a2b', ...] }))
-//      tris = all triangles in asset space (kernel output, or groupToTris(root) from references/reference-matching.md), colors = hex colours you used.
+// scripts/ref-compare.ts: your generator's triangles vs ref.json. Run after EVERY build step.
+//   1. Write the same triangle formats as qa-asset and mesh-stats. Add hex colors to { tris, colors } or { parts, colors } for G3.
 //   2. npx tsx ref-compare.ts ref.json tris.json        -> prints PASS/FAIL per gate, writes diff-<view>.png (red = reference only, blue = model only)
 import { readFileSync } from 'node:fs';
 import { scaleNearestRgba, writePngRgba } from './png';
 import { compareToRef, formatGates, RES, type RefData } from './refcheck';
+import { flatten, normalizeParts } from './qacheck';
 import { emit } from './result';
 
 const [refFile = 'ref.json', trisFile = 'tris.json'] = process.argv.slice(2);
-let ref: RefData, model: { tris: number[]; colors?: string[] };
-try { ref = JSON.parse(readFileSync(refFile, 'utf8')); model = JSON.parse(readFileSync(trisFile, 'utf8')); } catch (e) { console.error(`cannot read ${refFile} / ${trisFile}: ${(e as Error).message}`); process.exit(emit({ tool: 'ref-compare', ok: false, error: (e as Error).message }, 1)); }
-const { gates, diffs } = compareToRef(model.tris, ref, model.colors ?? []);
+const fail = (error: string): never => { console.error(error); process.exit(emit({ tool: 'ref-compare', ok: false, error }, 1)); };
+let compared: ReturnType<typeof compareToRef>;
+try {
+  const ref = JSON.parse(readFileSync(refFile, 'utf8')) as RefData;
+  const model = JSON.parse(readFileSync(trisFile, 'utf8'));
+  const parts = normalizeParts(model);
+  const tris = flatten(parts);
+  if (!tris.length || Object.values(parts).some((part) => part.length % 9 || !part.every(Number.isFinite))) {
+    throw new Error('model needs finite coordinates in groups of nine per triangle');
+  }
+  const colors = Array.isArray(model?.colors) ? model.colors.filter((color: unknown): color is string => typeof color === 'string') : [];
+  compared = compareToRef(tris, ref, colors);
+} catch (e) {
+  fail(`cannot compare ${refFile} and ${trisFile}: ${(e as Error).message}`);
+}
+const { gates, diffs, angles } = compared;
 console.log(formatGates(gates));
 const written: string[] = [];
 for (const [view, rgba] of Object.entries(diffs)) {
   const f = `diff-${view}.png`, up = scaleNearestRgba(rgba, RES, RES, 4);
-  writePngRgba(f, up, RES * 4, RES * 4);
+  try { writePngRgba(f, up, RES * 4, RES * 4); }
+  catch (e) { fail(`cannot write ${f}: ${(e as Error).message}`); }
   written.push(f);
   console.log('wrote', f);
 }
 const failed = gates.filter((g) => !g.pass);
 console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate only, then run again.` : '\nAll numeric gates pass. Do the visual checklist (G4) next.');
-process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed: failed.length, diffs: written }));
+process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed: failed.length, diffs: written, angles }));
 ~~~
 
 ## scripts/ref-intake.ts
@@ -1029,8 +1493,9 @@ process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed:
 //   Separate views:   npx tsx ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json [--tol 40] [--w 1.2 --d 2.5] [--no-flood]
 //   Multi-view sheet: npx tsx ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json [--tol 18]
 // Reads standard 8-bit PNGs without external dependencies; uses `sharp` when installed (required for JPEG/WebP).
-// Always writes ref-<view>-mask.png (pure Node PNG): LOOK at it once; if the silhouette is wrong, adjust --tol.
-import { readFileSync, writeFileSync } from 'node:fs';
+// Writes <out-stem>-<view>-mask.png beside --out. LOOK at it once; if the silhouette is wrong, adjust --tol.
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, parse, resolve } from 'node:path';
 import { loadSharp } from './sharp';
 import { decodePngRgba, writePngRgba } from './png';
 import { maskFromRGBA, frameMask, dominantColors, maskToB64, splitGridSheet, fitRgba, type RefData, type View } from './refcheck';
@@ -1039,13 +1504,14 @@ import { emit } from './result';
 const args = process.argv.slice(2);
 const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; };
 const flag = (k: string) => args.includes('--' + k);
-const out = opt('out') ?? 'ref.json', tol = Number(opt('tol') ?? 40), flood = !flag('no-flood');
+const fail = (error: string): never => { console.error(error); process.exit(emit({ tool: 'ref-intake', ok: false, error }, 1)); };
+const out = resolve(opt('out') ?? 'ref.json'), tol = Number(opt('tol') ?? 40), flood = !flag('no-flood');
 const sheetFile = opt('sheet'), gridStr = opt('grid') ?? '3x2', viewsStr = opt('views') ?? 'front,back,top,bottom,side,34';
 const files = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--') && !['--no-flood'].includes(args[i - 1]))).map((a) => (a.includes('=') ? a.split('=') : ['front', a]) as [string, string]);
 
+if (flag('out') && !opt('out')) fail('--out needs a file path');
 if (!sheetFile && !files.length) {
-  const e = 'usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood]';
-  console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1));
+  fail('usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood]');
 }
 
 const sharp = await loadSharp();
@@ -1056,8 +1522,7 @@ async function loadImageRgba(file: string, maxDim = 512): Promise<{ rgba: Uint8A
   }
   const decoded = decodePngRgba(readFileSync(file));
   if (!decoded) {
-    const e = `cannot decode "${file}" without \`sharp\` (pure-Node reader supports 8-bit PNG only; install sharp via \`npm i sharp\` for JPEG/WebP).`;
-    console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1));
+    fail(`cannot decode "${file}" without \`sharp\` (pure-Node reader supports 8-bit PNG only; install sharp via \`npm i sharp\` for JPEG/WebP).`);
   }
   return fitRgba(decoded.rgba, decoded.width, decoded.height, maxDim);
 }
@@ -1066,7 +1531,7 @@ const inputs: { view: View; rgba: Uint8Array; w: number; h: number }[] = [];
 const VALID_VIEWS = new Set<string>(['front', 'side', 'top', '34', '34_back']);
 if (sheetFile) {
   const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
-  if (!gm) { const e = `--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
+  if (!gm) fail(`--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`);
   const cols = Number(gm[1]), rows = Number(gm[2]);
   const full = await loadImageRgba(sheetFile, Math.max(cols, rows) * 512);
   const tiles = splitGridSheet(full.rgba, full.w, full.h, cols, rows);
@@ -1076,30 +1541,42 @@ if (sheetFile) {
     const tile = fitRgba(tiles[idx].rgba, tiles[idx].w, tiles[idx].h, 512);
     inputs.push({ view: v as View, ...tile });
   });
-  if (!inputs.length) { const e = `--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`; console.error(e); process.exit(emit({ tool: 'ref-intake', ok: false, error: e }, 1)); }
+  if (!inputs.length) fail(`--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`);
 } else {
   for (const [view, file] of files) {
+    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(view)) fail(`invalid view name "${view}"`);
     const img = await loadImageRgba(file, 512);
     inputs.push({ view: view as View, ...img });
   }
 }
 
-const ref: RefData = { views: {}, palette: [] }, views: Record<string, { aspect: number; foreground: number }> = {}, warnings: string[] = [];
+const ref: RefData = { views: {}, palette: [] }, views: Partial<Record<View, { aspect: number; foreground: number; mask: string }>> = {}, warnings: string[] = [];
+const outDir = dirname(out), outStem = parse(out).name;
 if (opt('w') || opt('d')) ref.proportions = { w: opt('w') ? Number(opt('w')) : undefined, d: opt('d') ? Number(opt('d')) : undefined };
-for (const { view, rgba, w, h } of inputs) {
-  const mask = maskFromRGBA(rgba, w, h, { tol, flood }), { mask: framed, aspect } = frameMask(mask);
-  ref.views[view] = { w: framed.w, h: framed.h, data: maskToB64(framed), aspect };
-  if (view === 'front' || !ref.palette.length) ref.palette = dominantColors(rgba, w, h, 6, mask);
-  const png = new Uint8Array(framed.data.length * 4);
-  framed.data.forEach((v, i) => png.set([v ? 40 : 255, v ? 40 : 255, v ? 40 : 255, 255], i * 4));
-  writePngRgba(`ref-${view}-mask.png`, png, framed.w, framed.h);
-  const fg = mask.data.reduce((a, b) => a + b, 0) / mask.data.length;
-  views[view] = { aspect: +aspect.toFixed(3), foreground: +fg.toFixed(3) };
-  if (fg < 0.03 || fg > 0.9) warnings.push(`${view}: foreground ${(fg * 100).toFixed(0)}%, check ref-${view}-mask.png and adjust --tol`);
-  console.log(`${view}: aspect ${aspect.toFixed(2)} (w/h), foreground ${(fg * 100).toFixed(0)}% of the image${fg < 0.03 || fg > 0.9 ? '  <- suspicious, check ref-' + view + '-mask.png and adjust --tol' : ''}`);
+try {
+  if (statSync(out, { throwIfNoEntry: false })?.isDirectory()) throw new Error('--out points to a directory');
+  mkdirSync(outDir, { recursive: true });
+  for (const { view, rgba, w, h } of inputs) {
+    const mask = maskFromRGBA(rgba, w, h, { tol, flood }), { mask: framed, aspect } = frameMask(mask);
+    const maskFile = `${outStem}-${view}-mask.png`, maskPath = join(outDir, maskFile);
+    ref.views[view] = { w: framed.w, h: framed.h, data: maskToB64(framed), aspect, mask: maskFile };
+    if (view === 'front' || !ref.palette.length) ref.palette = dominantColors(rgba, w, h, 6, mask);
+    const png = new Uint8Array(framed.data.length * 4);
+    framed.data.forEach((v, i) => png.set([v ? 40 : 255, v ? 40 : 255, v ? 40 : 255, 255], i * 4));
+    writePngRgba(maskPath, png, framed.w, framed.h);
+    const fg = mask.data.reduce((a, b) => a + b, 0) / mask.data.length;
+    views[view] = { aspect: +aspect.toFixed(3), foreground: +fg.toFixed(3), mask: maskPath };
+    const suspicious = fg < 0.03 || fg > 0.9;
+    if (suspicious) warnings.push(`${view}: foreground ${(fg * 100).toFixed(0)}%, check ${maskPath} and adjust --tol`);
+    console.log(`${view}: aspect ${aspect.toFixed(2)} (w/h), foreground ${(fg * 100).toFixed(0)}% of the image${suspicious ? '  <- suspicious, inspect mask and adjust --tol' : ''}`);
+    console.log('wrote', maskPath);
+  }
+  writeFileSync(out, JSON.stringify(ref));
+} catch (e) {
+  fail(`cannot write reference outputs beside ${out}: ${(e as Error).message}`);
 }
 console.log('palette:', ref.palette.map((c) => `${c.hex} ${(c.share * 100).toFixed(0)}%`).join('  '));
-writeFileSync(out, JSON.stringify(ref)); console.log('wrote', out);
+console.log('wrote', out);
 process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palette, warnings }));
 ~~~
 
@@ -1112,6 +1589,15 @@ export type View = 'front' | 'side' | 'top' | '34' | '34_back';
 export type Mask = { w: number; h: number; data: Uint8Array };              // 1 = inside the shape
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
+
+type CameraAngles = { azimuthDeg: number; elevationDeg: number };
+type AngleMatch = CameraAngles & { azimuthOffsetDeg: number; elevationOffsetDeg: number };
+const CANONICAL_ANGLES = {
+  '34': { azimuthDeg: 38, elevationDeg: 16 },
+  '34_back': { azimuthDeg: 142, elevationDeg: 16 },
+};
+const AZIMUTH_OFFSETS = [0, -6, 6, -12, 12];
+const ELEVATION_OFFSETS = [0, -6, 6];
 
 export const hex = (r: number, g: number, b: number) => '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 const unhex = (h: string): [number, number, number] => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
@@ -1137,10 +1623,10 @@ export function frameMask(m: Mask, res = RES): { mask: Mask; aspect: number } {
 }
 
 /** Orthographic silhouette of a triangle array, already framed (see frameMask). */
-export function silhouette(t: Tris, view: View, res = RES) {
+export function silhouette(t: Tris, view: View, res = RES, camera?: CameraAngles) {
   const n = t.length / 3, U = new Float64Array(n), V = new Float64Array(n);
-  const az = view === '34_back' ? (142 * Math.PI) / 180 : (38 * Math.PI) / 180;
-  const el = (16 * Math.PI) / 180;
+  const { azimuthDeg, elevationDeg } = camera ?? CANONICAL_ANGLES[view === '34_back' ? '34_back' : '34'];
+  const az = (azimuthDeg * Math.PI) / 180, el = (elevationDeg * Math.PI) / 180;
   const caz = Math.cos(az), saz = Math.sin(az), cel = Math.cos(el), sel = Math.sin(el);
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
@@ -1261,6 +1747,36 @@ export function bestIoU(model: Mask, ref: Mask, view: View) {
   const tries: [string, Mask][] = [['none', ref], ['flipH', flipH(ref)], ...(view === 'top' ? [['flipV', flipV(ref)] as [string, Mask]] : [])];
   return tries.map(([flip, m]) => ({ flip, iou: maskIoU(model, m), ref: m })).sort((p, q) => q.iou - p.iou)[0];
 }
+
+/** Prefer a camera that passes aspect, then maximize IoU. Evaluate the canonical pose first so it wins ties. */
+function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: number, aspectLimit: number) {
+  const project = (angles?: AngleMatch) => {
+    const { mask, aspect } = silhouette(tris, view, RES, angles);
+    const aspectError = Math.abs(aspect / referenceAspect - 1);
+    return { mask, aspect, aspectError, aspectPass: aspectError <= aspectLimit, match: bestIoU(mask, ref, view), angles };
+  };
+  if (view !== '34' && view !== '34_back') return project();
+
+  const canonical = CANONICAL_ANGLES[view];
+  let winner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  for (const azimuthOffsetDeg of AZIMUTH_OFFSETS) {
+    for (const elevationOffsetDeg of ELEVATION_OFFSETS) {
+      if (winner.aspectPass && winner.match.iou === 1) return winner;
+      if (azimuthOffsetDeg === 0 && elevationOffsetDeg === 0) continue;
+      const candidate = project({
+        azimuthDeg: canonical.azimuthDeg + azimuthOffsetDeg,
+        elevationDeg: canonical.elevationDeg + elevationOffsetDeg,
+        azimuthOffsetDeg,
+        elevationOffsetDeg,
+      });
+      const better = candidate.aspectPass === winner.aspectPass
+        ? candidate.match.iou > winner.match.iou
+        : candidate.aspectPass;
+      if (better) winner = candidate;
+    }
+  }
+  return winner;
+}
 /** RGBA picture: reference only = red, model only = blue, both = light grey, empty = white. Write it as PNG and look at it. */
 export function diffRGBA(model: Mask, ref: Mask) {
   const out = new Uint8Array(model.w * model.h * 4);
@@ -1287,30 +1803,37 @@ export function paletteGap(refColors: { hex: string; share: number }[], used: st
   return worst;
 }
 
-export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
+export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
 export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
 export const THRESH = { iou: 0.85, iou34: 0.70, aspect: 0.08, aspect34: 0.14, prop: 0.1, palette: 60 };
+const formatOffset = (deg: number) => `${deg > 0 ? '+' : ''}${deg}°`;
 /** Runs every gate that the reference data can answer, cheapest first. */
 export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = [], th = THRESH) {
-  const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {};
+  const gates: Gate[] = [], diffs: Partial<Record<View, Uint8Array>> = {}, angles: Partial<Record<View, AngleMatch>> = {};
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
   for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
-    const isAngled = view === '34' || view === '34_back';
-    const aspectLimit = isAngled ? (th.aspect34 ?? 0.14) : th.aspect;
-    const iouLimit = isAngled ? (th.iou34 ?? 0.70) : th.iou;
-    const { mask, aspect } = silhouette(tris, view), refMask = maskFromB64(r.data), best = bestIoU(mask, refMask, view), ae = Math.abs(aspect / r.aspect - 1);
-    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(ae * 100).toFixed(0)}% off)`, pass: ae <= aspectLimit, hint: 'fix overall proportions before details' });
-    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${best.iou.toFixed(2)}${best.flip !== 'none' ? ` (reference mirrored: ${best.flip})` : ''}${isAngled ? ` (3/4 threshold ${iouLimit.toFixed(2)})` : ''}`, pass: best.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
-    diffs[view] = diffRGBA(mask, best.ref);
+    const angled = view === '34' || view === '34_back';
+    const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;
+    const iouLimit = angled ? (th.iou34 ?? 0.70) : th.iou;
+    const { mask, aspect, aspectError, aspectPass, match, angles: camera } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
+    let cameraText = '';
+    if (camera) {
+      angles[view] = camera;
+      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}])`;
+    }
+    gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(aspectError * 100).toFixed(0)}% off)`, pass: aspectPass, hint: 'fix overall proportions before details' });
+    const mirrored = match.flip !== 'none' ? ` (reference mirrored: ${match.flip})` : '';
+    gates.push({ gate: `G2 ${view} silhouette IoU`, value: `${match.iou.toFixed(2)}${mirrored}${cameraText}`, pass: match.iou >= iouLimit, hint: 'open the diff PNG: red = missing in model, blue = extra in model' });
+    diffs[view] = diffRGBA(mask, match.ref);
   }
   if (usedColors.length && ref.palette.length) { const g = paletteGap(ref.palette, usedColors); gates.push({ gate: 'G3 palette', value: g.hex ? `${g.hex} nearest ${g.nearest}, distance ${g.gap.toFixed(0)}` : 'all main colours covered', pass: g.gap <= th.palette, hint: `retune the colour nearest to ${g.hex}` }); }
-  return { gates, diffs };
+  return { gates, diffs, angles };
 }
 export const formatGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 ~~~
@@ -1784,6 +2307,552 @@ import { createRequire } from 'node:module';
 export async function loadSharp(): Promise<any | null> {
   try { return (await import('sharp')).default; } catch { /* fall through */ }
   try { return createRequire(import.meta.url)('sharp'); } catch { return null; }
+}
+~~~
+
+## scripts/studio/framing.ts
+
+~~~typescript source-excerpt
+import * as THREE from 'three';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import type { StudioConfig, StudioView } from './types';
+
+export const samplesPerClip = 25;
+
+export function poseBounds(root: THREE.Object3D) {
+  root.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(root, true);
+  if (bounds.isEmpty() || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite)) {
+    throw new Error('The asset pose has no finite bounds to frame');
+  }
+  return bounds;
+}
+
+export function boundsRecord(box: THREE.Box3) {
+  return { min: box.min.toArray(), max: box.max.toArray() };
+}
+
+export function frameCamera(
+  camera: THREE.PerspectiveCamera, controls: OrbitControls,
+  bounds: THREE.Box3, view: StudioView, config: StudioConfig,
+) {
+  const center = bounds.getCenter(new THREE.Vector3());
+  const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 0.001);
+  const side = config.frontSide === 'left' ? 1 : -1;
+  const front = view === '34-front';
+  const direction = new THREE.Vector3(front ? side : -side, 0.65, front ? 1.35 : -1.35).normalize();
+  camera.position.copy(center).addScaledVector(direction, radius);
+  camera.lookAt(center);
+  const inverseRotation = camera.quaternion.clone().invert();
+  const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const tanX = tanY * camera.aspect;
+
+  // Project all 8 world bounds corners into camera space. Fit inside the canvas, below and above the HUD.
+  const corner = new THREE.Vector3();
+  let distance = radius * 0.1;
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        corner.set(x, y, z).sub(center).applyQuaternion(inverseRotation);
+        const inset = config.margin * Math.max(Math.abs(corner.x) / tanX, Math.abs(corner.y) / tanY);
+        distance = Math.max(distance, corner.z + Math.max(inset, radius * 0.05));
+      }
+    }
+  }
+
+  camera.near = radius / 1000;
+  camera.far = distance + radius * 100;
+  camera.updateProjectionMatrix();
+  camera.position.copy(center).addScaledVector(direction, distance);
+  controls.target.copy(center);
+  controls.minDistance = radius / 20;
+  controls.maxDistance = Math.max(distance * 5, radius * 20);
+  controls.update();
+}
+~~~
+
+## scripts/studio/index.html
+
+~~~html source-excerpt
+<!doctype html>
+<html lang="en" data-studio-state="loading">
+<head>
+  <meta charset="utf-8">
+  <!-- THREE_LICENSE -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
+  <title>Three.js Asset Studio</title>
+  <style>
+    :root {
+      font: 14px/1.4 system-ui, sans-serif;
+      color: #f0f4f9;
+      background: #131b26;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; }
+    main {
+      height: 100vh;
+      height: 100dvh;
+      min-height: 430px;
+      display: grid;
+      grid-template-rows: auto minmax(200px, 1fr) auto;
+    }
+    header, footer {
+      padding: 12px clamp(12px, 3vw, 32px);
+      background: #131b26;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px 16px;
+      border-bottom: 1px solid #314154;
+    }
+    h1 { margin: 0; font-weight: 650; font-size: 1.16rem; overflow-wrap: anywhere; }
+    #asset-name, #metrics, .hint { color: #aebdd0; }
+    #asset-name { overflow-wrap: anywhere; }
+    .header-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; }
+    #stage { position: relative; background: #202b3a; min-width: 0; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #notice {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      transform: translate(-50%, -50%);
+      width: max-content;
+      max-width: calc(100% - 24px);
+      max-height: calc(100% - 24px);
+      overflow: auto;
+      padding: 12px 16px;
+      background: #131b26;
+      border: 1px solid #556880;
+      border-radius: 6px;
+      overflow-wrap: anywhere;
+    }
+    footer { border-top: 1px solid #314154; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+    .views, .clip-controls, label { display: flex; align-items: center; gap: 8px; }
+    .clip-controls { flex-wrap: wrap; min-width: 0; }
+    select, button {
+      min-height: 34px;
+      border: 1px solid #52637b;
+      border-radius: 5px;
+      padding: 4px 9px;
+      font: inherit;
+      background: #202b3a;
+      color: inherit;
+    }
+    select { max-width: min(210px, 55vw); }
+    button:not(:disabled) { cursor: pointer; }
+    button[aria-pressed="true"] { background: #244766; border-color: #8acbff; }
+    button:disabled, select:disabled, input:disabled { opacity: .58; }
+    #play { min-width: 62px; }
+    #time { min-width: 104px; font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #scrub { width: clamp(86px, 15vw, 210px); }
+    input { accent-color: #8acbff; }
+    :focus-visible { outline: 2px solid #8acbff; outline-offset: 2px; }
+    .hint { margin: 7px 0 0; font-size: .88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="header-info">
+        <h1 id="capture-label">3/4 front</h1>
+        <span id="asset-name"></span>
+      </div>
+      <span id="metrics"></span>
+    </header>
+    <div id="stage">
+      <canvas id="view" aria-label="Interactive asset preview"></canvas>
+      <div id="notice" role="status">Loading the asset…</div>
+    </div>
+    <footer>
+      <div class="toolbar">
+        <div class="views" role="group" aria-label="Camera presets">
+          <button type="button" data-view="34-front" aria-pressed="true">3/4 front</button>
+          <button type="button" data-view="34-back" aria-pressed="false">3/4 back</button>
+        </div>
+        <div class="clip-controls">
+          <label>Clip <select id="clip"><option value="-1">Rest pose</option></select></label>
+          <button id="play" type="button" disabled>Play</button>
+          <label>Time <input id="scrub" type="range" min="0" max="0" step="any" disabled></label>
+          <output id="time" for="scrub">0.00 / 0.00 s</output>
+        </div>
+        <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+      </div>
+      <p class="hint">Drag to orbit · Right-drag or two fingers to pan · Scroll or pinch to zoom</p>
+    </footer>
+  </main>
+  <script type="module">
+    /* STUDIO_BUNDLE */
+  </script>
+</body>
+</html>
+~~~
+
+## scripts/studio/runtime.ts
+
+~~~typescript source-excerpt
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { assetFingerprint } from '../../src/fingerprint';
+import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
+import { boundsRecord, frameCamera, poseBounds, samplesPerClip } from './framing';
+import type {
+  StudioApi, StudioConfig, StudioDiagnostic, StudioFrame, StudioFrameEvidence, StudioInfo, StudioPose,
+  StudioVfx, StudioVfxFactory, StudioView,
+} from './types';
+
+type NamespaceLoader = () => Promise<Record<string, unknown>>;
+const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const viewNames: Record<StudioView, string> = { '34-front': '3/4 front', '34-back': '3/4 back' };
+const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+export async function startStudio(
+  config: StudioConfig, loadModule: NamespaceLoader, loadVfx?: NamespaceLoader, vfxExport?: string,
+) {
+  const canvas = byId<HTMLCanvasElement>('view');
+  const notice = byId('notice');
+  const diagnostics: StudioDiagnostic[] = [];
+  const api: StudioApi = { version: 1, getErrors: () => diagnostics.slice() };
+  window.threejsStudio = api;
+
+  function fail(kind: StudioDiagnostic['kind'], error: unknown) {
+    const message = messageOf(error);
+    if (!diagnostics.some((item) => item.kind === kind && item.message === message)) diagnostics.push({ kind, message });
+    document.documentElement.dataset.studioState = 'error';
+    notice.textContent = message;
+    notice.hidden = false;
+  }
+
+  window.addEventListener('error', (event) => fail('javascript', event.error ?? event.message));
+  window.addEventListener('unhandledrejection', (event) => fail('javascript', event.reason));
+  canvas.addEventListener('webglcontextcreationerror', (event) => {
+    fail('webgl', event.statusMessage || 'WebGL context creation failed');
+  });
+  canvas.addEventListener('webglcontextlost', () => fail('webgl', 'WebGL context lost'));
+
+  try {
+    byId('asset-name').textContent = config.module;
+    const { name: builder, build } = selectBuilder(await loadModule(), config.builder, config.module);
+    const asset = await build(structuredClone(config.params), THREE);
+    const { root, animations: clips } = unpackAsset(asset);
+    const stats = countScene(root);
+    if (!stats.meshes) throw new Error('The asset has no meshes with vertex positions');
+    if (clips.some((clip) => typeof clip?.name !== 'string' || !Number.isFinite(clip.duration) || clip.duration < 0 || !Array.isArray(clip.tracks))) {
+      throw new Error('The builder returned an invalid animation clip');
+    }
+
+    const mixer = new THREE.AnimationMixer(root);
+    let activeIndex = -1, time = 0;
+    let action: THREE.AnimationAction | undefined;
+    function selectClip(index: number) {
+      mixer.stopAllAction();
+      activeIndex = index;
+      time = 0;
+      action = clips[index] ? mixer.clipAction(clips[index]).reset().play() : undefined;
+    }
+    function applyPose(seconds: number) {
+      time = seconds;
+      if (!action) return;
+      action.time = time;
+      // Sampling with a zero delta preserves the exact end of a looping clip.
+      mixer.update(0);
+    }
+
+    const rest = poseBounds(root);
+    const sampled = rest.clone();
+    const clipBounds = clips.map((clip, index) => {
+      selectClip(index);
+      const count = clip.duration > 0 ? samplesPerClip : 1;
+      const envelope = new THREE.Box3();
+      for (let sample = 0; sample < count; sample++) {
+        applyPose(clip.duration * sample / (samplesPerClip - 1));
+        envelope.union(poseBounds(root));
+      }
+      sampled.union(envelope);
+      return envelope;
+    });
+    selectClip(-1);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#202b3a');
+    scene.add(root);
+    // Three.js caches a skinned mesh's culling sphere. Its animated vertices can leave that sphere.
+    root.traverse((object) => { if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false; });
+
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      const room = new RoomEnvironment();
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromScene(room).texture;
+      scene.environmentIntensity = 0.65;
+      room.dispose();
+      pmrem.dispose();
+    } catch (error) {
+      fail('webgl', error);
+      return;
+    }
+
+    const key = new THREE.DirectionalLight('#fff4df', 2.35);
+    key.position.set(-3, 6, 4);
+    scene.add(key, new THREE.HemisphereLight('#edf6ff', '#6c7480', 1.25));
+    const width = Math.max(0.001, sampled.getSize(new THREE.Vector3()).length());
+    const grid = new THREE.GridHelper(width * 1.8, 16, '#65778e', '#4a5b70');
+    const center = sampled.getCenter(new THREE.Vector3());
+    grid.position.set(center.x, 0, center.z);
+    scene.add(grid);
+
+    const vfxGroup = new THREE.Group();
+    vfxGroup.name = '_studio_vfx';
+    vfxGroup.visible = false;
+    scene.add(vfxGroup);
+    let vfx: StudioVfx | void;
+    if (loadVfx) {
+      const { build: create } = selectBuilder(await loadVfx(), vfxExport, 'studio VFX module', '--vfx-export');
+      vfx = await (create as unknown as StudioVfxFactory)({ root, asset, params: structuredClone(config.params), group: vfxGroup, THREE });
+    }
+
+    const info: StudioInfo = {
+      ...config, builder, stats, fingerprint: assetFingerprint(root),
+      clips: clips.map((clip) => ({ name: clip.name, duration: clip.duration, tracks: clip.tracks.length })),
+      bounds: { rest: boundsRecord(rest), sampled: boundsRecord(sampled), samplesPerClip },
+      vfxAvailable: Boolean(loadVfx), threeRevision: THREE.REVISION,
+    };
+
+    const stage = byId('stage');
+    const clipSelect = byId<HTMLSelectElement>('clip');
+    const play = byId<HTMLButtonElement>('play');
+    const scrub = byId<HTMLInputElement>('scrub');
+    const effects = byId<HTMLInputElement>('effects');
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-view]'));
+    const camera = new THREE.PerspectiveCamera(34);
+    const controls = new OrbitControls(camera, canvas);
+    const gl = renderer.getContext();
+    let view: StudioView | null = '34-front';
+    let ticking = 0, lastTick = 0, fitting = false;
+
+    function pose(): StudioPose {
+      const clip = clips[activeIndex];
+      return { clip: clip?.name ?? null, duration: clip?.duration ?? 0, time };
+    }
+
+    function draw() {
+      if (vfxGroup.visible && vfx?.update) {
+        root.updateMatrixWorld(true);
+        vfx.update(pose());
+      }
+      renderer.render(scene, camera);
+    }
+
+    function checkWebGL() {
+      if (gl.isContextLost()) fail('webgl', 'WebGL context lost');
+      for (let i = 0; i < 8; i++) {
+        const code = gl.getError();
+        if (code === gl.NO_ERROR) break;
+        const name = ['INVALID_ENUM', 'INVALID_VALUE', 'INVALID_OPERATION', 'INVALID_FRAMEBUFFER_OPERATION', 'OUT_OF_MEMORY', 'CONTEXT_LOST_WEBGL']
+          .find((key) => gl[key as keyof typeof gl] === code);
+        fail('webgl', name ?? `WebGL error 0x${code.toString(16)}`);
+      }
+    }
+
+    function syncAnimation() {
+      const { duration } = pose();
+      play.disabled = duration <= 0;
+      play.textContent = ticking ? 'Pause' : 'Play';
+      scrub.disabled = duration <= 0;
+      scrub.max = String(duration);
+      scrub.value = String(time);
+      byId('time').textContent = `${time.toFixed(2)} / ${duration.toFixed(2)} s`;
+    }
+
+    function pause() {
+      cancelAnimationFrame(ticking);
+      ticking = 0;
+      lastTick = 0;
+    }
+
+    function tick(now: number) {
+      if (lastTick) applyPose((time + (now - lastTick) / 1000) % pose().duration);
+      lastTick = now;
+      draw();
+      ticking = requestAnimationFrame(tick);
+      syncAnimation();
+    }
+
+    function syncCamera() {
+      for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.view === view));
+    }
+
+    function fit(preset: StudioView) {
+      fitting = true;
+      view = preset;
+      const envelope = clipBounds[activeIndex] ?? rest;
+      frameCamera(camera, controls, envelope.clone().union(poseBounds(root)), preset, config);
+      fitting = false;
+      syncCamera();
+    }
+
+    function resize() {
+      const width = Math.max(1, stage.clientWidth), height = Math.max(1, stage.clientHeight);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      if (view) fit(view);
+      draw();
+    }
+
+    function setFrame(frame: StudioFrame): StudioFrameEvidence {
+      if (!Object.hasOwn(viewNames, frame.view)) throw new Error(`Unknown camera preset: ${frame.view}`);
+      const matches = info.clips.flatMap((clip, index) => clip.name === frame.clip ? [index] : []);
+      if (frame.clip !== undefined && matches.length !== 1) throw new Error(`Clip name must match one clip: ${frame.clip}`);
+      const index = matches[0] ?? -1;
+      const duration = clips[index]?.duration ?? 0;
+      const seconds = frame.time ?? 0;
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds > duration) throw new Error(`Frame time must be between 0 and ${duration} seconds`);
+
+      pause();
+      selectClip(index);
+      applyPose(seconds);
+      clipSelect.value = String(index);
+      byId('capture-label').textContent = frame.label ?? viewNames[frame.view];
+      fit(frame.view);
+      syncAnimation();
+
+      vfxGroup.visible = false;
+      effects.checked = Boolean(frame.vfx && loadVfx);
+      draw();
+      checkWebGL();
+      if (!diagnostics.length && renderer.info.render.triangles === 0) throw new Error('The asset did not draw any triangles in this frame');
+      let vfxEvidence: StudioFrameEvidence['vfx'] = frame.vfx ? 'unavailable' : 'off';
+      if (effects.checked) {
+        const withoutEffects = canvas.toDataURL();
+        vfxGroup.visible = true;
+        draw();
+        vfxEvidence = canvas.toDataURL() === withoutEffects ? 'no-visible-change' : 'visible';
+        checkWebGL();
+      }
+      return { ...pose(), view: frame.view, vfx: vfxEvidence };
+    }
+
+    byId('metrics').textContent = `${stats.tris.toLocaleString('en-US')} triangles · ${stats.meshes} ${stats.meshes === 1 ? 'mesh' : 'meshes'}`;
+    for (const [index, clip] of clips.entries()) clipSelect.add(new Option(clip.name || '(unnamed clip)', String(index)));
+    clipSelect.disabled = clips.length === 0;
+    byId('effects-label').hidden = !loadVfx;
+    for (const button of buttons) button.addEventListener('click', () => {
+      const preset = button.dataset.view as StudioView;
+      byId('capture-label').textContent = viewNames[preset];
+      fit(preset);
+      draw();
+    });
+    clipSelect.addEventListener('change', () => {
+      pause();
+      selectClip(Number(clipSelect.value));
+      applyPose(0);
+      if (view) fit(view);
+      syncAnimation();
+      draw();
+    });
+    play.addEventListener('click', () => {
+      if (ticking) pause();
+      else ticking = requestAnimationFrame(tick);
+      syncAnimation();
+    });
+    scrub.addEventListener('input', () => {
+      pause();
+      applyPose(Number(scrub.value));
+      syncAnimation();
+      draw();
+    });
+    effects.addEventListener('change', () => { vfxGroup.visible = effects.checked; draw(); });
+    controls.addEventListener('start', () => { view = null; syncCamera(); byId('capture-label').textContent = 'Orbit'; });
+    controls.addEventListener('change', () => { if (!fitting) draw(); });
+
+    resize();
+    setFrame({ view: '34-front' });
+    api.info = () => structuredClone(info);
+    api.setFrame = setFrame;
+    if (!diagnostics.length) {
+      document.documentElement.dataset.studioState = 'ready';
+      notice.hidden = true;
+    }
+    new ResizeObserver(resize).observe(stage);
+  } catch (error) {
+    fail('javascript', error);
+  }
+}
+~~~
+
+## scripts/studio/types.ts
+
+~~~typescript source-excerpt
+import type * as THREE from 'three';
+import type { countScene } from '../asset-builder';
+import type { assetFingerprint } from '../../src/fingerprint';
+
+export type StudioView = '34-front' | '34-back';
+export type StudioConfig = {
+  module: string;
+  builder?: string;
+  params: Record<string, unknown>;
+  margin: number;
+  frontSide: 'left' | 'right';
+};
+
+export type StudioVfxContext = {
+  root: THREE.Object3D;
+  asset: unknown;
+  params: Record<string, unknown>;
+  group: THREE.Group;
+  THREE: typeof THREE;
+};
+export type StudioPose = { clip: string | null; time: number; duration: number };
+export type StudioVfx = { update?: (pose: StudioPose) => void };
+export type StudioVfxFactory = (context: StudioVfxContext) => StudioVfx | void | Promise<StudioVfx | void>;
+
+export type StudioFrame = {
+  view: StudioView;
+  clip?: string;
+  time?: number;
+  vfx?: boolean;
+  label?: string;
+};
+export type StudioFrameEvidence = StudioPose & {
+  view: StudioView;
+  vfx: 'off' | 'visible' | 'unavailable' | 'no-visible-change';
+};
+
+type Bounds = { min: number[]; max: number[] };
+export type StudioInfo = Omit<StudioConfig, 'builder'> & {
+  builder: string;
+  clips: { name: string; duration: number; tracks: number }[];
+  stats: ReturnType<typeof countScene>;
+  fingerprint: ReturnType<typeof assetFingerprint>;
+  bounds: { rest: Bounds; sampled: Bounds; samplesPerClip: number };
+  vfxAvailable: boolean;
+  threeRevision: string;
+};
+export type StudioDiagnostic = { kind: 'javascript' | 'webgl'; message: string };
+
+export type StudioApi = {
+  version: 1;
+  getErrors: () => StudioDiagnostic[];
+  info?: () => StudioInfo;
+  setFrame?: (frame: StudioFrame) => StudioFrameEvidence;
+};
+
+declare global {
+  interface Window {
+    threejsStudio?: StudioApi;
+  }
 }
 ~~~
 

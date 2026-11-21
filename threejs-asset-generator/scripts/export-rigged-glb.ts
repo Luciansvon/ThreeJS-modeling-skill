@@ -2,9 +2,11 @@
 // Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}']
 // The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
 // Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import * as nodeModule from 'node:module';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { countScene, selectBuilder, unpackAsset } from './asset-builder';
 import { emit, type Gate } from './result';
 
 // Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
@@ -47,46 +49,46 @@ try {
   fail(`three / addons not available: ${(e as Error).message}`);
 }
 
-let built: any;
+// Let external builders resolve their own modules first. For missing Three.js imports,
+// resolve against this skill without relocating the builder or changing NODE_PATH.
+const hooks = nodeModule.registerHooks?.({
+  resolve(specifier, context, nextResolve) {
+    if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
+      return nextResolve(import.meta.resolve(specifier), context);
+    }
+  },
+});
+
+let asset: ReturnType<typeof unpackAsset>;
 try {
   const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
-  const fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
-  const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
-  if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
-  built = await (mod[name] as (p: Record<string, unknown>, t: typeof import('three')) => unknown)(params, THREE);
+  const { build } = selectBuilder(mod, opt('export'), modFile);
+  asset = unpackAsset(await build(params, THREE));
 } catch (e) {
   fail(`cannot build asset: ${(e as Error).message}`);
+} finally {
+  hooks?.deregister();
 }
 
-const root = built?.root?.isObject3D ? built.root : built;
-if (!root?.isObject3D) fail('builder must return a THREE.Object3D or { root: THREE.Object3D, animations?: AnimationClip[] }');
-const animations = Array.isArray(built?.animations) ? built.animations : (Array.isArray(root.userData?.animations) ? root.userData.animations : []);
-
-function countScene(obj: any) {
-  let tris = 0, meshes = 0, skins = 0, bones = 0, vertexColorMeshes = 0;
-  obj.traverse((o: any) => {
-    if (o.isBone) bones++;
-    if (o.isSkinnedMesh) skins++;
-    if (o.isMesh && o.geometry?.attributes?.position) {
-      meshes++;
-      const g = o.geometry;
-      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
-      if (g.attributes.color) vertexColorMeshes++;
-    }
-  });
-  return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
-}
-
+const { root, animations } = asset;
 const before = countScene(root);
-const exporter = new GLTFExporter();
-const buf: ArrayBuffer = await exporter.parseAsync(root, { binary: true, animations, onlyVisible: true });
 const outPath = resolve(outFile);
-writeFileSync(outPath, Buffer.from(buf));
-
-const diskBytes = readFileSync(outPath);
-const diskAb = diskBytes.buffer.slice(diskBytes.byteOffset, diskBytes.byteOffset + diskBytes.byteLength);
-const loader = new GLTFLoader();
-const reloaded = await loader.parseAsync(diskAb, '');
+let diskBytes: Buffer, reloaded: any;
+try {
+  const buf: ArrayBuffer = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, Buffer.from(buf));
+  diskBytes = readFileSync(outPath);
+  const diskAb = diskBytes.buffer.slice(diskBytes.byteOffset, diskBytes.byteOffset + diskBytes.byteLength);
+  reloaded = await new GLTFLoader().parseAsync(diskAb, '');
+} catch (e) {
+  fail(`cannot write or re-open ${outPath}: ${(e as Error).message}`);
+}
 const after = countScene(reloaded.scene);
 const inClips = animations.map((c: any) => c.name);
 const outClips = (reloaded.animations ?? []).map((c: any) => c.name);
