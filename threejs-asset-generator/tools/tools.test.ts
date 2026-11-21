@@ -36,6 +36,28 @@ const tsx = (file: string, args: string[], cwd = here) => spawnTsx(join(here, fi
   const m = mentions(md);
   assert.deepEqual(m.links, ['references/a.md']); assert.deepEqual(m.paths, ['src/real.ts']); assert.deepEqual(m.imports, ['./prng']);
 }
+{
+  const md = [
+    '~~~~markdown source-excerpt',
+    '[Original link](references/missing.md) `src/missing.ts`',
+    '```ts',
+    "import { original } from './missing';",
+    '```',
+    '~~~',
+    '~~~~',
+    '~~~typescript source-excerpt',
+    "import { helper } from '../harness/helper';",
+    '~~~',
+    '[Actual link](references/runtime.md)',
+    '```ts',
+    "import { local } from './real';",
+    '```',
+  ].join('\n');
+  const result = mentions(md);
+  assert.deepEqual(result.links, ['references/runtime.md'], 'check links in prose outside source excerpts');
+  assert.deepEqual(result.paths, [], 'keep canonical paths inside the archived source');
+  assert.deepEqual(result.imports, ['./real'], 'check runnable examples, including after nested source fences');
+}
 
 // ---- validate: a good skill passes, a broken one reports every problem
 const GOOD_SKILL = '---\nname: good-skill\ndescription: Builds small things from seeds.\n---\n# Good\nSee `references/a.md` and [more](references/a.md). Code in `src/x.ts`.\n';

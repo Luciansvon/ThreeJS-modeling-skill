@@ -44,12 +44,11 @@ const walk = (dir: string, out: string[] = []): string[] => {
   return out;
 };
 
-const stripFences = (t: string) => t.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[ \t]*$/gm, (b) => b.replace(/[^\n]/g, ' '));
-const fencedBlocks = (t: string) => [...t.matchAll(/^(?:```|~~~)[^\n]*\n([\s\S]*?)^(?:```|~~~)[ \t]*$/gm)].map((m) => m[1]);
+const codeFence = /^(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm;
 
 /** Collects the file mentions of one markdown file: markdown links, inline-code paths, and relative imports inside code fences. */
 export function mentions(md: string) {
-  const prose = stripFences(md);
+  const prose = md.replace(codeFence, (block) => block.replace(/[^\n]/g, ' '));
   const links: string[] = [], paths: string[] = [], bare: string[] = [], imports: string[] = [];
   for (const m of prose.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
     const t = m[1];
@@ -66,9 +65,13 @@ export function mentions(md: string) {
     }
   }
   // Imports of the user's own project are exempt: a line that says "project-specific", or a bundler query such as ?raw.
-  for (const code of fencedBlocks(md)) for (const line of code.split('\n')) {
-    if (/project-specific/i.test(line)) continue;
-    for (const m of line.matchAll(/from\s+['"](\.{1,2}\/[^'"?]+)['"]/g)) imports.push(m[1]);
+  for (const [, , info, code] of md.matchAll(codeFence)) {
+    // Source excerpts preserve paths from the harness. The packer checks them against the canonical files.
+    if (info.trim().split(/\s+/).includes('source-excerpt')) continue;
+    for (const line of code.split('\n')) {
+      if (/project-specific/i.test(line)) continue;
+      for (const m of line.matchAll(/from\s+['"](\.{1,2}\/[^'"?]+)['"]/g)) imports.push(m[1]);
+    }
   }
   return { links, paths, bare, imports };
 }

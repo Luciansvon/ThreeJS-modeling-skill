@@ -7,11 +7,13 @@ Procedural low-poly 3D asset generator skill for **Three.js (r170+)**. It combin
 | Edition | Use it in | What it provides |
 | --- | --- | --- |
 | [Harness](./threejs-asset-generator/SKILL.md) | Codex, Claude Code, Gemini CLI, or another agent with a workspace and terminal | TypeScript builders, image reference intake, mesh QA, software preview, polygon and memory budgets, LOD checks, rig/clip metadata validation, and geometry-only GLB export. |
-| [Web chat](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | Copyable procedural model, dimensioned blockouts, optional SVG and CPU checks using the host's capabilities, and GLB where the session can generate and check the actual file. |
+| [Web chat](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | The harness guides, builders, tools, and sample tests in Markdown. Uses available preview and CPU capabilities and reports requested stages that remain blocked at the end. |
 
 For a harness, place the complete `threejs-asset-generator/` folder in the harness's skill directory and install its dependencies there. Keep the folder name and its `SKILL.md` together.
 
-For web chat, paste the complete web `SKILL.md` into a conversation or the project's instructions. In Gemini it can be used as [Gem instructions](https://support.google.com/gemini/answer/15146780?co=GENIE.Platform%3DDesktop&hl=en). Where Claude's [custom skill upload](https://support.claude.com/en/articles/12512180-use-skills-in-claude) is enabled, zip the `threejs-asset-generator-web/` folder and upload that ZIP. The plain chat workflow also works by pasting the file.
+For web chat, paste the web `SKILL.md` into the conversation or project instructions and attach the [Markdown references](./threejs-asset-generator-web/references/). In Gemini, use the entrypoint as [Gem instructions](https://support.google.com/gemini/answer/15146780?co=GENIE.Platform%3DDesktop&hl=en) and add the relevant Markdown files. In Claude, upload the entire `threejs-asset-generator-web/` folder as a ZIP where [custom skills](https://support.claude.com/en/articles/12512180-use-skills-in-claude) are enabled.
+
+Start with the [runtime guide](./threejs-asset-generator-web/references/runtime.md) and attach the packs you need if the host limits attachments. Code inside the packs can be read as Markdown. The session's actual capabilities determine which tools can run. When a tool fails, the agent continues the available work and puts any unresolved requested stages in a final **Blocked** report.
 
 Both editions start with material or vertex colors. If an asset needs original image detail, the agent can use the active session's image generator and preserve the resulting map as an input. Text-only sessions can supply procedural texture source or a placeholder. See [texture choices](./threejs-asset-generator/references/look.md#choose-the-texture-path).
 
@@ -79,7 +81,8 @@ ThreeJS-modeling-skill/
 ├── .gitattributes                   # Consistent LF line endings
 ├── threejs-asset-generator/         # Harness skill, references, builders and CLI
 └── threejs-asset-generator-web/
-    └── SKILL.md                     # Self-contained web chat instructions
+    ├── SKILL.md                     # Web chat entrypoint and recovery rules
+    └── references/                  # Runtime guide and full harness source in Markdown
 ```
 
 ---
@@ -92,8 +95,10 @@ Install dependencies once inside `threejs-asset-generator/` (`npm install`, opti
 # Validate the harness, run trigger checks and tests, and fail on skipped tests
 npm run check:strict
 
-# From a repository checkout, validate the standalone web edition as well
-npm run validate -- ../threejs-asset-generator-web
+# From a repository checkout, refresh and check the web reference pack
+npm run pack:web
+npm run check:web
+npm run validate -- ..
 
 # Intake a multi-view turnaround sheet (border flood-fill on by default)
 npx tsx scripts/ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json
