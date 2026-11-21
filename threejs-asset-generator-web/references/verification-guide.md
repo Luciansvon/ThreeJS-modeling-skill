@@ -564,7 +564,7 @@ Choose controls for the asset and the requested review.
 - **Up to six turnaround camera presets:** Front (`+Z`), 3/4 Front, 3/4 Back, Side (`+X`), Back (`-Z`), Top (`+Y`), framed far enough back that the full asset (including horns, tail tips, and peak animation poses) fits cleanly inside the safe center area without colliding with top/bottom HUD bars.
 - **Match reference 3/4 facing:** When built from a reference image, place the `3/4 Front` camera on the same side so the asset faces the same screen direction (left or right) as the reference image for direct visual comparison.
 - **Non-overlapping HUD layout:** Never let an open parameter drawer overlap the live QA telemetry card or obscure the hero's head/tail; keep parameter drawers collapsible (collapsed by default on narrow viewports) on the opposite side from the QA card.
-- **Stylized low-poly VFX (optional, runtime-only):** Keep effects in a scene-level `_studio_vfx` group beside the asset. Use faceted shapes or tapered ribbons and check the silhouette at peak action. [Gradient VFX on light and dark backdrops](#gradient-vfx-on-light-and-dark-backdrops)
+- **Runtime VFX (optional).** Keep preview effects in a scene-level `_studio_vfx` group beside the asset. Match the effect to the intended motion and style. [VFX references](#optional-vfx-references)
 - **Parameter controls from schema:** Auto-render sliders and colour pickers directly from the asset's `parameters` array, including `seed` and `detail` (`src/lod.ts`, `0..2`).
 - **Live QA telemetry HUD:** Show observed triangle and mesh counts. Add measured grounding, winding, drift, and other QA results when available. Mark checks without evidence as `Unchecked`.
 - **Rig & animation dock (when animated):** Play/pause, scrub bar, individual clip buttons plus `RefPose`, pivot gizmos toggle, and expression swap buttons (`neutral` / `happy` / `focused`) with optional clip auto-sync.
@@ -575,13 +575,16 @@ Choose controls for the asset and the requested review.
 - Support both dark and light studio backdrops. When using Tailwind CDN, stick to standard opacity utilities (`bg-zinc-900/90`, `bg-zinc-900/95` — avoid arbitrary steps like `/88` or `/92` without brackets) so dark HUD panels keep crisp contrast on light backdrops.
 - On light backdrops, give bright cream features (inner ears, white highlights) a clear dark outer border so they never blend into the background.
 
-### Gradient VFX on light and dark backdrops
+### Optional VFX references
 
-Use two layers for visible lightning or similar emissive ribbons. Draw a wider blue, cyan, or gold shell with `NormalBlending`, `transparent: true`, `depthTest: true`, and `depthWrite: false`. Taper its opacity at the edges and ends, with a soft Fresnel accent on a 3D shell if useful. Draw a much thinner, brighter tinted core inside the shell. On a light backdrop a wide solid additive pass can clip to white, so use the color and alpha ramp to keep the effect readable. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
+Use these examples as creative references. Choose or invent the effect, timing, scale, colors, particle counts, layers, and blending that best serve the brief. Adapt, combine, or skip any example. If a particular technique or tool is unavailable, use a suitable alternative and continue the deliverable.
 
-Pause at the action peak on both light and dark backgrounds. Keep the effect brightest at its source or tip and lower the intensity wherever it obscures the face, markings, or animated limbs. Attach `_studio_vfx` beside the model root and pass only the fresh model root and its animation clips to GLB export.
+- **Lightning burst.** One possible rhythm is inward-moving energy, a short flash, an expanding wave, then lingering sparks. Change the stages and their timing to match the action. A continuous aura can use a different rhythm.
+- **Gradient ribbon.** A translucent tinted shell with soft edges and a thin bright core can keep a bolt legible on pale backgrounds. `NormalBlending` is one way to preserve its tint. A short additive flash can give the peak more impact when it suits the lighting. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
 
-With the packer, pass `--vfx ./effect.ts`. Export a `createStudioVfx({ root, asset, params, group, THREE })` function that adds its meshes to the supplied `group`. It can return an `update({ clip, time, duration })` callback to sync the effect to playback and to captured frames. The preview's effect module stays outside the model builder and GLB command.
+Review any requested effect in motion against the intended backdrop and focal point. When the preview supports multiple backgrounds, check the ones relevant to delivery. Judge the result by the brief and actual evidence. Attach preview-only effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
+
+The packer can load your effect module with `--vfx ./effect.ts`. Export a factory, for example `createStudioVfx({ root, asset, params, group, THREE })`, and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. The factory can return an `update({ clip, time, duration })` callback to sync the effect to playback and captured frames. The preview's effect module stays outside the model builder and GLB command.
 
 ### Frame the full motion inside the HUD
 
@@ -608,16 +611,16 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 
 ## 5. Final visual and animation checks
 
-When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to the action peak. Use the available viewer for the requested preview mode.
+When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to a representative action frame. Use the available viewer for the requested preview mode.
 
 1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
 2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
 3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
-4. **Peak action.** Inspect the intended action frame and effects, if requested. Make sure the model remains readable in the actual lighting.
+4. **Action and effects.** Inspect a representative frame of the intended action and any requested effects. Check that the timing and focal point serve the brief in the actual lighting.
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
-For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Set the clip names and the intended action peak in seconds. Add `--vfx` to require visible effects in that frame. Use `--browser` if you need to point to a particular browser executable.
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--vfx` when that frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
 
 ```bash
 npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --action LightningBurst --peak 0.53

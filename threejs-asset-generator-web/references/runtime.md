@@ -40,7 +40,9 @@ For a real comparison, use the matching gates, platform budgets, and tolerances 
 
 ## Visual evidence
 
-Use any viewer already available in the session to open the delivered model. Inspect `3/4 Front` and `3/4 Back` in the actual materials, a frame halfway through the requested movement clip, and its main action clip at the intended peak. At the peak, check requested effects against the background and check that the model stays clear of the preview controls. Record what you observed in each available view and report browser or rendering errors when the viewer exposes them. [Verification and studio guide](verification-guide.md)
+Use any viewer already available in the session to open the delivered model. Inspect `3/4 Front` and `3/4 Back` in the actual materials, a frame halfway through the requested movement clip, and a representative frame of the main action. Check any requested effects against the intended background and check that the model stays clear of the preview controls. Record what you observed in each available view and report browser or rendering errors when the viewer exposes them. [Verification and studio guide](verification-guide.md)
+
+Treat the VFX examples in the studio guide as optional references. Choose the effect and technique that best fit the brief, including your own timing, color, density, and blending. Use a compatible alternative when the session lacks a tool. Review the delivered effect against the brief. Reserve the final **Blocked** report for requested results that remain unavailable.
 
 When interactive inspection is unavailable, use any existing render or draw a schematic from the model data. Record which visual and playback checks are **Unchecked**. Put only unresolved requested outputs in the final **Blocked** report and deliver the remaining work.
 

@@ -64,6 +64,8 @@ The older dragon builder also produced QA artifacts through `extractQaArtifacts`
 
 The reference-angle comparison replayed the same input files. The front silhouette score moved from 0.6324 to 0.7005 at azimuth 44° and elevation 10°, passing the 0.70 threshold. The rear improved from 0.3635 to 0.3877 at 136° and 10°. Its aspect passed and its overlap still failed, so the rear silhouette remains a finding for that asset. [Reference matching](threejs-asset-generator/references/reference-matching.md)
 
+Both editions treat visual-effect recipes as optional design references and review the delivered effect against the brief. The packed references include techniques for a lightning burst and a gradient ribbon. The studio capture accepts the author's chosen clip and moment. [VFX references](threejs-asset-generator/references/studio-preview.md#optional-vfx-references), [Web visual evidence](threejs-asset-generator-web/references/runtime.md#visual-evidence)
+
 ### Release checks
 
 Run from `threejs-asset-generator/` after installing the dependencies.
@@ -77,9 +79,9 @@ npm run validate -- ../threejs-asset-generator-web
 ```
 
 - Strict verification passed all **14 test files** with zero failures or skips and **18/18** trigger cases.
-- Both skill manifests passed with zero errors and warnings. The harness entrypoint measured approximately **4,590** tokens against the 5,000 limit.
+- Both skill manifests passed with zero errors and warnings. The harness entrypoint measured approximately **4,609** tokens against the 5,000 limit.
 - Web Full reproduced **84 source chapters** across five Markdown packs with `stale: []`. An independent comparison found zero missing, extra, or changed chapters after newline normalization. The web runtime continues with available tools and reports blocked requested stages at the end. [Web runtime](threejs-asset-generator-web/references/runtime.md)
-- The shared B.I.M.A-DEV-INFRA repository audit checked **98 files** with zero findings. A local link check resolved **47 links and headings** across the edited guides.
+- The shared B.I.M.A-DEV-INFRA repository audit checked **98 files** with zero findings. A local link check resolved **49 links and headings** across the edited guides.
 
 ## Limits of this audit
 

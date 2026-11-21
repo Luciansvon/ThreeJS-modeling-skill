@@ -35,7 +35,7 @@ When the user is still exploring ideas, asking for advice, or has left major req
 2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed.
 3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
 4. **Preview mode:** **Fast Preview** (quick orbit/scrub) vs **Full Preview** (studio controls, rig/clip inspection).
-5. **Runtime VFX:** optional studio-only lightning/fire/aura kept outside the exported asset.
+5. **Runtime VFX:** choose optional effects suited to the brief. Adapt the reference techniques and keep preview effects outside the exported asset.
 6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 Jump straight to **Build Mode** when the brief is already complete or the user asks to build directly.
@@ -60,7 +60,7 @@ Jump straight to **Build Mode** when the brief is already complete or the user a
 - **Fast Preview** is the default for a quick look. When the session can show the actual GLB, use its built-in viewer for orbit, pan, zoom, textures, labels, and playback or scrubbing of embedded clips as supported. Otherwise show a frame, orthographic SVG projected from the model data, or dimensioned front and side blockouts in text. Label schematic output clearly and mark any clip playback that was unavailable as **Unchecked**.
 - **Full Preview** is for live parameters, rig inspection, clip authoring or comparison, and expression changes. Open the interactive controls that matter to the brief if the session supports them. If a requested control is unavailable, provide the available preview and record the missing control under **Blocked**.
 
-When the user asks for a preview without specifying the mode, offer both in one sentence and state what the session can show. Share a lightweight fast preview if already ready, and wait for the user's choice before building a heavy Full Preview studio. Follow an explicit choice directly. When an actual preview is available, inspect front and back three-quarter views, a movement frame, and the action peak with any requested VFX. Check the browser for errors when the session exposes them. Record each unavailable check separately and continue delivery. [Web visual evidence](references/runtime.md#visual-evidence)
+When the user asks for a preview without specifying the mode, offer both in one sentence and state what the session can show. Share a lightweight fast preview if already ready, and wait for the user's choice before building a heavy Full Preview studio. Follow an explicit choice directly. When an actual preview is available, inspect front and back three-quarter views, a movement frame, and a representative action frame with any requested VFX. Check the browser for errors when the session exposes them. Record each unavailable check separately and continue delivery. [Web visual evidence](references/runtime.md#visual-evidence)
 
 ## Return the result
 
