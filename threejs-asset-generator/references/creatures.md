@@ -36,6 +36,7 @@ Code: `src/organic.ts`. API:
 - `export const norm = (a: V3): V3`
 - `export function sampleSpline(pts: V3[], perSegment = 4): V3[]`
 - `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): Tris`
+- `export function tubeTrisWithT(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): { tris: Tris; vertexT: number[] }`
 - `export const spikeTris = (base: V3, dir: V3, length: number, radius: number, sides = 4): Tris`
 - `export function fanTris(apex: V3, rim: V3[]): Tris`
 - `export function planarBladeTris(base: V3, mid: V3, tip: V3, halfThick: number, chordBase: number, chordMid: number, planeNormal?: V3): Tris`

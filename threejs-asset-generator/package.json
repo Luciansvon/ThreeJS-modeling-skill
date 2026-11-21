@@ -1,6 +1,6 @@
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.0",
+  "version": "4.3.1",
   "private": true,
   "type": "module",
   "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",

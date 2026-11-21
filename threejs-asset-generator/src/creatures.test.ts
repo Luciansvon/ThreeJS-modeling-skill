@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createPRNG } from './prng';
 import { resolveParams } from './params';
 import { signedVolumeOf, mirrorTris } from './tri';
-import { tubeTris, planarBladeTris, radialArrayTris } from './organic';
+import { tubeTris, tubeTrisWithT, planarBladeTris, radialArrayTris } from './organic';
 import { dragonParameters, buildDragonKernel } from './dragonKernel';
 
 const kernel = (o = {}) => {
@@ -30,3 +30,18 @@ const singleLeg = tubeTris([[0.3, 0.4, 0], [0.7, 0.5, 0], [0.9, 0, 0]], [0.06, 0
 const spider8 = radialArrayTris(singleLeg, 8, 1);
 assert.equal(spider8.length, singleLeg.length * 8, 'radialArrayTris duplicates triangles 8x');
 assert.ok(Math.abs(signedVolumeOf(spider8) - signedVolumeOf(singleLeg) * 8) < 1e-6, 'radialArrayTris preserves outward winding');
+
+// v4.3.1: tubeTrisWithT preserves exact curve parameter t even on folded/overlapping paths
+const foldedPath: [number, number, number][] = [[0, 0, 0], [0, 0, -1], [0, 0.5, -1], [0, 0, 0]];
+const foldedArgs = [foldedPath, [0.08, 0.08, 0.08, 0.08], 6, true] as const;
+const withT = tubeTrisWithT(...foldedArgs);
+assert.deepEqual(withT.tris, tubeTris(...foldedArgs), 'tubeTrisWithT matches tubeTris geometry');
+assert.equal(withT.vertexT.length, withT.tris.length / 3, 'vertexT has 1 entry per triangle vertex');
+assert.ok(withT.vertexT.every((t) => t >= 0 && t <= 1), 'every vertexT is normalized to [0, 1]');
+const capTriCount = 6;
+const capStartOffset = withT.vertexT.length - capTriCount * 6;
+for (let j = 0; j < capTriCount; j++) {
+  const sIdx = capStartOffset + j * 6;
+  assert.deepEqual(withT.vertexT.slice(sIdx, sIdx + 3), [0, 0, 0], 'start cap keeps t=0 even where folded end overlaps');
+  assert.deepEqual(withT.vertexT.slice(sIdx + 3, sIdx + 6), [1, 1, 1], 'end cap keeps t=1 even where folded end overlaps');
+}

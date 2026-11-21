@@ -172,6 +172,13 @@ function tailAsset() {
   assert.equal(times[35], Math.fround(1.15));
   const integral = bakeClip30fps('IntegralFrameCount', 0.14, bones, () => ({ rootOffset: [0, 0, 0] }), { fps: 100 });
   assert.equal(integral.tracks[0].times.length, 15); // The floating-point product is slightly above 14.
+
+  const bow = bakeClip30fps('Bow', 1, bones, (u) => ({ rotations: { tail: [u, 0, 0] } }), { loop: false });
+  const bowTrack = bow.tracks.find((track) => track.name === 'tail.quaternion')!;
+  assert.equal(bowTrack.times[bowTrack.times.length - 1], 1);
+  close(bowTrack.values[bowTrack.values.length - 4], Math.sin(0.5));
+  assert.equal(extractQaArtifacts({ root: bones.hips, bones, animations: [bow] }).rigMetadata.animations?.[0].loop, false);
+
   assert.throws(() => bakeClip30fps('Bad', 0, bones, () => ({})), /positive/);
   assert.throws(() => bakeClip30fps('Bad', 1, bones, () => ({ rotations: { unknown: [0, 0, 0] } })), /Unknown rotation bone/);
 }

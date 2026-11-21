@@ -929,11 +929,12 @@ export function sampleSpline(pts: V3[], perSegment = 4): V3[] {
   return out;
 }
 
-/** Closed tube along a polyline. Frames are parallel-transported, so the tube never twists. Pass `upHint` to control initial frame alignment on steep/vertical fins. */
-export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,
-  shape?: (angle: number, t: number) => number, upHint?: V3): Tris {   // shape: radius multiplier by angle (rad) and t in 0..1 along the path
-  const n = path.length, out: Tris = [];
-  const r = (i: number) => (typeof radius === 'function' ? radius(i / (n - 1)) : radius[i]);
+/** Closed tube along a polyline with authored normalized curve parameter `vertexT` per vertex (matches `attachCurveSkinWeights`). */
+export function tubeTrisWithT(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,
+  shape?: (angle: number, t: number) => number, upHint?: V3): { tris: Tris; vertexT: number[] } {
+  const n = path.length, out: Tris = [], vertexT: number[] = [];
+  const tOf = (i: number) => (n > 1 ? i / (n - 1) : 0);
+  const r = (i: number) => (typeof radius === 'function' ? radius(tOf(i)) : radius[i]);
   const T = path.map((_, i) => norm(sub(path[Math.min(i + 1, n - 1)], path[Math.max(i - 1, 0)])));
   const hint = upHint && Math.abs(dot(norm(upHint), T[0])) < 0.98 ? norm(upHint) : (Math.abs(T[0][1]) < 0.9 ? [0, 1, 0] as V3 : [1, 0, 0] as V3);
   let u = norm(cross(hint, T[0]));   // any normal to the first tangent
@@ -942,23 +943,35 @@ export function tubeTris(path: V3[], radius: number[] | ((t: number) => number),
     if (i > 0) u = norm(sub(u, mul(T[i], dot(u, T[i]))));    // carry the previous normal into the new plane
     const v = cross(T[i], u);                                // (u, v, T) is right-handed: u × v = T
     rings.push(Array.from({ length: sides }, (_, j) => {
-      const a = (j / sides) * Math.PI * 2, rr = r(i) * (shape ? shape(a, i / (n - 1)) : 1);
+      const a = (j / sides) * Math.PI * 2, rr = r(i) * (shape ? shape(a, tOf(i)) : 1);
       return add(path[i], add(mul(u, Math.cos(a) * rr), mul(v, Math.sin(a) * rr)));
     }));
   }
-  const push = (a: V3, b: V3, c: V3) => out.push(...a, ...b, ...c);
-  for (let i = 0; i < n - 1; i++)
+  const push = (a: V3, b: V3, c: V3, ta: number, tb: number, tc: number) => {
+    out.push(...a, ...b, ...c);
+    vertexT.push(ta, tb, tc);
+  };
+  for (let i = 0; i < n - 1; i++) {
+    const ti = tOf(i), ti1 = tOf(i + 1);
     for (let j = 0; j < sides; j++) {
       const k = (j + 1) % sides;
-      push(rings[i][j], rings[i][k], rings[i + 1][k]); push(rings[i][j], rings[i + 1][k], rings[i + 1][j]);   // outward CCW
+      push(rings[i][j], rings[i][k], rings[i + 1][k], ti, ti, ti1);
+      push(rings[i][j], rings[i + 1][k], rings[i + 1][j], ti, ti1, ti1);   // outward CCW
     }
+  }
   if (caps)
     for (let j = 0; j < sides; j++) {
       const k = (j + 1) % sides;
-      push(path[0], rings[0][k], rings[0][j]);                      // start cap faces −T
-      push(path[n - 1], rings[n - 1][j], rings[n - 1][k]);          // end cap faces +T
+      push(path[0], rings[0][k], rings[0][j], 0, 0, 0);                      // start cap faces −T
+      push(path[n - 1], rings[n - 1][j], rings[n - 1][k], 1, 1, 1);          // end cap faces +T
     }
-  return out;
+  return { tris: out, vertexT };
+}
+
+/** Closed tube along a polyline. Frames are parallel-transported, so the tube never twists. Pass `upHint` to control initial frame alignment on steep/vertical fins. */
+export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true,
+  shape?: (angle: number, t: number) => number, upHint?: V3): Tris {   // shape: radius multiplier by angle (rad) and t in 0..1 along the path
+  return tubeTrisWithT(path, radius, sides, caps, shape, upHint).tris;
 }
 
 /** Cone-like spike (horn, thorn, claw, tooth). The tip keeps a tiny radius so no triangle is degenerate. */
@@ -1326,6 +1339,7 @@ export interface SkinPose {
 export interface SkinClipOptions {
   fps?: number;
   eulerOrder?: THREE.EulerOrder;
+  loop?: boolean;
 }
 
 function frameTimes(duration: number, fps: number): number[] {
@@ -1358,13 +1372,13 @@ function copyPoseChannels(channels: PoseChannels | undefined, bones: Bones, labe
   return values;
 }
 
-/** Bake local Euler deltas, local scales and a rest-relative root offset into a looping clip. */
+/** Bake local Euler deltas, local scales and a rest-relative root offset into a looping (or one-shot with loop: false) clip. */
 export function bakeClip30fps(
   name: string,
   duration: number,
   bones: Bones,
   evalPose: (u: number) => SkinPose,
-  { fps = defaultFps, eulerOrder = 'YXZ' }: SkinClipOptions = {},
+  { fps = defaultFps, eulerOrder = 'YXZ', loop = true }: SkinClipOptions = {},
 ) {
   if (!name.trim()) throw new Error('Expected a clip name');
   const times = frameTimes(duration, fps);
@@ -1374,15 +1388,16 @@ export function bakeClip30fps(
     if (bone.name !== boneName) throw new Error(`Bone key "${boneName}" must match the bone's name`);
   }
 
-  const poses = times.slice(0, -1).map((time) => {
-    const pose = evalPose(time / duration);
+  const samplePose = (u: number) => {
+    const pose = evalPose(u);
     return {
       rootOffset: pose.rootOffset && readTriplet(pose.rootOffset, 'rootOffset'),
       rotations: copyPoseChannels(pose.rotations, bones, 'rotation'),
       scales: copyPoseChannels(pose.scales, bones, 'scale'),
     };
-  });
-  poses.push(poses[0]);
+  };
+  const poses = times.slice(0, -1).map((time) => samplePose(time / duration));
+  poses.push(loop ? poses[0] : samplePose(1));
 
   const tracks: THREE.KeyframeTrack[] = [];
   if (poses.some((pose) => pose.rootOffset)) {

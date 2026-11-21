@@ -2,13 +2,15 @@ import type * as THREE from 'three';
 import type { countScene } from '../asset-builder';
 import type { assetFingerprint } from '../../src/fingerprint';
 
-export type StudioView = '34-front' | '34-back';
+export type StudioView = '34-front' | '34-back' | 'front' | 'side' | 'back' | 'top';
+export type StudioBackground = 'dark' | 'light';
 export type StudioConfig = {
   module: string;
   builder?: string;
   params: Record<string, unknown>;
   margin: number;
   frontSide: 'left' | 'right';
+  background: StudioBackground;
 };
 
 export type StudioVfxContext = {
@@ -27,10 +29,12 @@ export type StudioFrame = {
   clip?: string;
   time?: number;
   vfx?: boolean;
+  background?: StudioBackground;
   label?: string;
 };
 export type StudioFrameEvidence = StudioPose & {
   view: StudioView;
+  background: StudioBackground;
   vfx: 'off' | 'visible' | 'unavailable' | 'no-visible-change';
 };
 

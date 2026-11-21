@@ -38,7 +38,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 | A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts`, `scripts/export-rigged-glb.ts` |
 | Is it too heavy, platform budget, LOD `detail` (§17) | `references/budget.md` | `scripts/mesh-stats.ts`, `src/lod.ts` |
 | Rig, animation clips, drift, expressions (§18) | `references/rig-check.md` | `scripts/rig-check.ts` |
-| Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html) |
+| Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html), `scripts/pack-studio.ts`, `scripts/capture-studio.ts` |
 | Complete small example | `references/examples.md` | |
 | Before saying an asset is done: QA gates, review image (§13) | `references/qa-gates.md` | `scripts/qa-asset.ts` |
 

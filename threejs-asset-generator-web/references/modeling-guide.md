@@ -47,7 +47,7 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 | A `.glb` file of the asset (§16) | `references/glb-export.md` | `scripts/export-glb.ts`, `scripts/export-rigged-glb.ts` |
 | Is it too heavy, platform budget, LOD `detail` (§17) | `references/budget.md` | `scripts/mesh-stats.ts`, `src/lod.ts` |
 | Rig, animation clips, drift, expressions (§18) | `references/rig-check.md` | `scripts/rig-check.ts` |
-| Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html) |
+| Fast GLB viewer or Full Preview studio | `references/studio-preview.md` | [Fast Preview HTML](assets/fast-preview.html), `scripts/pack-studio.ts`, `scripts/capture-studio.ts` |
 | Complete small example | `references/examples.md` | |
 | Before saying an asset is done: QA gates, review image (§13) | `references/qa-gates.md` | `scripts/qa-asset.ts` |
 
@@ -369,6 +369,7 @@ Code: `src/organic.ts`. API:
 - `export const norm = (a: V3): V3`
 - `export function sampleSpline(pts: V3[], perSegment = 4): V3[]`
 - `export function tubeTris(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): Tris`
+- `export function tubeTrisWithT(path: V3[], radius: number[] | ((t: number) => number), sides = 6, caps = true, shape?: (angle: number, t: number) => number, upHint?: V3): { tris: Tris; vertexT: number[] }`
 - `export const spikeTris = (base: V3, dir: V3, length: number, radius: number, sides = 4): Tris`
 - `export function fanTris(apex: V3, rim: V3[]): Tris`
 - `export function planarBladeTris(base: V3, mid: V3, tip: V3, halfThick: number, chordBase: number, chordMid: number, planeNormal?: V3): Tris`
@@ -925,8 +926,8 @@ Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x 
 For a dragon, snake, fish, or tentacle, author the bind pose with a tail extending along local `-Z` for a creature facing `+Z`. Put the curl into the clips. If the reference requires a curled bind pose, use local X pitch in the clip to straighten the chain toward `-Z` before Y yaw swings it toward `±X`. With the default `YXZ` order and zero Z roll, pitch is applied before yaw. An initially upright `+Y` segment needs `-π/2` pitch to point to `-Z`. Do not use yaw alone on an upright tail. Scrub the clip and check the tip moves to both sides.
 
 - `buildBoneHierarchy(specs)` returns `rootBone`, `bones` by name, and `boneOrder` in input order. Each spec has `name`, optional `parent`, and `worldPos` in asset space. List a single root and put each parent before its children. Use `boneOrder` to construct the `THREE.Skeleton`.
-- `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings. Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
-- `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder })` defaults to 30 fps and `YXZ`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. The last key uses the first pose. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
+- `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings (for pure kernel tubes built with `tubeTrisWithT` in `src/organic.ts`, use its returned `{ tris, vertexT }` directly instead of guessing nearest bones in Euclidean space). Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
+- `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder, loop })` defaults to 30 fps, `YXZ`, and `loop = true`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` (and `u = 1` when `loop: false` for one-shot or chained clips) and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. Looping clips reuse the first pose at the last key; pass `loop: false` so `evalPose(1)` authors the final key. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
 - `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata`. Clips can also come from `root.userData.animations` or `root.animations`. Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
 
 Build, bind, ground, and extract a simple tail. This tube uses `getPointAt()` so its ring indices give the authored arc-length parameters. Save the example alongside `src/skinnedRig.ts` to run it.

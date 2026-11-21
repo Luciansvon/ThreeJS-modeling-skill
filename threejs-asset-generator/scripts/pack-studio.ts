@@ -4,9 +4,9 @@ import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { emit } from './result';
-import type { StudioConfig } from './studio/types';
+import type { StudioBackground, StudioConfig } from './studio/types';
 
-const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] --out index.html';
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] --out index.html';
 const harness = fileURLToPath(new URL('../', import.meta.url));
 const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
 
@@ -14,7 +14,7 @@ async function main() {
   const { values } = parseArgs({ options: {
     module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
     out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
-    margin: { type: 'string' }, 'front-side': { type: 'string' },
+    margin: { type: 'string' }, 'front-side': { type: 'string' }, background: { type: 'string' },
   } });
   if (!values.module || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
@@ -31,12 +31,14 @@ async function main() {
   if (!Number.isFinite(margin) || margin < 1) throw new Error('--margin must be a finite number at least 1');
   const frontSide = values['front-side'] ?? 'left';
   if (frontSide !== 'left' && frontSide !== 'right') throw new Error('--front-side must be left or right');
+  const background = (values.background ?? 'dark') as StudioBackground;
+  if (background !== 'dark' && background !== 'light') throw new Error('--background must be dark or light');
 
   const modulePath = resolve(values.module);
   const vfxPath = values.vfx && resolve(values.vfx);
   const out = resolve(values.out);
   const config: StudioConfig = {
-    module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide,
+    module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide, background,
   };
   const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
   const configJson = JSON.stringify(config);
@@ -89,7 +91,7 @@ async function main() {
   console.log(`UNVERIFIED: ${unverified[0]}`);
   return emit({
     tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
-    builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide,
+    builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide, background,
     unverified,
   });
 }

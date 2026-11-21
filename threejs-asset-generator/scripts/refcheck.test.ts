@@ -92,11 +92,23 @@ const angledRef: RefData = {
   const sweep = compareToRef(angledAsset, angledRef);
   assert.deepEqual(sweep.angles, { '34': frontCamera, '34_back': rearCamera });
   assert.ok(sweep.gates.every((gate) => gate.pass), JSON.stringify(sweep.gates));
-  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]/);
+  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]; canonical IoU 0\.\d{2}/);
   assert.match(sweep.gates[3].value, /reference mirrored: flipH/);
   assert.deepEqual(sweep.diffs['34'], diffRGBA(frontAngle.mask, frontAngle.mask));
   assert.deepEqual(sweep.diffs['34_back'], diffRGBA(rearAngle.mask, rearAngle.mask));
   assert.deepEqual(angledAsset, before, 'compare must leave the triangles intact');
+}
+
+// Report "passed via angle sweep" when canonical IoU is below threshold and only the swept angle clears it.
+{
+  const asymmetric = [...box(0, 0.5, 0, 0.3, 1.0, 0.3), ...box(-1.6, 0.2, 2.0, 0.25, 0.25, 1.8)];
+  const shiftedCam = { azimuthDeg: 50, elevationDeg: 10, azimuthOffsetDeg: 12, elevationOffsetDeg: -6 };
+  const shifted = silhouette(asymmetric, '34', 64, shiftedCam);
+  const canon = bestIoU(silhouette(asymmetric, '34').mask, shifted.mask, '34').iou;
+  assert.ok(canon < THRESH.iou34, `expected canonical IoU < ${THRESH.iou34}, got ${canon}`);
+  const swept = compareToRef(asymmetric, { views: { '34': { w: 64, h: 64, data: maskToB64(shifted.mask), aspect: shifted.aspect } }, palette: [] });
+  assert.ok(swept.gates[1].pass);
+  assert.match(swept.gates[1].value, new RegExp(`canonical IoU ${canon.toFixed(2)}, passed via angle sweep`));
 }
 
 // A perfect mask match can miss the measured aspect. Prefer the best overlap within tolerance.

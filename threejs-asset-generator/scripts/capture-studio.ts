@@ -6,15 +6,25 @@ import { parseArgs } from 'node:util';
 import type { Browser, Page } from 'playwright-core';
 import { decodePngRgba, encodePngRgba } from './png';
 import { emit } from './result';
-import type { StudioFrame, StudioFrameEvidence, StudioInfo } from './studio/types';
+import type { StudioBackground, StudioFrame, StudioFrameEvidence, StudioInfo, StudioView } from './studio/types';
 
-const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--action Clip --peak seconds] [--vfx] [--browser executable]';
+const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--motion-view view] [--action Clip --peak seconds] [--action-view view] [--background dark|light] [--vfx] [--browser executable]';
 const tool = 'capture-studio';
 const viewport = { width: 960, height: 600 };
+const validViews = new Set<StudioView>(['34-front', '34-back', 'front', 'side', 'back', 'top']);
 type Issue = { kind: string; message: string; source?: string };
 type MissingTile = { label: string; reason: string; status: 'UNVERIFIED' | 'NOT_APPLICABLE' };
 type Tile = { label: string; status: 'CAPTURED'; evidence: StudioFrameEvidence } | (MissingTile & { evidence: null });
 type PlannedTile = { label: string; frame: StudioFrame } | MissingTile;
+type PlanOptions = {
+  locomotion?: string;
+  action?: string;
+  peak?: number;
+  vfx?: boolean;
+  motionView: StudioView;
+  actionView: StudioView;
+  background?: StudioBackground;
+};
 
 async function installedBrowsers(explicit?: string) {
   const installDirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA];
@@ -38,7 +48,7 @@ async function installedBrowsers(explicit?: string) {
   return found.filter((path): path is string => path !== null);
 }
 
-function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?: number, vfx = false): PlannedTile[] {
+function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, motionView, actionView, background }: PlanOptions): PlannedTile[] {
   const hasAnimations = info.clips.some((clip) => clip.duration > 0 && clip.tracks > 0);
   const findClip = (name: string | undefined) => {
     const matches = info.clips.filter((clip) => clip.name === name);
@@ -53,8 +63,9 @@ function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?
   const missing = (name: string | undefined, option: string) => name === undefined
     ? `Select an exact animated clip with ${option}.`
     : `No unique, positive-duration animated clip named “${name}”.`;
+  const withBg = (frame: StudioFrame): StudioFrame => (background ? { ...frame, background } : frame);
   let midway: PlannedTile;
-  if (walk) midway = { label: 'Mid locomotion', frame: { view: '34-front', clip: walk.name, time: walk.duration / 2 } };
+  if (walk) midway = { label: 'Mid locomotion', frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2 }) };
   else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
   else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
   let actionTile: PlannedTile;
@@ -62,10 +73,10 @@ function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?
   else if (!attack) actionTile = unverified('Action peak', missing(action, '--action'));
   else if (peak === undefined || peak > attack.duration) {
     actionTile = unverified('Action peak', `Set --peak to the authored peak time within 0–${attack.duration} seconds.`);
-  } else actionTile = { label: 'Action peak', frame: { view: '34-front', clip: attack.name, time: peak, vfx } };
+  } else actionTile = { label: 'Action peak', frame: withBg({ view: actionView, clip: attack.name, time: peak, vfx }) };
   return [
-    { label: '3/4 front', frame: { view: '34-front' } },
-    { label: '3/4 back', frame: { view: '34-back' } },
+    { label: '3/4 front', frame: withBg({ view: '34-front' }) },
+    { label: '3/4 back', frame: withBg({ view: '34-back' }) },
     midway, actionTile,
   ];
 }
@@ -107,7 +118,8 @@ const messageOf = (error: unknown) => error instanceof Error ? error.message : S
 async function main() {
   const { values } = parseArgs({ options: {
     studio: { type: 'string' }, out: { type: 'string' }, locomotion: { type: 'string' },
-    action: { type: 'string' }, peak: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
+    'motion-view': { type: 'string' }, action: { type: 'string' }, 'action-view': { type: 'string' },
+    peak: { type: 'string' }, background: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
   } });
   if (!values.studio || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.png') throw new Error('--out must end in .png');
@@ -116,6 +128,14 @@ async function main() {
   const peak = values.peak === undefined ? undefined : Number(values.peak);
   if (peak !== undefined && (!values.peak?.trim() || !Number.isFinite(peak) || peak < 0)) {
     throw new Error('--peak must be a finite non-negative time in seconds');
+  }
+  const motionView = (values['motion-view'] ?? '34-front') as StudioView;
+  if (!validViews.has(motionView)) throw new Error('--motion-view must be one of 34-front, 34-back, front, side, back, top');
+  const actionView = (values['action-view'] ?? '34-front') as StudioView;
+  if (!validViews.has(actionView)) throw new Error('--action-view must be one of 34-front, 34-back, front, side, back, top');
+  const background = values.background as StudioBackground | undefined;
+  if (background !== undefined && background !== 'dark' && background !== 'light') {
+    throw new Error('--background must be dark or light');
   }
 
   const errors: Issue[] = [], warnings: Issue[] = [], launchErrors: Issue[] = [];
@@ -128,7 +148,7 @@ async function main() {
     if (written) console.log(`Wrote ${out} (${written} bytes, ${viewport.width * 2} × ${viewport.height * 2})`);
     return emit({
       tool, ok: status === 'PASS', status, studio, out: written ? out : null, bytes: written ?? 0,
-      browser: browserPath, info, tiles, errors, warnings, launchErrors, unverified,
+      browser: browserPath, motionView, actionView, background: background ?? null, info, tiles, errors, warnings, launchErrors, unverified,
     });
   }
   function addIssue(list: Issue[], issue: Issue) {
@@ -209,7 +229,7 @@ async function main() {
       return;
     }
 
-    const plan = planTiles(info, values.locomotion, values.action, peak, values.vfx);
+    const plan = planTiles(info, { locomotion: values.locomotion, action: values.action, peak, vfx: values.vfx, motionView, actionView, background });
     const frames: Buffer[] = [];
     let fallback: Page | undefined;
     for (const tile of plan) {

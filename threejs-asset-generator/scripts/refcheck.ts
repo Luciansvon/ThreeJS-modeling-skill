@@ -170,13 +170,14 @@ function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: num
     const aspectError = Math.abs(aspect / referenceAspect - 1);
     return { mask, aspect, aspectError, aspectPass: aspectError <= aspectLimit, match: bestIoU(mask, ref, view), angles };
   };
-  if (view !== '34' && view !== '34_back') return project();
+  if (view !== '34' && view !== '34_back') return { ...project(), canonicalIoU: undefined as number | undefined };
 
   const canonical = CANONICAL_ANGLES[view];
-  let winner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  const canonicalWinner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  let winner = canonicalWinner;
   for (const azimuthOffsetDeg of AZIMUTH_OFFSETS) {
     for (const elevationOffsetDeg of ELEVATION_OFFSETS) {
-      if (winner.aspectPass && winner.match.iou === 1) return winner;
+      if (winner.aspectPass && winner.match.iou === 1) return { ...winner, canonicalIoU: canonicalWinner.match.iou };
       if (azimuthOffsetDeg === 0 && elevationOffsetDeg === 0) continue;
       const candidate = project({
         azimuthDeg: canonical.azimuthDeg + azimuthOffsetDeg,
@@ -190,7 +191,7 @@ function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: num
       if (better) winner = candidate;
     }
   }
-  return winner;
+  return { ...winner, canonicalIoU: canonicalWinner.match.iou as number | undefined };
 }
 /** RGBA picture: reference only = red, model only = blue, both = light grey, empty = white. Write it as PNG and look at it. */
 export function diffRGBA(model: Mask, ref: Mask) {
@@ -236,11 +237,15 @@ export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = []
     const angled = view === '34' || view === '34_back';
     const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;
     const iouLimit = angled ? (th.iou34 ?? 0.70) : th.iou;
-    const { mask, aspect, aspectError, aspectPass, match, angles: camera } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
+    const { mask, aspect, aspectError, aspectPass, match, angles: camera, canonicalIoU } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
     let cameraText = '';
     if (camera) {
       angles[view] = camera;
-      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}])`;
+      let sweepNote = '';
+      if ((camera.azimuthOffsetDeg !== 0 || camera.elevationOffsetDeg !== 0) && canonicalIoU !== undefined) {
+        sweepNote = `; canonical IoU ${canonicalIoU.toFixed(2)}${canonicalIoU < iouLimit && match.iou >= iouLimit ? ', passed via angle sweep' : ''}`;
+      }
+      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}]${sweepNote})`;
     }
     gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(aspectError * 100).toFixed(0)}% off)`, pass: aspectPass, hint: 'fix overall proportions before details' });
     const mirrored = match.flip !== 'none' ? ` (reference mirrored: ${match.flip})` : '';

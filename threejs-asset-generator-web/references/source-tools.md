@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.0",
+  "version": "4.3.1",
   "private": true,
   "type": "module",
   "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
@@ -250,15 +250,25 @@ import { parseArgs } from 'node:util';
 import type { Browser, Page } from 'playwright-core';
 import { decodePngRgba, encodePngRgba } from './png';
 import { emit } from './result';
-import type { StudioFrame, StudioFrameEvidence, StudioInfo } from './studio/types';
+import type { StudioBackground, StudioFrame, StudioFrameEvidence, StudioInfo, StudioView } from './studio/types';
 
-const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--action Clip --peak seconds] [--vfx] [--browser executable]';
+const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--motion-view view] [--action Clip --peak seconds] [--action-view view] [--background dark|light] [--vfx] [--browser executable]';
 const tool = 'capture-studio';
 const viewport = { width: 960, height: 600 };
+const validViews = new Set<StudioView>(['34-front', '34-back', 'front', 'side', 'back', 'top']);
 type Issue = { kind: string; message: string; source?: string };
 type MissingTile = { label: string; reason: string; status: 'UNVERIFIED' | 'NOT_APPLICABLE' };
 type Tile = { label: string; status: 'CAPTURED'; evidence: StudioFrameEvidence } | (MissingTile & { evidence: null });
 type PlannedTile = { label: string; frame: StudioFrame } | MissingTile;
+type PlanOptions = {
+  locomotion?: string;
+  action?: string;
+  peak?: number;
+  vfx?: boolean;
+  motionView: StudioView;
+  actionView: StudioView;
+  background?: StudioBackground;
+};
 
 async function installedBrowsers(explicit?: string) {
   const installDirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA];
@@ -282,7 +292,7 @@ async function installedBrowsers(explicit?: string) {
   return found.filter((path): path is string => path !== null);
 }
 
-function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?: number, vfx = false): PlannedTile[] {
+function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, motionView, actionView, background }: PlanOptions): PlannedTile[] {
   const hasAnimations = info.clips.some((clip) => clip.duration > 0 && clip.tracks > 0);
   const findClip = (name: string | undefined) => {
     const matches = info.clips.filter((clip) => clip.name === name);
@@ -297,8 +307,9 @@ function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?
   const missing = (name: string | undefined, option: string) => name === undefined
     ? `Select an exact animated clip with ${option}.`
     : `No unique, positive-duration animated clip named “${name}”.`;
+  const withBg = (frame: StudioFrame): StudioFrame => (background ? { ...frame, background } : frame);
   let midway: PlannedTile;
-  if (walk) midway = { label: 'Mid locomotion', frame: { view: '34-front', clip: walk.name, time: walk.duration / 2 } };
+  if (walk) midway = { label: 'Mid locomotion', frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2 }) };
   else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
   else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
   let actionTile: PlannedTile;
@@ -306,10 +317,10 @@ function planTiles(info: StudioInfo, locomotion?: string, action?: string, peak?
   else if (!attack) actionTile = unverified('Action peak', missing(action, '--action'));
   else if (peak === undefined || peak > attack.duration) {
     actionTile = unverified('Action peak', `Set --peak to the authored peak time within 0–${attack.duration} seconds.`);
-  } else actionTile = { label: 'Action peak', frame: { view: '34-front', clip: attack.name, time: peak, vfx } };
+  } else actionTile = { label: 'Action peak', frame: withBg({ view: actionView, clip: attack.name, time: peak, vfx }) };
   return [
-    { label: '3/4 front', frame: { view: '34-front' } },
-    { label: '3/4 back', frame: { view: '34-back' } },
+    { label: '3/4 front', frame: withBg({ view: '34-front' }) },
+    { label: '3/4 back', frame: withBg({ view: '34-back' }) },
     midway, actionTile,
   ];
 }
@@ -351,7 +362,8 @@ const messageOf = (error: unknown) => error instanceof Error ? error.message : S
 async function main() {
   const { values } = parseArgs({ options: {
     studio: { type: 'string' }, out: { type: 'string' }, locomotion: { type: 'string' },
-    action: { type: 'string' }, peak: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
+    'motion-view': { type: 'string' }, action: { type: 'string' }, 'action-view': { type: 'string' },
+    peak: { type: 'string' }, background: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
   } });
   if (!values.studio || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.png') throw new Error('--out must end in .png');
@@ -360,6 +372,14 @@ async function main() {
   const peak = values.peak === undefined ? undefined : Number(values.peak);
   if (peak !== undefined && (!values.peak?.trim() || !Number.isFinite(peak) || peak < 0)) {
     throw new Error('--peak must be a finite non-negative time in seconds');
+  }
+  const motionView = (values['motion-view'] ?? '34-front') as StudioView;
+  if (!validViews.has(motionView)) throw new Error('--motion-view must be one of 34-front, 34-back, front, side, back, top');
+  const actionView = (values['action-view'] ?? '34-front') as StudioView;
+  if (!validViews.has(actionView)) throw new Error('--action-view must be one of 34-front, 34-back, front, side, back, top');
+  const background = values.background as StudioBackground | undefined;
+  if (background !== undefined && background !== 'dark' && background !== 'light') {
+    throw new Error('--background must be dark or light');
   }
 
   const errors: Issue[] = [], warnings: Issue[] = [], launchErrors: Issue[] = [];
@@ -372,7 +392,7 @@ async function main() {
     if (written) console.log(`Wrote ${out} (${written} bytes, ${viewport.width * 2} × ${viewport.height * 2})`);
     return emit({
       tool, ok: status === 'PASS', status, studio, out: written ? out : null, bytes: written ?? 0,
-      browser: browserPath, info, tiles, errors, warnings, launchErrors, unverified,
+      browser: browserPath, motionView, actionView, background: background ?? null, info, tiles, errors, warnings, launchErrors, unverified,
     });
   }
   function addIssue(list: Issue[], issue: Issue) {
@@ -453,7 +473,7 @@ async function main() {
       return;
     }
 
-    const plan = planTiles(info, values.locomotion, values.action, peak, values.vfx);
+    const plan = planTiles(info, { locomotion: values.locomotion, action: values.action, peak, vfx: values.vfx, motionView, actionView, background });
     const frames: Buffer[] = [];
     let fallback: Page | undefined;
     for (const tile of plan) {
@@ -953,9 +973,9 @@ import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { emit } from './result';
-import type { StudioConfig } from './studio/types';
+import type { StudioBackground, StudioConfig } from './studio/types';
 
-const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] --out index.html';
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] --out index.html';
 const harness = fileURLToPath(new URL('../', import.meta.url));
 const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
 
@@ -963,7 +983,7 @@ async function main() {
   const { values } = parseArgs({ options: {
     module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
     out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
-    margin: { type: 'string' }, 'front-side': { type: 'string' },
+    margin: { type: 'string' }, 'front-side': { type: 'string' }, background: { type: 'string' },
   } });
   if (!values.module || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
@@ -980,12 +1000,14 @@ async function main() {
   if (!Number.isFinite(margin) || margin < 1) throw new Error('--margin must be a finite number at least 1');
   const frontSide = values['front-side'] ?? 'left';
   if (frontSide !== 'left' && frontSide !== 'right') throw new Error('--front-side must be left or right');
+  const background = (values.background ?? 'dark') as StudioBackground;
+  if (background !== 'dark' && background !== 'light') throw new Error('--background must be dark or light');
 
   const modulePath = resolve(values.module);
   const vfxPath = values.vfx && resolve(values.vfx);
   const out = resolve(values.out);
   const config: StudioConfig = {
-    module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide,
+    module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide, background,
   };
   const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
   const configJson = JSON.stringify(config);
@@ -1038,7 +1060,7 @@ async function main() {
   console.log(`UNVERIFIED: ${unverified[0]}`);
   return emit({
     tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
-    builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide,
+    builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide, background,
     unverified,
   });
 }
@@ -1755,13 +1777,14 @@ function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: num
     const aspectError = Math.abs(aspect / referenceAspect - 1);
     return { mask, aspect, aspectError, aspectPass: aspectError <= aspectLimit, match: bestIoU(mask, ref, view), angles };
   };
-  if (view !== '34' && view !== '34_back') return project();
+  if (view !== '34' && view !== '34_back') return { ...project(), canonicalIoU: undefined as number | undefined };
 
   const canonical = CANONICAL_ANGLES[view];
-  let winner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  const canonicalWinner = project({ ...canonical, azimuthOffsetDeg: 0, elevationOffsetDeg: 0 });
+  let winner = canonicalWinner;
   for (const azimuthOffsetDeg of AZIMUTH_OFFSETS) {
     for (const elevationOffsetDeg of ELEVATION_OFFSETS) {
-      if (winner.aspectPass && winner.match.iou === 1) return winner;
+      if (winner.aspectPass && winner.match.iou === 1) return { ...winner, canonicalIoU: canonicalWinner.match.iou };
       if (azimuthOffsetDeg === 0 && elevationOffsetDeg === 0) continue;
       const candidate = project({
         azimuthDeg: canonical.azimuthDeg + azimuthOffsetDeg,
@@ -1775,7 +1798,7 @@ function matchSilhouette(tris: Tris, view: View, ref: Mask, referenceAspect: num
       if (better) winner = candidate;
     }
   }
-  return winner;
+  return { ...winner, canonicalIoU: canonicalWinner.match.iou as number | undefined };
 }
 /** RGBA picture: reference only = red, model only = blue, both = light grey, empty = white. Write it as PNG and look at it. */
 export function diffRGBA(model: Mask, ref: Mask) {
@@ -1821,11 +1844,15 @@ export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = []
     const angled = view === '34' || view === '34_back';
     const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;
     const iouLimit = angled ? (th.iou34 ?? 0.70) : th.iou;
-    const { mask, aspect, aspectError, aspectPass, match, angles: camera } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
+    const { mask, aspect, aspectError, aspectPass, match, angles: camera, canonicalIoU } = matchSilhouette(tris, view, maskFromB64(r.data), r.aspect, aspectLimit);
     let cameraText = '';
     if (camera) {
       angles[view] = camera;
-      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}])`;
+      let sweepNote = '';
+      if ((camera.azimuthOffsetDeg !== 0 || camera.elevationOffsetDeg !== 0) && canonicalIoU !== undefined) {
+        sweepNote = `; canonical IoU ${canonicalIoU.toFixed(2)}${canonicalIoU < iouLimit && match.iou >= iouLimit ? ', passed via angle sweep' : ''}`;
+      }
+      cameraText = ` (3/4 threshold ${iouLimit.toFixed(2)}; azimuth ${camera.azimuthDeg}° [${formatOffset(camera.azimuthOffsetDeg)}], elevation ${camera.elevationDeg}° [${formatOffset(camera.elevationOffsetDeg)}]${sweepNote})`;
     }
     gates.push({ gate: `G2 ${view} aspect`, value: `${aspect.toFixed(2)} vs ${r.aspect.toFixed(2)} (${(aspectError * 100).toFixed(0)}% off)`, pass: aspectPass, hint: 'fix overall proportions before details' });
     const mirrored = match.flip !== 'none' ? ` (reference mirrored: ${match.flip})` : '';
@@ -2332,32 +2359,64 @@ export function boundsRecord(box: THREE.Box3) {
   return { min: box.min.toArray(), max: box.max.toArray() };
 }
 
+export function collectPoseVertices(root: THREE.Object3D, maxPerMesh = 1500): THREE.Vector3[] {
+  root.updateMatrixWorld(true);
+  const points: THREE.Vector3[] = [];
+  root.traverseVisible((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry?.hasAttribute('position')) return;
+    const total = mesh.geometry.getAttribute('position').count;
+    const step = Math.max(1, Math.ceil(total / maxPerMesh));
+    for (let i = 0; i < total; i += step) {
+      points.push(mesh.getVertexPosition(i, new THREE.Vector3()).applyMatrix4(mesh.matrixWorld));
+    }
+  });
+  return points;
+}
+
+function viewDirection(view: StudioView, frontSide: StudioConfig['frontSide']): THREE.Vector3 {
+  const side = frontSide === 'left' ? 1 : -1;
+  switch (view) {
+    case '34-front': return new THREE.Vector3(side, 0.65, 1.35).normalize();
+    case '34-back': return new THREE.Vector3(-side, 0.65, -1.35).normalize();
+    case 'front': return new THREE.Vector3(0, 0.20, 1).normalize();
+    case 'side': return new THREE.Vector3(side, 0.20, 0).normalize();
+    case 'back': return new THREE.Vector3(0, 0.20, -1).normalize();
+    case 'top': return new THREE.Vector3(0, 1, 0.001).normalize();
+  }
+}
+
+function boxCorners(bounds: THREE.Box3): THREE.Vector3[] {
+  const corners: THREE.Vector3[] = [];
+  for (const x of [bounds.min.x, bounds.max.x])
+    for (const y of [bounds.min.y, bounds.max.y])
+      for (const z of [bounds.min.z, bounds.max.z])
+        corners.push(new THREE.Vector3(x, y, z));
+  return corners;
+}
+
 export function frameCamera(
   camera: THREE.PerspectiveCamera, controls: OrbitControls,
   bounds: THREE.Box3, view: StudioView, config: StudioConfig,
+  samplePoints?: readonly THREE.Vector3[],
 ) {
   const center = bounds.getCenter(new THREE.Vector3());
   const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 0.001);
-  const side = config.frontSide === 'left' ? 1 : -1;
-  const front = view === '34-front';
-  const direction = new THREE.Vector3(front ? side : -side, 0.65, front ? 1.35 : -1.35).normalize();
+  const direction = viewDirection(view, config.frontSide);
   camera.position.copy(center).addScaledVector(direction, radius);
   camera.lookAt(center);
   const inverseRotation = camera.quaternion.clone().invert();
   const tanY = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const tanX = tanY * camera.aspect;
 
-  // Project all 8 world bounds corners into camera space. Fit inside the canvas, below and above the HUD.
-  const corner = new THREE.Vector3();
+  // Project actual posed vertices (or box corners as fallback) so tight silhouettes fill the stage cleanly.
+  const points = samplePoints?.length ? samplePoints : boxCorners(bounds);
+  const projected = new THREE.Vector3();
   let distance = radius * 0.1;
-  for (const x of [bounds.min.x, bounds.max.x]) {
-    for (const y of [bounds.min.y, bounds.max.y]) {
-      for (const z of [bounds.min.z, bounds.max.z]) {
-        corner.set(x, y, z).sub(center).applyQuaternion(inverseRotation);
-        const inset = config.margin * Math.max(Math.abs(corner.x) / tanX, Math.abs(corner.y) / tanY);
-        distance = Math.max(distance, corner.z + Math.max(inset, radius * 0.05));
-      }
-    }
+  for (const point of points) {
+    projected.copy(point).sub(center).applyQuaternion(inverseRotation);
+    const inset = config.margin * Math.max(Math.abs(projected.x) / tanX, Math.abs(projected.y) / tanY);
+    distance = Math.max(distance, projected.z + Math.max(inset, radius * 0.05));
   }
 
   camera.near = radius / 1000;
@@ -2434,8 +2493,8 @@ export function frameCamera(
     }
     footer { border-top: 1px solid #314154; }
     .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-    .views, .clip-controls, label { display: flex; align-items: center; gap: 8px; }
-    .clip-controls { flex-wrap: wrap; min-width: 0; }
+    .views, .clip-controls, .utility-controls, label { display: flex; align-items: center; gap: 8px; }
+    .views, .clip-controls, .utility-controls { flex-wrap: wrap; min-width: 0; }
     select, button {
       min-height: 34px;
       border: 1px solid #52637b;
@@ -2450,7 +2509,9 @@ export function frameCamera(
     button[aria-pressed="true"] { background: #244766; border-color: #8acbff; }
     button:disabled, select:disabled, input:disabled { opacity: .58; }
     #play { min-width: 62px; }
-    #time { min-width: 104px; font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #time, #glb-status { font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #time { min-width: 104px; }
+    #glb-status { font-size: .88rem; overflow-wrap: anywhere; }
     #scrub { width: clamp(86px, 15vw, 210px); }
     input { accent-color: #8acbff; }
     :focus-visible { outline: 2px solid #8acbff; outline-offset: 2px; }
@@ -2475,6 +2536,10 @@ export function frameCamera(
         <div class="views" role="group" aria-label="Camera presets">
           <button type="button" data-view="34-front" aria-pressed="true">3/4 front</button>
           <button type="button" data-view="34-back" aria-pressed="false">3/4 back</button>
+          <button type="button" data-view="front" aria-pressed="false">Front</button>
+          <button type="button" data-view="side" aria-pressed="false">Side</button>
+          <button type="button" data-view="back" aria-pressed="false">Back</button>
+          <button type="button" data-view="top" aria-pressed="false">Top</button>
         </div>
         <div class="clip-controls">
           <label>Clip <select id="clip"><option value="-1">Rest pose</option></select></label>
@@ -2482,7 +2547,13 @@ export function frameCamera(
           <label>Time <input id="scrub" type="range" min="0" max="0" step="any" disabled></label>
           <output id="time" for="scrub">0.00 / 0.00 s</output>
         </div>
-        <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+        <div class="utility-controls">
+          <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+          <button id="bg-toggle" type="button" aria-pressed="false">Light bg</button>
+          <button id="export-glb" type="button">Export .glb</button>
+          <button id="verify-glb" type="button">Verify GLB</button>
+          <output id="glb-status" aria-live="polite"></output>
+        </div>
       </div>
       <p class="hint">Drag to orbit · Right-drag or two fingers to pan · Scroll or pinch to zoom</p>
     </footer>
@@ -2500,18 +2571,43 @@ export function frameCamera(
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { assetFingerprint } from '../../src/fingerprint';
 import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
-import { boundsRecord, frameCamera, poseBounds, samplesPerClip } from './framing';
+import { boundsRecord, collectPoseVertices, frameCamera, poseBounds, samplesPerClip } from './framing';
 import type {
-  StudioApi, StudioConfig, StudioDiagnostic, StudioFrame, StudioFrameEvidence, StudioInfo, StudioPose,
+  StudioApi, StudioBackground, StudioConfig, StudioDiagnostic, StudioFrame, StudioFrameEvidence, StudioInfo, StudioPose,
   StudioVfx, StudioVfxFactory, StudioView,
 } from './types';
 
 type NamespaceLoader = () => Promise<Record<string, unknown>>;
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const viewNames: Record<StudioView, string> = { '34-front': '3/4 front', '34-back': '3/4 back' };
+const viewNames: Record<StudioView, string> = {
+  '34-front': '3/4 front',
+  '34-back': '3/4 back',
+  front: 'Front',
+  side: 'Side',
+  back: 'Back',
+  top: 'Top',
+};
+const backgrounds: Record<StudioBackground, string> = { dark: '#202b3a', light: '#c8ced8' };
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+function disposeObjectTree(root: THREE.Object3D) {
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    mesh.geometry?.dispose?.();
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (!material) continue;
+      for (const value of Object.values(material)) {
+        if ((value as THREE.Texture)?.isTexture) (value as THREE.Texture).dispose();
+      }
+      material.dispose?.();
+    }
+  });
+}
 
 export async function startStudio(
   config: StudioConfig, loadModule: NamespaceLoader, loadVfx?: NamespaceLoader, vfxExport?: string,
@@ -2566,22 +2662,28 @@ export async function startStudio(
     }
 
     const rest = poseBounds(root);
+    const restPoints = collectPoseVertices(root, 1500);
     const sampled = rest.clone();
+    const clipPoints: THREE.Vector3[][] = [];
     const clipBounds = clips.map((clip, index) => {
       selectClip(index);
       const count = clip.duration > 0 ? samplesPerClip : 1;
       const envelope = new THREE.Box3();
+      const points: THREE.Vector3[] = [];
       for (let sample = 0; sample < count; sample++) {
         applyPose(clip.duration * sample / (samplesPerClip - 1));
         envelope.union(poseBounds(root));
+        if (sample % 3 === 0 || sample === count - 1) points.push(...collectPoseVertices(root, 400));
       }
       sampled.union(envelope);
+      clipPoints.push(points);
       return envelope;
     });
     selectClip(-1);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#202b3a');
+    const sceneBgColor = new THREE.Color(backgrounds.dark);
+    scene.background = sceneBgColor;
     scene.add(root);
     // Three.js caches a skinned mesh's culling sphere. Its animated vertices can leave that sphere.
     root.traverse((object) => { if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false; });
@@ -2606,10 +2708,12 @@ export async function startStudio(
     key.position.set(-3, 6, 4);
     scene.add(key, new THREE.HemisphereLight('#edf6ff', '#6c7480', 1.25));
     const width = Math.max(0.001, sampled.getSize(new THREE.Vector3()).length());
-    const grid = new THREE.GridHelper(width * 1.8, 16, '#65778e', '#4a5b70');
+    const darkGrid = new THREE.GridHelper(width * 1.8, 16, '#65778e', '#4a5b70');
+    const lightGrid = new THREE.GridHelper(width * 1.8, 16, '#7d8696', '#a1a9b8');
     const center = sampled.getCenter(new THREE.Vector3());
-    grid.position.set(center.x, 0, center.z);
-    scene.add(grid);
+    darkGrid.position.set(center.x, 0, center.z);
+    lightGrid.position.set(center.x, 0, center.z);
+    scene.add(darkGrid, lightGrid);
 
     const vfxGroup = new THREE.Group();
     vfxGroup.name = '_studio_vfx';
@@ -2633,12 +2737,28 @@ export async function startStudio(
     const play = byId<HTMLButtonElement>('play');
     const scrub = byId<HTMLInputElement>('scrub');
     const effects = byId<HTMLInputElement>('effects');
+    const bgToggle = byId<HTMLButtonElement>('bg-toggle');
+    const exportGlbBtn = byId<HTMLButtonElement>('export-glb');
+    const verifyGlbBtn = byId<HTMLButtonElement>('verify-glb');
+    const glbStatus = byId<HTMLOutputElement>('glb-status');
     const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-view]'));
     const camera = new THREE.PerspectiveCamera(34);
     const controls = new OrbitControls(camera, canvas);
     const gl = renderer.getContext();
     let view: StudioView | null = '34-front';
+    let currentBackground: StudioBackground = config.background === 'light' ? 'light' : 'dark';
     let ticking = 0, lastTick = 0, fitting = false;
+
+    function applyBackground(mode: StudioBackground) {
+      currentBackground = mode;
+      sceneBgColor.set(backgrounds[mode]);
+      stage.style.background = backgrounds[mode];
+      darkGrid.visible = mode === 'dark';
+      lightGrid.visible = mode === 'light';
+      bgToggle.textContent = mode === 'dark' ? 'Light bg' : 'Dark bg';
+      bgToggle.setAttribute('aria-pressed', String(mode === 'light'));
+    }
+    applyBackground(currentBackground);
 
     function pose(): StudioPose {
       const clip = clips[activeIndex];
@@ -2696,7 +2816,9 @@ export async function startStudio(
       fitting = true;
       view = preset;
       const envelope = clipBounds[activeIndex] ?? rest;
-      frameCamera(camera, controls, envelope.clone().union(poseBounds(root)), preset, config);
+      const basePoints = clipPoints[activeIndex]?.length ? clipPoints[activeIndex] : restPoints;
+      const pts = [...basePoints, ...collectPoseVertices(root, 1500)];
+      frameCamera(camera, controls, envelope.clone().union(poseBounds(root)), preset, config, pts);
       fitting = false;
       syncCamera();
     }
@@ -2712,6 +2834,9 @@ export async function startStudio(
 
     function setFrame(frame: StudioFrame): StudioFrameEvidence {
       if (!Object.hasOwn(viewNames, frame.view)) throw new Error(`Unknown camera preset: ${frame.view}`);
+      if (frame.background !== undefined && frame.background !== 'dark' && frame.background !== 'light') {
+        throw new Error(`Unknown background mode: ${frame.background}`);
+      }
       const matches = info.clips.flatMap((clip, index) => clip.name === frame.clip ? [index] : []);
       if (frame.clip !== undefined && matches.length !== 1) throw new Error(`Clip name must match one clip: ${frame.clip}`);
       const index = matches[0] ?? -1;
@@ -2719,6 +2844,7 @@ export async function startStudio(
       const seconds = frame.time ?? 0;
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > duration) throw new Error(`Frame time must be between 0 and ${duration} seconds`);
 
+      if (frame.background !== undefined) applyBackground(frame.background);
       pause();
       selectClip(index);
       applyPose(seconds);
@@ -2740,8 +2866,78 @@ export async function startStudio(
         vfxEvidence = canvas.toDataURL() === withoutEffects ? 'no-visible-change' : 'visible';
         checkWebGL();
       }
-      return { ...pose(), view: frame.view, vfx: vfxEvidence };
+      return { ...pose(), view: frame.view, background: currentBackground, vfx: vfxEvidence };
     }
+
+    async function exportFreshGlb() {
+      const { build: freshBuild } = selectBuilder(await loadModule(), config.builder, config.module);
+      const fresh = unpackAsset(await freshBuild(structuredClone(config.params), THREE));
+      try {
+        const buffer = await new GLTFExporter().parseAsync(fresh.root, {
+          binary: true, animations: fresh.animations, onlyVisible: true,
+        }) as ArrayBuffer;
+        const before = countScene(fresh.root);
+        const clipNames = fresh.animations.map((clip) => clip.name);
+        return { buffer, before, clipNames };
+      } finally {
+        disposeObjectTree(fresh.root);
+      }
+    }
+
+    bgToggle.addEventListener('click', () => {
+      applyBackground(currentBackground === 'dark' ? 'light' : 'dark');
+      draw();
+    });
+
+    exportGlbBtn.addEventListener('click', async () => {
+      exportGlbBtn.disabled = true;
+      verifyGlbBtn.disabled = true;
+      glbStatus.textContent = 'Exporting .glb…';
+      try {
+        const { buffer } = await exportFreshGlb();
+        const fileName = `${config.module.replace(/\.[^.]+$/, '') || 'asset'}.glb`;
+        const url = URL.createObjectURL(new Blob([buffer], { type: 'model/gltf-binary' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        glbStatus.textContent = `Exported ${fileName} (${(buffer.byteLength / 1024).toFixed(1)} KB)`;
+      } catch (error) {
+        glbStatus.textContent = `Export failed: ${messageOf(error)}`;
+      } finally {
+        exportGlbBtn.disabled = false;
+        verifyGlbBtn.disabled = false;
+      }
+    });
+
+    verifyGlbBtn.addEventListener('click', async () => {
+      exportGlbBtn.disabled = true;
+      verifyGlbBtn.disabled = true;
+      glbStatus.textContent = 'Verifying GLB…';
+      try {
+        const { buffer, before, clipNames } = await exportFreshGlb();
+        const reloaded = await new GLTFLoader().parseAsync(buffer, '');
+        try {
+          const after = countScene(reloaded.scene);
+          const outClips = (reloaded.animations ?? []).map((clip) => clip.name);
+          const ok = before.tris > 0 && before.tris === after.tris
+            && before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes
+            && before.skins === after.skins && before.bones === after.bones
+            && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name);
+          glbStatus.textContent = ok
+            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips`
+            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}`;
+        } finally {
+          disposeObjectTree(reloaded.scene);
+        }
+      } catch (error) {
+        glbStatus.textContent = `Verify failed: ${messageOf(error)}`;
+      } finally {
+        exportGlbBtn.disabled = false;
+        verifyGlbBtn.disabled = false;
+      }
+    });
 
     byId('metrics').textContent = `${stats.tris.toLocaleString('en-US')} triangles · ${stats.meshes} ${stats.meshes === 1 ? 'mesh' : 'meshes'}`;
     for (const [index, clip] of clips.entries()) clipSelect.add(new Option(clip.name || '(unnamed clip)', String(index)));
@@ -2798,13 +2994,15 @@ import type * as THREE from 'three';
 import type { countScene } from '../asset-builder';
 import type { assetFingerprint } from '../../src/fingerprint';
 
-export type StudioView = '34-front' | '34-back';
+export type StudioView = '34-front' | '34-back' | 'front' | 'side' | 'back' | 'top';
+export type StudioBackground = 'dark' | 'light';
 export type StudioConfig = {
   module: string;
   builder?: string;
   params: Record<string, unknown>;
   margin: number;
   frontSide: 'left' | 'right';
+  background: StudioBackground;
 };
 
 export type StudioVfxContext = {
@@ -2823,10 +3021,12 @@ export type StudioFrame = {
   clip?: string;
   time?: number;
   vfx?: boolean;
+  background?: StudioBackground;
   label?: string;
 };
 export type StudioFrameEvidence = StudioPose & {
   view: StudioView;
+  background: StudioBackground;
   vfx: 'off' | 'visible' | 'unavailable' | 'no-visible-change';
 };
 

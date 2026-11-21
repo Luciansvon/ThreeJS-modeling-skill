@@ -139,6 +139,7 @@ export interface SkinPose {
 export interface SkinClipOptions {
   fps?: number;
   eulerOrder?: THREE.EulerOrder;
+  loop?: boolean;
 }
 
 function frameTimes(duration: number, fps: number): number[] {
@@ -171,13 +172,13 @@ function copyPoseChannels(channels: PoseChannels | undefined, bones: Bones, labe
   return values;
 }
 
-/** Bake local Euler deltas, local scales and a rest-relative root offset into a looping clip. */
+/** Bake local Euler deltas, local scales and a rest-relative root offset into a looping (or one-shot with loop: false) clip. */
 export function bakeClip30fps(
   name: string,
   duration: number,
   bones: Bones,
   evalPose: (u: number) => SkinPose,
-  { fps = defaultFps, eulerOrder = 'YXZ' }: SkinClipOptions = {},
+  { fps = defaultFps, eulerOrder = 'YXZ', loop = true }: SkinClipOptions = {},
 ) {
   if (!name.trim()) throw new Error('Expected a clip name');
   const times = frameTimes(duration, fps);
@@ -187,15 +188,16 @@ export function bakeClip30fps(
     if (bone.name !== boneName) throw new Error(`Bone key "${boneName}" must match the bone's name`);
   }
 
-  const poses = times.slice(0, -1).map((time) => {
-    const pose = evalPose(time / duration);
+  const samplePose = (u: number) => {
+    const pose = evalPose(u);
     return {
       rootOffset: pose.rootOffset && readTriplet(pose.rootOffset, 'rootOffset'),
       rotations: copyPoseChannels(pose.rotations, bones, 'rotation'),
       scales: copyPoseChannels(pose.scales, bones, 'scale'),
     };
-  });
-  poses.push(poses[0]);
+  };
+  const poses = times.slice(0, -1).map((time) => samplePose(time / duration));
+  poses.push(loop ? poses[0] : samplePose(1));
 
   const tracks: THREE.KeyframeTrack[] = [];
   if (poses.some((pose) => pose.rootOffset)) {

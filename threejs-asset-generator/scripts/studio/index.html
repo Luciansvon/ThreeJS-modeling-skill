@@ -58,8 +58,8 @@
     }
     footer { border-top: 1px solid #314154; }
     .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-    .views, .clip-controls, label { display: flex; align-items: center; gap: 8px; }
-    .clip-controls { flex-wrap: wrap; min-width: 0; }
+    .views, .clip-controls, .utility-controls, label { display: flex; align-items: center; gap: 8px; }
+    .views, .clip-controls, .utility-controls { flex-wrap: wrap; min-width: 0; }
     select, button {
       min-height: 34px;
       border: 1px solid #52637b;
@@ -74,7 +74,9 @@
     button[aria-pressed="true"] { background: #244766; border-color: #8acbff; }
     button:disabled, select:disabled, input:disabled { opacity: .58; }
     #play { min-width: 62px; }
-    #time { min-width: 104px; font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #time, #glb-status { font-variant-numeric: tabular-nums; color: #aebdd0; }
+    #time { min-width: 104px; }
+    #glb-status { font-size: .88rem; overflow-wrap: anywhere; }
     #scrub { width: clamp(86px, 15vw, 210px); }
     input { accent-color: #8acbff; }
     :focus-visible { outline: 2px solid #8acbff; outline-offset: 2px; }
@@ -99,6 +101,10 @@
         <div class="views" role="group" aria-label="Camera presets">
           <button type="button" data-view="34-front" aria-pressed="true">3/4 front</button>
           <button type="button" data-view="34-back" aria-pressed="false">3/4 back</button>
+          <button type="button" data-view="front" aria-pressed="false">Front</button>
+          <button type="button" data-view="side" aria-pressed="false">Side</button>
+          <button type="button" data-view="back" aria-pressed="false">Back</button>
+          <button type="button" data-view="top" aria-pressed="false">Top</button>
         </div>
         <div class="clip-controls">
           <label>Clip <select id="clip"><option value="-1">Rest pose</option></select></label>
@@ -106,7 +112,13 @@
           <label>Time <input id="scrub" type="range" min="0" max="0" step="any" disabled></label>
           <output id="time" for="scrub">0.00 / 0.00 s</output>
         </div>
-        <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+        <div class="utility-controls">
+          <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+          <button id="bg-toggle" type="button" aria-pressed="false">Light bg</button>
+          <button id="export-glb" type="button">Export .glb</button>
+          <button id="verify-glb" type="button">Verify GLB</button>
+          <output id="glb-status" aria-live="polite"></output>
+        </div>
       </div>
       <p class="hint">Drag to orbit · Right-drag or two fingers to pan · Scroll or pinch to zoom</p>
     </footer>

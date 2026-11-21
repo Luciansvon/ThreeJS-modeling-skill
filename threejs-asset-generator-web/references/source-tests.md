@@ -68,7 +68,7 @@ import assert from 'node:assert/strict';
 import { createPRNG } from './prng';
 import { resolveParams } from './params';
 import { signedVolumeOf, mirrorTris } from './tri';
-import { tubeTris, planarBladeTris, radialArrayTris } from './organic';
+import { tubeTris, tubeTrisWithT, planarBladeTris, radialArrayTris } from './organic';
 import { dragonParameters, buildDragonKernel } from './dragonKernel';
 
 const kernel = (o = {}) => {
@@ -96,6 +96,21 @@ const singleLeg = tubeTris([[0.3, 0.4, 0], [0.7, 0.5, 0], [0.9, 0, 0]], [0.06, 0
 const spider8 = radialArrayTris(singleLeg, 8, 1);
 assert.equal(spider8.length, singleLeg.length * 8, 'radialArrayTris duplicates triangles 8x');
 assert.ok(Math.abs(signedVolumeOf(spider8) - signedVolumeOf(singleLeg) * 8) < 1e-6, 'radialArrayTris preserves outward winding');
+
+// v4.3.1: tubeTrisWithT preserves exact curve parameter t even on folded/overlapping paths
+const foldedPath: [number, number, number][] = [[0, 0, 0], [0, 0, -1], [0, 0.5, -1], [0, 0, 0]];
+const foldedArgs = [foldedPath, [0.08, 0.08, 0.08, 0.08], 6, true] as const;
+const withT = tubeTrisWithT(...foldedArgs);
+assert.deepEqual(withT.tris, tubeTris(...foldedArgs), 'tubeTrisWithT matches tubeTris geometry');
+assert.equal(withT.vertexT.length, withT.tris.length / 3, 'vertexT has 1 entry per triangle vertex');
+assert.ok(withT.vertexT.every((t) => t >= 0 && t <= 1), 'every vertexT is normalized to [0, 1]');
+const capTriCount = 6;
+const capStartOffset = withT.vertexT.length - capTriCount * 6;
+for (let j = 0; j < capTriCount; j++) {
+  const sIdx = capStartOffset + j * 6;
+  assert.deepEqual(withT.vertexT.slice(sIdx, sIdx + 3), [0, 0, 0], 'start cap keeps t=0 even where folded end overlaps');
+  assert.deepEqual(withT.vertexT.slice(sIdx + 3, sIdx + 6), [1, 1, 1], 'end cap keeps t=1 even where folded end overlaps');
+}
 ~~~
 
 ## src/detail.pure.test.ts
@@ -588,6 +603,13 @@ function tailAsset() {
   assert.equal(times[35], Math.fround(1.15));
   const integral = bakeClip30fps('IntegralFrameCount', 0.14, bones, () => ({ rootOffset: [0, 0, 0] }), { fps: 100 });
   assert.equal(integral.tracks[0].times.length, 15); // The floating-point product is slightly above 14.
+
+  const bow = bakeClip30fps('Bow', 1, bones, (u) => ({ rotations: { tail: [u, 0, 0] } }), { loop: false });
+  const bowTrack = bow.tracks.find((track) => track.name === 'tail.quaternion')!;
+  assert.equal(bowTrack.times[bowTrack.times.length - 1], 1);
+  close(bowTrack.values[bowTrack.values.length - 4], Math.sin(0.5));
+  assert.equal(extractQaArtifacts({ root: bones.hips, bones, animations: [bow] }).rigMetadata.animations?.[0].loop, false);
+
   assert.throws(() => bakeClip30fps('Bad', 0, bones, () => ({})), /positive/);
   assert.throws(() => bakeClip30fps('Bad', 1, bones, () => ({ rotations: { unknown: [0, 0, 0] } })), /Unknown rotation bone/);
 }
@@ -1253,11 +1275,23 @@ const angledRef: RefData = {
   const sweep = compareToRef(angledAsset, angledRef);
   assert.deepEqual(sweep.angles, { '34': frontCamera, '34_back': rearCamera });
   assert.ok(sweep.gates.every((gate) => gate.pass), JSON.stringify(sweep.gates));
-  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]/);
+  assert.match(sweep.gates[1].value, /^1\.00 .+azimuth 50° \[\+12°\], elevation 10° \[-6°\]; canonical IoU 0\.\d{2}/);
   assert.match(sweep.gates[3].value, /reference mirrored: flipH/);
   assert.deepEqual(sweep.diffs['34'], diffRGBA(frontAngle.mask, frontAngle.mask));
   assert.deepEqual(sweep.diffs['34_back'], diffRGBA(rearAngle.mask, rearAngle.mask));
   assert.deepEqual(angledAsset, before, 'compare must leave the triangles intact');
+}
+
+// Report "passed via angle sweep" when canonical IoU is below threshold and only the swept angle clears it.
+{
+  const asymmetric = [...box(0, 0.5, 0, 0.3, 1.0, 0.3), ...box(-1.6, 0.2, 2.0, 0.25, 0.25, 1.8)];
+  const shiftedCam = { azimuthDeg: 50, elevationDeg: 10, azimuthOffsetDeg: 12, elevationOffsetDeg: -6 };
+  const shifted = silhouette(asymmetric, '34', 64, shiftedCam);
+  const canon = bestIoU(silhouette(asymmetric, '34').mask, shifted.mask, '34').iou;
+  assert.ok(canon < THRESH.iou34, `expected canonical IoU < ${THRESH.iou34}, got ${canon}`);
+  const swept = compareToRef(asymmetric, { views: { '34': { w: 64, h: 64, data: maskToB64(shifted.mask), aspect: shifted.aspect } }, palette: [] });
+  assert.ok(swept.gates[1].pass);
+  assert.match(swept.gates[1].value, new RegExp(`canonical IoU ${canon.toFixed(2)}, passed via angle sweep`));
 }
 
 // A perfect mask match can miss the measured aspect. Prefer the best overlap within tolerance.
@@ -1574,14 +1608,21 @@ try {
     }
   `);
   const pack = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
-    '--module', module, '--params', JSON.stringify(params), '--out', out,
+    '--module', module, '--params', JSON.stringify(params), '--background', 'light', '--out', out,
   ], { timeout: 15_000 });
   assert.equal(pack.status, 0, pack.stdout + pack.stderr);
   const packed = parseResult(pack.stdout);
   assert.equal(packed?.ok, true);
+  assert.equal(packed?.background, 'light');
   assert.deepEqual(packed?.params, params);
   const html = readFileSync(out, 'utf8');
   assert.match(html, /<canvas id="view"/);
+  for (const view of ['34-front', '34-back', 'front', 'side', 'back', 'top']) {
+    assert.match(html, new RegExp(`data-view="${view}"`));
+  }
+  assert.match(html, /id="bg-toggle"/);
+  assert.match(html, /id="export-glb"/);
+  assert.match(html, /id="verify-glb"/);
   assert.match(html, /#9012ac/);
   assert.match(html, /Three\.js license/);
   assert.equal(html.match(/<\/script\s*>/gi)?.length, 1);
@@ -1589,13 +1630,24 @@ try {
 
   const png = join(dir, 'studio-contact-sheet.png');
   const capture = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
-    '--studio', out, '--out', png, '--browser', join(dir, 'browser-does-not-exist'),
+    '--studio', out, '--out', png, '--motion-view', 'side', '--background', 'light', '--browser', join(dir, 'browser-does-not-exist'),
   ], { timeout: 15_000 });
   assert.equal(capture.status, 2, capture.stdout + capture.stderr);
   const captured = parseResult(capture.stdout);
   assert.equal(captured?.status, 'UNVERIFIED');
+  assert.equal(captured?.motionView, 'side');
+  assert.equal(captured?.background, 'light');
   assert.equal(captured?.out, null);
   assert.equal(existsSync(png), false);
+
+  const badView = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
+    '--studio', out, '--out', png, '--motion-view', 'invalid-view',
+  ], { timeout: 15_000 });
+  assert.equal(badView.status, 1);
+  const badBg = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
+    '--studio', out, '--out', png, '--background', 'neon',
+  ], { timeout: 15_000 });
+  assert.equal(badBg.status, 1);
   console.log('Studio self-contained bundle and browser-unavailable result verified.');
 } finally {
   assert.equal(dirname(dir), temp);

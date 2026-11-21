@@ -16,10 +16,10 @@ When the model is still being built or the interactive viewer is unavailable, sh
 
 ### Package one asset builder
 
-Use `pack-studio` to open a TS or JS builder in an HTML preview with three-quarter presets, orbit and pan, clip selection, playback, and scrubbing. Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
+Use `pack-studio` to open a TS or JS builder in a self-contained HTML preview with all six turnaround presets (`34-front`, `34-back`, `front`, `side`, `back`, `top`), orbit and pan, clip selection, playback, scrubbing, dark/light backdrop toggle, and built-in rest-pose `.glb` export + in-RAM round-trip verification (`GLTFExporter` -> `GLTFLoader`). Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
 
 ```bash
-npm run pack-studio -- --module ./asset.ts --export buildAsset --out ./index.html
+npm run pack-studio -- --module ./asset.ts --export buildAsset --background dark --out ./index.html
 npm run export-rigged-glb -- --module ./asset.ts --export buildAsset --out ./asset.glb
 ```
 
@@ -27,7 +27,7 @@ Pass the same `--params` JSON object to both commands for a specific seed or con
 
 In Windows PowerShell 5, use the script directly with escaped JSON quotes, for example `node --import tsx scripts/pack-studio.ts --module ./asset.ts --out ./index.html --params '{\"seed\":1}'`. Use the same quoting with `scripts/export-rigged-glb.ts` for export.
 
-Use `--front-side right` to match a reference facing screen right in the front preset. The packaged viewer reserves a separate header and control bar and frames the rest pose or selected clip using up to 25 sampled poses per clip. Increase `--margin` from its default `1.18` if the asset needs more breathing room, and inspect the exact longest pose.
+Use `--front-side right` to match a reference facing screen right in the front preset, and `--background light` when inspecting pale backgrounds by default. The packaged viewer reserves a separate header and control bar and frames the posed vertices (across rest pose and sampled animation frames) using up to 25 sampled poses per clip. Increase `--margin` from its default `1.18` if the asset needs more breathing room, and inspect the exact longest pose.
 
 ## 2. Full Preview controls
 
@@ -78,7 +78,7 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 ## 4. Export and round-trip verify
 
 - Always build a fresh, clean asset instance in rest pose before calling `GLTFExporter` (never export live gizmos, wireframe/silhouette overrides, or circular `userData`).
-- Provide an in-RAM round-trip verify button (`GLTFExporter` -> `GLTFLoader.parse`) that confirms clip count/names, pivot hierarchy, mesh count, and binary size without triggering a file download.
+- Packaged studios (`pack-studio`) include built-in `Export .glb` and `Verify GLB` buttons (`GLTFExporter` -> `GLTFLoader.parse`) that test clip count/names, bones, skins, and mesh/triangle parity in RAM without triggering a file download; custom studios should expose the same rest-pose check.
 - Export static expression PNGs separately (`512x512`) alongside a metadata JSON file compatible with `scripts/rig-check.ts` (`references/rig-check.md`).
 
 ## 5. Final visual and animation checks
@@ -92,10 +92,10 @@ When a browser tool is available, open the delivered preview for the final model
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
-For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--vfx` when that frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--motion-view side` (or `top`, `back`, `front`, `34-back`) to inspect profile motion such as swimming tails, `--action-view <view>` for action silhouettes, `--background light` when verifying light-backdrop contrast, and `--vfx` when the action frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
 
 ```bash
-npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --action LightningBurst --peak 0.53
+npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --motion-view side --action LightningBurst --peak 0.53 --background light
 ```
 
 Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.
