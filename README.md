@@ -25,37 +25,6 @@ Choose Fast Preview to orbit, pan, zoom and play or scrub clips. For preview-onl
 
 ---
 
-## Credits & Attribution
-
-This repository builds on and adapts ideas from two upstream open-source projects, plus Three.js itself. Only the actual sources used are listed below:
-
-### 1. [zinkkrysty/three-js-asset-studio](https://github.com/zinkkrysty/three-js-asset-studio)
-*Origin of the base `threejs-asset-generator` skill architecture and procedural modeling conventions (no `LICENSE` file is published in the upstream GitHub repo; described as open-source by its author).*
-
-What originated from `zinkkrysty/three-js-asset-studio` (originally `.agents/skills/threejs-asset-generator/SKILL.md` and helper utilities, later refactored and expanded in v3/v4):
-- **Skill identity & pipeline contract:** The `threejs-asset-generator` skill name and "single source of truth" contract where one generator function drives both live preview and standalone code export.
-- **Generator & parameter schema shape:** `AssetGeneratorSchema` (`id`, `name`, `category`, `description`, `parameters`, `presetConfigs`, `generate`, `generateCode`) and typed UI parameter definitions (`src/types.ts`).
-- **Seeded PRNG & watertight vertex jitter:** Mulberry32-based deterministic PRNG (`createPRNG`, `src/prng.ts` — later extended in v4 with `seed = 0` support and `.fork()`) and seam-grouped vertex displacement (`applyVertexJitter`, `src/jitter.ts`).
-- **Low-poly look & geometry rules:** `flatShading: true` material/palette rules (`references/look.md`), custom `BufferGeometry` outward CCW winding conventions, attribute matching for merging, and contoured inset overlays (`references/geometry.md`, `src/overlay.ts`).
-- **Composite assets & lifecycle conventions:** Exported sub-asset builders, fixed vs. controlled vs. PRNG placement with clearance checks (`references/composite.md`), `Y = 0` grounding and shadow flags (`references/lifecycle.md`).
-- **Standalone unminified code export pattern:** Vite `?raw` source embedding, TypeScript stripping, and zero-dependency inline helper bundling (`references/export.md`).
-
-### 2. [EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-skills) (`v1.3.2`, commit `9e7e04a`)
-*Licensed under the **MIT License** — Copyright © 2026 EL4CTEO (full license text in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)).*
-
-What was adapted from `EL4CTEO/blender-skills` (re-implemented independently in TypeScript/Node without Blender as a dependency):
-- **Compact skill layout:** Splitting the monolithic prompt into a concise router (`SKILL.md`) backed by modular `references/` guides and `src/` modules.
-- **Automated skill verification tooling:** Unified `tools/check.ts` workflow (`validate-skills.ts`, `trigger-check.ts`, `run-tests.ts`) and the structured `@@RESULT` JSON + exit-code contract (`scripts/result.ts`).
-- **Mesh QA gates & visual review:** Pure geometry QA gate checks (`scripts/qacheck.ts`, Q1–Q10), the 2x2 orthographic software preview renderer (`scripts/review.ts`, `scripts/qa-asset.ts`), and the "Done" verification rules (`references/qa-gates.md`).
-- **Platform budgets & LOD checks:** Aligned polygon, material, texture-memory, bone, draw-call, and GLB size limits per platform/kind (`scripts/budget.ts`, `scripts/mesh-stats.ts`, `references/budget.md`) plus `detail`-level LOD checks (`src/lod.ts`).
-- **GLB export verification workflow:** Pre-export QA enforcement and post-write round-trip checks (`scripts/glb.ts`, `scripts/export-glb.ts`, E1–E6, `references/glb-export.md`).
-
-### 3. [Three.js](https://threejs.org/)
-*Licensed under the **MIT License**.*
-- Target 3D runtime, geometry, material, and export APIs (`three >= r170`).
-
----
-
 ## Release history
 
 Changes and verification for v4.3 are in the [audit record](./AUDIT.md). The [v4.1 handoff](./threejs-asset-generator/HANDOFF.md) covers the earlier work below.
@@ -77,10 +46,11 @@ Changes and verification for v4.3 are in the [audit record](./AUDIT.md). The [v4
 
 ```text
 ThreeJS-modeling-skill/
-├── README.md                        # Repository overview & detailed credits
+├── README.md                        # Usage, license and upstream credits
 ├── AGENTS.md                        # Maintenance rules for both editions
 ├── AUDIT.md                         # v4.1 findings and evidence
-├── THIRD_PARTY_NOTICES.md           # Verbatim MIT License notice for EL4CTEO/blender-skills
+├── LICENSE                          # MIT license for original project work
+├── THIRD_PARTY_NOTICES.md           # Upstream attribution and license notices
 ├── .gitignore                       # Ignored dependencies and generated outputs
 ├── .gitattributes                   # Consistent LF line endings
 ├── threejs-asset-generator/         # Harness skill, references, builders and CLI
@@ -127,3 +97,15 @@ See [`references/`](./threejs-asset-generator/references/) and fixture templates
 ## Verification scope
 
 The audit records the v4.1 tests, the Web Full pack checks, and the limits of the evidence. The handoff records the harness implementation history. [Audit](./AUDIT.md), [harness handoff](./threejs-asset-generator/HANDOFF.md)
+
+## License
+
+Original work by Luciansvon in this repository is licensed under the [MIT License](./LICENSE). Third-party material remains subject to its upstream terms. [Third-party notices](./THIRD_PARTY_NOTICES.md)
+
+## Credits & Attribution
+
+| Project | Contribution |
+| --- | --- |
+| [zinkkrysty/three-js-asset-studio](https://github.com/zinkkrysty/three-js-asset-studio) | Original asset-generator skill and schema, shared preview/export builder, seeded variation, vertex jitter, and modeling conventions. |
+| [EL4CTEO/blender-skills](https://github.com/EL4CTEO/blender-skills/tree/9e7e04a) | Reference for the modular skill layout, validation tools, mesh checks, budget and LOD checks, and GLB verification. |
+| [Three.js](https://github.com/mrdoob/three.js) | 3D runtime for geometry, materials, animation, rendering, and GLB import/export. |
