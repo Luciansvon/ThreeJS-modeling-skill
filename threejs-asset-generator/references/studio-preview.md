@@ -84,11 +84,11 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 
 ## 5. Final visual and animation checks
 
-When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to a representative action frame. Use the available viewer for the requested preview mode.
+When a browser tool is available, open the delivered preview for the final model and parameters, **reopen the source reference image side-by-side** (following the polish rounds in `references/work-modes.md`), and inspect actual materials, markings, background, and movement. Check the console, play the main motion, and scrub to a representative action frame. Use the available viewer for the requested preview mode.
 
-1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
+1. **3/4 Front.** Check silhouette, facial landmarks, materials, and how the model fits around the title and controls.
 2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
-3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
+3. **Mid-movement (prefer `side` view for posture check).** Play the main movement clip, inspect its midpoint for pose, stretch, and ground clearance, and verify the creature adopts **natural locomotion posture** for its archetype (`references/rigging-biped.md` — e.g., flying snakes/dragons flatten horizontally `~~~>` rather than staying upright like a cobra; bipeds drop T-pose arms; quadrupeds break stiff parallel legs). Watch the loop transition when the clip loops.
 4. **Action and effects.** Play the action and inspect a representative frame in the delivery lighting. Use the [VFX review](#optional-vfx-references) when effects are requested.
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.

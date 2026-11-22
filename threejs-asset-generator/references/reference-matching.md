@@ -9,7 +9,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 ## 1 Intake and working views
 
 1. Open each available reference. Identify the facing direction, camera angle, pose, and requested style.
-   - **Detect T-pose / A-pose turnaround sheets:** If the reference shows outstretched horizontal arms, straight legs, a symmetric stance, and a plain background (or orthographic front/side/back views), record explicitly in `ref-spec.md` and the initial confirmation summary that the pose is for proportions and rest/bind pose only. Match silhouette checks (`ref-compare`) against the rest pose, and verify animated clips start from a natural standing pose rather than T-pose (`references/rigging-biped.md`).
+   - **Detect static reference sheet poses:** If the reference shows a neutral turnaround stance (T-pose/A-pose arms, upright cobra-like serpentine sit, stiff parallel quadruped legs, or flat-spread wings on a plain background), record explicitly in `ref-spec.md` and the initial confirmation summary that the pose is for proportions and rest/bind pose only. Match silhouette checks (`ref-compare`) against the rest pose, and verify animated clips adopt natural creature locomotion posture (`references/rigging-biped.md`) rather than locking to the reference stance.
 2. Write a short `ref-spec.md` with measurable width/height and depth/height ratios, the relative size and placement of important parts, the palette, and the features that make the subject recognizable. Note which details the brief changes and which views leave depth or construction uncertain.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. Check the masks for leaked background or missing parts and adjust `--tol` if needed. `--out refs/round-1/asset.json` puts masks beside the JSON, such as `asset-front-mask.png`. The last `@@RESULT` lists the paths.
@@ -44,9 +44,10 @@ Use a closely matched camera and pose for visual comparisons. Check head-to-body
 
 ## 4 Compare and refine
 
-1. Compare the evidence for the change. For geometry, write `tris.json` and run `npx tsx scripts/ref-compare.ts ref.json tris.json`. In a diff image, red marks missing silhouette and blue marks extra silhouette. For material or face changes, inspect matched renders or crops.
-2. Correct the most consequential mismatch. Separate changes when it helps diagnose their effect. Keep the seed and camera consistent while comparing iterations.
-3. Continue while another edit can improve the requested result. A numeric failure can coexist with usable evidence for surface work or expression. Keep the best result and report any unresolved discrepancy, including a clear visual mismatch after a numeric pass.
+1. Compare the evidence for the change. For geometry, write `tris.json` and run `npx tsx scripts/ref-compare.ts ref.json tris.json`. In a diff image, red marks missing silhouette and blue marks extra silhouette.
+2. **Reopen the source reference side-by-side:** For surface detail, colors, facial landmarks, markings, seams, VFX, and animation posture, reopen the original reference image directly alongside actual rendered studio captures (`studio-contact-sheet.png` or live preview) on every refinement pass required by the selected mode (`references/work-modes.md`). Never rely on `review.png` (arbitrary flat part colors) or text memory alone to evaluate details or movement.
+3. Correct the most consequential mismatch. Separate changes when it helps diagnose their effect. Keep the seed and camera consistent while comparing iterations.
+4. Continue while another edit can improve the requested result (or reach the minimum polish rounds for `Quality` mode). A numeric failure can coexist with usable evidence for surface work or expression. Keep the best result and report any unresolved discrepancy, including a clear visual mismatch after a numeric pass.
 
 ## 5 Getting triangles out
 

@@ -327,7 +327,7 @@ Things the gates showed on this skill's own kernels, worth knowing:
 
 Written to `--out` (default the current folder). 2 x 2 layout, one shared scale: front (top left) · side (top right, +Z faces left) · top (bottom left, +Z faces down) · 3/4 view from +X +Y +Z (bottom right). One muted colour per part; the colour legend is printed. A grey line is Y = 0 in the front and side panels. **Magenta** means a triangle faces away from the camera but is still the nearest surface: an inside-out part, a hole, or a sheet that faces away from the cameras and is missing from `--open`.
 
-Look for what numbers miss: floating or sinking against the grey line, proportions against your `ref-spec.md` or intent, a limb on the wrong side, a part that is too small to read (under about 3 px), a silhouette that is plainly not the object. The renderer is orthographic with flat Lambert light: it shows shape and winding, not materials, textures or rigging.
+Look for what numbers miss: floating or sinking against the grey line, proportions against your `ref-spec.md` or intent, a limb on the wrong side, a part that is too small to read (under about 3 px), a silhouette that is plainly not the object. Because `review.png` uses arbitrary flat Lambert colors per part, it validates **coarse shape, grounding, winding, and watertightness only**—never use it to judge real colors, surface markings, facial detail, VFX, or animation posture. Always inspect actual rendered studio captures alongside the reopened source reference for detail and motion (`references/work-modes.md`, `references/studio-preview.md`).
 
 ## The "Done" rule and report
 
@@ -354,7 +354,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 ## 1 Intake and working views
 
 1. Open each available reference. Identify the facing direction, camera angle, pose, and requested style.
-   - **Detect T-pose / A-pose turnaround sheets:** If the reference shows outstretched horizontal arms, straight legs, a symmetric stance, and a plain background (or orthographic front/side/back views), record explicitly in `ref-spec.md` and the initial confirmation summary that the pose is for proportions and rest/bind pose only. Match silhouette checks (`ref-compare`) against the rest pose, and verify animated clips start from a natural standing pose rather than T-pose (`references/rigging-biped.md`).
+   - **Detect static reference sheet poses:** If the reference shows a neutral turnaround stance (T-pose/A-pose arms, upright cobra-like serpentine sit, stiff parallel quadruped legs, or flat-spread wings on a plain background), record explicitly in `ref-spec.md` and the initial confirmation summary that the pose is for proportions and rest/bind pose only. Match silhouette checks (`ref-compare`) against the rest pose, and verify animated clips adopt natural creature locomotion posture (`references/rigging-biped.md`) rather than locking to the reference stance.
 2. Write a short `ref-spec.md` with measurable width/height and depth/height ratios, the relative size and placement of important parts, the palette, and the features that make the subject recognizable. Note which details the brief changes and which views leave depth or construction uncertain.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. Check the masks for leaked background or missing parts and adjust `--tol` if needed. `--out refs/round-1/asset.json` puts masks beside the JSON, such as `asset-front-mask.png`. The last `@@RESULT` lists the paths.
@@ -389,9 +389,10 @@ Use a closely matched camera and pose for visual comparisons. Check head-to-body
 
 ## 4 Compare and refine
 
-1. Compare the evidence for the change. For geometry, write `tris.json` and run `npx tsx scripts/ref-compare.ts ref.json tris.json`. In a diff image, red marks missing silhouette and blue marks extra silhouette. For material or face changes, inspect matched renders or crops.
-2. Correct the most consequential mismatch. Separate changes when it helps diagnose their effect. Keep the seed and camera consistent while comparing iterations.
-3. Continue while another edit can improve the requested result. A numeric failure can coexist with usable evidence for surface work or expression. Keep the best result and report any unresolved discrepancy, including a clear visual mismatch after a numeric pass.
+1. Compare the evidence for the change. For geometry, write `tris.json` and run `npx tsx scripts/ref-compare.ts ref.json tris.json`. In a diff image, red marks missing silhouette and blue marks extra silhouette.
+2. **Reopen the source reference side-by-side:** For surface detail, colors, facial landmarks, markings, seams, VFX, and animation posture, reopen the original reference image directly alongside actual rendered studio captures (`studio-contact-sheet.png` or live preview) on every refinement pass required by the selected mode (`references/work-modes.md`). Never rely on `review.png` (arbitrary flat part colors) or text memory alone to evaluate details or movement.
+3. Correct the most consequential mismatch. Separate changes when it helps diagnose their effect. Keep the seed and camera consistent while comparing iterations.
+4. Continue while another edit can improve the requested result (or reach the minimum polish rounds for `Quality` mode). A numeric failure can coexist with usable evidence for surface work or expression. Keep the best result and report any unresolved discrepancy, including a clear visual mismatch after a numeric pass.
 
 ## 5 Getting triangles out
 
@@ -608,11 +609,11 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 
 ## 5. Final visual and animation checks
 
-When a browser tool is available, open the delivered preview for the final model and parameters and inspect actual materials and background. Check the console, play the main motion, and scrub to a representative action frame. Use the available viewer for the requested preview mode.
+When a browser tool is available, open the delivered preview for the final model and parameters, **reopen the source reference image side-by-side** (following the polish rounds in `references/work-modes.md`), and inspect actual materials, markings, background, and movement. Check the console, play the main motion, and scrub to a representative action frame. Use the available viewer for the requested preview mode.
 
-1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
+1. **3/4 Front.** Check silhouette, facial landmarks, materials, and how the model fits around the title and controls.
 2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
-3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
+3. **Mid-movement (prefer `side` view for posture check).** Play the main movement clip, inspect its midpoint for pose, stretch, and ground clearance, and verify the creature adopts **natural locomotion posture** for its archetype (`references/rigging-biped.md` — e.g., flying snakes/dragons flatten horizontally `~~~>` rather than staying upright like a cobra; bipeds drop T-pose arms; quadrupeds break stiff parallel legs). Watch the loop transition when the clip loops.
 4. **Action and effects.** Play the action and inspect a representative frame in the delivery lighting. Use the [VFX review](#optional-vfx-references) when effects are requested.
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.

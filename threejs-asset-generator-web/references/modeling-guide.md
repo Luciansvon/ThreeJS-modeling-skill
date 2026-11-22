@@ -1,6 +1,6 @@
 # Harness modeling guide
 
-Contents: SKILL.md · references/composite.md · references/creatures.md · references/detail.md · references/examples.md · references/geometry.md · references/lifecycle.md · references/look.md · references/rigging-biped.md
+Contents: SKILL.md · references/composite.md · references/creatures.md · references/detail.md · references/examples.md · references/geometry.md · references/lifecycle.md · references/look.md · references/rigging-biped.md · references/work-modes.md
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -19,11 +19,11 @@ This harness edition assumes a workspace and Node.js. Use the bundled builders a
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
 
 **Before modeling, confirm three things:** Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip choices already answered explicitly in the session, but **always confirm the brief summary** first:
-1. **Brief summary & reference check:** summarize the asset, style, requested clips/VFX, and deliverables, then ask the user to confirm or correct it. If a reference shows a neutral **T-pose / A-pose**, state it is used for proportions and bind/rest pose only—animations start from a natural standing pose (`references/rigging-biped.md`). If a referenced image is missing or cropped in the current session, suggest re-uploading it first.
-2. **Work mode:** `1) Quick` (blockout & core geometry checks), `2) Balance` *(recommended default: reference match, QA, budget, rig checks, GLB round trip when asked)*, or `3) Quality` *(Balance + iterative refinement, richer VFX, multi-view renders, per-clip motion evidence before/after export)*.
-3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). For complex assets, offer optional two-stage approval (blockout first, then detail & animation).
+1. **Brief summary & reference check:** summarize asset, style, requested clips/VFX, and deliverables for confirmation. If a reference uses a static turnaround pose (T-pose/A-pose, upright cobra sit, stiff parallel legs, flat-spread wings), note it sets proportions and bind/rest pose only—animations start from natural creature locomotion posture (`references/rigging-biped.md`). Suggest re-uploading missing or cropped images.
+2. **Work mode:** `1) Quick`, `2) Balance` *(recommended default)*, or `3) Quality`—following `references/work-modes.md` for reference re-inspection rounds, QA gates, VFX depth, and visual polish loops.
+3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). Offer optional two-stage approval (blockout first) for complex assets.
 
-When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (use rigid/skinned/morph articulation with micro-motion like breathing, blinks, and follow-through; be **as creative as possible with no creative limits** on layered particles, sparks, dust, debris, trails, glow, shockwaves, and small details—default to rich layered VFX unless minimal effects are requested; preview-only `_studio_vfx` does not count toward export triangle budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
+When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (articulated rig + micro-motion like breathing, blinks, follow-through; be **as creative as possible with zero creative limits** on layered particles, sparks, dust, debris, trails, glow, shockwaves, and small details—default to rich layered VFX unless minimal effects are requested; preview-only `_studio_vfx` does not count toward export polygon budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -35,6 +35,7 @@ When requirements remain open, ask only what is missing in the same message: ref
 
 | You are doing | Read | Code |
 |---|---|---|
+| Choosing `Quick` / `Balance` / `Quality`, polish loops, shape vs detail review | `references/work-modes.md` | |
 | Materials, flat shading, procedural or image-generated textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
 | Creature, multi-limb, vehicle, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
@@ -127,7 +128,7 @@ Determinism and parameters
 - [ ] Derived constraints prevent degenerate shapes; sub-seeds fit the seed range
 
 Reference (only when the user gave an image)
-- [ ] Compare the delivered asset with the reference at a comparable angle and scale. Check the features that carry its identity (§15).
+- [ ] Reopen the reference alongside rendered studio views (never `review.png` alone) per `references/work-modes.md`; verify identity features (§15).
 
 Geometry and look
 - [ ] Axes follow §0; faces described by axis; right = −X when forward = +Z
@@ -141,7 +142,7 @@ Geometry and look
 
 Rigging, humanoids, textures (only when they apply)
 - [ ] Choose joint pivots or skinning to suit the motion and preserve the chosen surface normals. Inspect joins under deformation. For an expressive face, play the requested gesture on the reloaded asset (§18).
-- [ ] Play the clips on the rig root with `AnimationMixer`, using `QuaternionKeyframeTrack` (`<node>.quaternion`) and unique node names; sample mid-cycle/peak timestamps per clip before and after GLB export. Choose timing, interpolation, and expressive micro-motion/follow-through to suit the performance, including held poses for a stop-motion style. Use the mirror helpers for symmetric bones.
+- [ ] Leave any static reference pose and adopt natural creature locomotion posture inspected from side view (`references/rigging-biped.md`); play clips on the rig root with `AnimationMixer` using `QuaternionKeyframeTrack` (`<node>.quaternion`) and unique node names, sampling mid-cycle/peak timestamps before and after GLB export with expressive micro-motion/follow-through. Use the mirror helpers for symmetric bones.
 - [ ] Limb chains go through `twoBoneIK` or fixed point chains; feet and hands have explicit forward/up
 - [ ] Extruded and lofted parts have positive `signedVolume`, also after mirroring
 - [ ] UV is off unless a texture is used; with a texture, `PartBuilder({ uv })` is set for every part of that material and `disposeAsset` frees `map`
@@ -855,7 +856,21 @@ Rules:
 - Ground in rest pose, using `groundAsset(rig)` for a rigid build. Keep skinned ground offsets on the asset wrapper. Author foot IK, hovering elevation, or hip bob in the clips.
 - **Exported rotation tracks:** Always author exported rotations with `QuaternionKeyframeTrack` targeting `<nodeName>.quaternion` (`makeClip` and `bakeClip30fps` do this automatically). `GLTFExporter` only exports `position`, `quaternion`, `scale`, and `morphTargetInfluences`; `.rotation` or `.rotation[x]` scalar Euler tracks animate in preview but are dropped during GLB export while the clip name remains, leaving the model frozen in its rest pose. Give every animated pivot a unique name satisfying `THREE.PropertyBinding.sanitizeNodeName(name) === name` that resolves uniquely from the root via `THREE.PropertyBinding.findNode`.
 - **Hinged voxel parts:** For rigged or hinged voxel builds, merge blocks and cull hidden interior faces **only within the same rigid part on the same pivot**. Keep exterior faces where adjacent parts belong to different pivots so bending joints never open hollow gaps, and inspect seams at peak clip rotation.
-- **T-pose / A-pose references vs natural base pose:** When a reference image shows a neutral T-pose or A-pose sheet, use it for proportions, limb lengths, and the rest/bind pose only. Author a relaxed **natural standing pose** (arms lowered, relaxed joints fitting the character's posture) as the base for `Idle`, `Walk`, and action clips so animated models never stay stiffly in T-pose. If building a static non-animated asset from a T-pose sheet, ask whether to keep the T-pose or pose it naturally.
+
+### Reference pose vs natural locomotion posture (all creature archetypes)
+
+Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-like sit, stiff parallel legs, flat-spread wings) sets **proportions and rest/bind pose ONLY**—never animate locomotion by gently jiggling the static reference pose in place. For static non-animated assets from a neutral sheet, ask whether to keep the sheet pose or pose naturally; for animated models, transition immediately into natural posture per archetype:
+
+| Archetype | Reference trap to avoid | Required natural locomotion & idle posture |
+|---|---|---|
+| **Bipeds & chibi monsters** | Floating in T-pose with straight outstretched arms | Lower arms into relaxed ready stance, bend knees/elbows slightly, drive walk/run from hip bob and counter-rotating torso/shoulders. |
+| **Quadrupeds** *(wolves, cats, dinos)* | Sliding like a stiff table on 4 parallel straight legs | Break legs into asymmetric stride/cantilever gait with spine flex/extension, weight transfer, head bob, and tail counter-balance. |
+| **Serpentine & sky dragons** *(snakes, eels)* | Staying upright like a coiled cobra while "flying" | **Pitch/flatten the spine horizontally along the travel axis (`~~~>`)** for flying/swimming clips (back up `+Y`, belly down `-Y`, head level forward `+Z`, tail uncurled trailing `-Z`), driving a clear traveling sinusoidal wave from neck through torso to tail tip. |
+| **Winged flyers** *(birds, dragons, bats)* | Keeping stiff straight wings splayed flat | Fold wings cleanly in ground idle; pitch torso forward in flight with phase-delayed wingbeats (shoulder leads, wrist/tips trail) and opposing body lift. |
+| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Align along the horizontal swim axis with traveling lateral or undulating waves increasing in amplitude toward the tail or tentacle tips. |
+| **Multi-legged** *(spiders, crabs, insects)* | All legs swinging identically in robotic unison | Drive alternating tripod or metachronal stepping waves across opposite legs with opposing body bounce and subtle yaw/roll. |
+
+**Mandatory motion posture sanity check:** Inspect the mid-locomotion frame from a **side view** (and 3/4 view) in rendered studio preview (`references/studio-preview.md`). If the overall spine/body silhouette during flight, swim, walk, or run still matches the static reference sheet stance, fix the clip posture before delivery.
 
 ### Clip timing and motion
 
@@ -1058,4 +1073,59 @@ Code: `src/texture.ts`. API:
 Run `npx tsx src/biped.test.ts` for the pure kernels. Run `npx tsx src/skinnedRig.test.ts` with Three.js installed to check folded-curve weights, tail motion, loop closure, and the QA artifacts.
 
 Add to a project's tests as well: `RigBuilder` builds the same bone names and mesh count for the same params (run it with `three` installed), every bone mesh has `signedVolume > 0` per closed part before the merge, and `generate(params)` fingerprints equal the exported module's (SKILL.md §11), both at rest pose and after `mixer.setTime(0.25)`.
+~~~
+
+## references/work-modes.md
+
+~~~markdown source-excerpt
+# Work modes: Quick, Balance, and Quality
+
+Reference for `threejs-asset-generator`. Read this after the user selects a work mode at intake to apply the required reference re-inspection rounds, QA gates, VFX depth, and visual checks.
+
+Contents: Mode comparison · Quick mode · Balance mode · Quality mode · Checking shape (`review.png`) vs checking detail (studio capture)
+
+## Mode comparison
+
+| Requirement | `Quick` | `Balance` (Default) | `Quality` |
+|---|---|---|---|
+| **Reference inspection** | Once at intake (`ref-spec.md`) | At intake + reopen side-by-side with studio capture | At intake + **reopen side-by-side on every polish round** |
+| **Build & detail** | Coarse blockout, primary silhouette, base colors | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
+| **Refinement rounds** | None (single build) or 1 quick fix if QA fails | 1 visual & geometry polish pass after first render | **At least 2 visual polish passes** until reference & pose read cleanly |
+| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` | `Q1–Q10` (`qa-asset.ts`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (including `--lods` when relevant) |
+| **Rig & GLB motion gates** | Basic `rig-check` if rigged; skip round-trip unless asked | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG7`) when GLB requested | Mandatory `R1–R7` + `RG1–RG7` per-clip motion evidence before & after export |
+| **Locomotion posture check** | Basic check that clips move (`R7`) | Side-view sanity check leaving static reference pose | Mandatory side + 3/4 check for all 6 archetypes (`references/rigging-biped.md`) |
+| **Runtime VFX & micro-motion** | Optional / simple preview cues | Rich layered VFX for requested actions + idle micro-motion | Full unrestricted multi-layered VFX + rich secondary motion across all clips |
+| **Preview & captures** | `review.png` or `Fast Preview` | `Fast` or `Full Preview` + 1 `capture-studio.ts` contact sheet | `Full Preview` / multi-clip captures across **both dark and light backdrops** |
+
+## Quick mode
+
+Use **Quick** when the user wants rapid blockout exploration or an immediate silhouette prototype:
+1. Build the grounded, outward-wound asset with deterministic seed (`??`).
+2. Run `scripts/qa-asset.ts` (`Q1–Q4`, `Q6`, `review.png`) and fix any winding, open-edge, or grounding errors.
+3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`) and run `scripts/rig-check.ts` so clips are valid.
+4. Deliver the model and `Fast Preview` (or `review.png`), clearly marking unrun checks (`ref-compare`, multi-round visual polish, or GLB round-trip if not run) as `Unchecked`.
+
+## Balance mode (recommended default)
+
+Use **Balance** for normal production deliverables:
+1. Inspect the source reference at intake (`references/reference-matching.md`), record `ref-spec.md`, and note whether the reference uses a static turnaround pose (T-pose, upright cobra sit, stiff stance, flat-spread wings).
+2. Run geometry QA (`scripts/qa-asset.ts`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts` when clean orthographic or 3/4 reference masks apply.
+3. Author natural creature locomotion postures (`references/rigging-biped.md`) and unrestricted layered runtime VFX (`references/studio-preview.md`).
+4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG7`) when `.glb` is requested.
+5. Capture rendered views (`scripts/capture-studio.ts`), **reopen the source reference image side-by-side** with the studio contact sheet, perform at least 1 visual polish pass fixing any landmark, seam, or locomotion posture issues, and re-run affected gates.
+
+## Quality mode
+
+Use **Quality** when visual fidelity, expressive animation, and polish matter most:
+1. Execute every step of **Balance**, plus **at least 2 deliberate visual polish rounds**.
+2. On **every** polish round, reopen the original reference image directly via image inspection (never rely on text memory or `review.png` alone), place it mentally or visually alongside the rendered studio captures, and list concrete mismatches (eye shape/placement, horns/ears, snout, markings, color warmth, joint seams, silhouette curves, and VFX timing) before editing.
+3. Explicitly inspect the **side view** and **3/4 view** of every locomotion clip (`Walk`, `Run`, `FlySlither`, `Swim`, `DragonAscent`) to confirm the whole body spine, limbs, wings, and tail adopt natural creature posture instead of remaining locked to the reference sheet pose.
+4. Capture `studio-contact-sheet.png` across both `--background dark` and `--background light` (plus extra sheets when multiple action VFX clips exist), ensuring HUD controls stay clear and zero console/WebGL errors occur.
+
+## Checking shape (`review.png`) vs checking detail (studio capture)
+
+Do not confuse geometry QA renders with final appearance review:
+
+- **`review.png` (`scripts/qa-asset.ts`) checks shape and topology only:** It renders an orthographic 2×2 view with **arbitrary flat colors per part** and magenta highlights for back-facing triangles. Use it to verify coarse silhouette, part proportions, grounding (`Y = 0` grey line), winding, and watertightness (`Q10`). **Never** use `review.png` to judge real colors, surface markings, facial detail, materials, VFX, or animation realism.
+- **Studio renders (`scripts/capture-studio.ts` / `studio_preview.html`) check real detail and motion:** Always inspect actual rendered frames (with real materials, vertex/texture colors, lighting, animations, and `_studio_vfx`) alongside the **reopened source reference** to sign off on likeness, joint gaps during bending, natural locomotion posture, and VFX quality (`references/studio-preview.md`, `references/reference-matching.md`).
 ~~~

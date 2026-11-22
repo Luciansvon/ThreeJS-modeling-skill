@@ -20,7 +20,21 @@ Rules:
 - Ground in rest pose, using `groundAsset(rig)` for a rigid build. Keep skinned ground offsets on the asset wrapper. Author foot IK, hovering elevation, or hip bob in the clips.
 - **Exported rotation tracks:** Always author exported rotations with `QuaternionKeyframeTrack` targeting `<nodeName>.quaternion` (`makeClip` and `bakeClip30fps` do this automatically). `GLTFExporter` only exports `position`, `quaternion`, `scale`, and `morphTargetInfluences`; `.rotation` or `.rotation[x]` scalar Euler tracks animate in preview but are dropped during GLB export while the clip name remains, leaving the model frozen in its rest pose. Give every animated pivot a unique name satisfying `THREE.PropertyBinding.sanitizeNodeName(name) === name` that resolves uniquely from the root via `THREE.PropertyBinding.findNode`.
 - **Hinged voxel parts:** For rigged or hinged voxel builds, merge blocks and cull hidden interior faces **only within the same rigid part on the same pivot**. Keep exterior faces where adjacent parts belong to different pivots so bending joints never open hollow gaps, and inspect seams at peak clip rotation.
-- **T-pose / A-pose references vs natural base pose:** When a reference image shows a neutral T-pose or A-pose sheet, use it for proportions, limb lengths, and the rest/bind pose only. Author a relaxed **natural standing pose** (arms lowered, relaxed joints fitting the character's posture) as the base for `Idle`, `Walk`, and action clips so animated models never stay stiffly in T-pose. If building a static non-animated asset from a T-pose sheet, ask whether to keep the T-pose or pose it naturally.
+
+### Reference pose vs natural locomotion posture (all creature archetypes)
+
+Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-like sit, stiff parallel legs, flat-spread wings) sets **proportions and rest/bind pose ONLY**—never animate locomotion by gently jiggling the static reference pose in place. For static non-animated assets from a neutral sheet, ask whether to keep the sheet pose or pose naturally; for animated models, transition immediately into natural posture per archetype:
+
+| Archetype | Reference trap to avoid | Required natural locomotion & idle posture |
+|---|---|---|
+| **Bipeds & chibi monsters** | Floating in T-pose with straight outstretched arms | Lower arms into relaxed ready stance, bend knees/elbows slightly, drive walk/run from hip bob and counter-rotating torso/shoulders. |
+| **Quadrupeds** *(wolves, cats, dinos)* | Sliding like a stiff table on 4 parallel straight legs | Break legs into asymmetric stride/cantilever gait with spine flex/extension, weight transfer, head bob, and tail counter-balance. |
+| **Serpentine & sky dragons** *(snakes, eels)* | Staying upright like a coiled cobra while "flying" | **Pitch/flatten the spine horizontally along the travel axis (`~~~>`)** for flying/swimming clips (back up `+Y`, belly down `-Y`, head level forward `+Z`, tail uncurled trailing `-Z`), driving a clear traveling sinusoidal wave from neck through torso to tail tip. |
+| **Winged flyers** *(birds, dragons, bats)* | Keeping stiff straight wings splayed flat | Fold wings cleanly in ground idle; pitch torso forward in flight with phase-delayed wingbeats (shoulder leads, wrist/tips trail) and opposing body lift. |
+| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Align along the horizontal swim axis with traveling lateral or undulating waves increasing in amplitude toward the tail or tentacle tips. |
+| **Multi-legged** *(spiders, crabs, insects)* | All legs swinging identically in robotic unison | Drive alternating tripod or metachronal stepping waves across opposite legs with opposing body bounce and subtle yaw/roll. |
+
+**Mandatory motion posture sanity check:** Inspect the mid-locomotion frame from a **side view** (and 3/4 view) in rendered studio preview (`references/studio-preview.md`). If the overall spine/body silhouette during flight, swim, walk, or run still matches the static reference sheet stance, fix the clip posture before delivery.
 
 ### Clip timing and motion
 

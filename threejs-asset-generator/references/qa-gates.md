@@ -49,7 +49,7 @@ Things the gates showed on this skill's own kernels, worth knowing:
 
 Written to `--out` (default the current folder). 2 x 2 layout, one shared scale: front (top left) · side (top right, +Z faces left) · top (bottom left, +Z faces down) · 3/4 view from +X +Y +Z (bottom right). One muted colour per part; the colour legend is printed. A grey line is Y = 0 in the front and side panels. **Magenta** means a triangle faces away from the camera but is still the nearest surface: an inside-out part, a hole, or a sheet that faces away from the cameras and is missing from `--open`.
 
-Look for what numbers miss: floating or sinking against the grey line, proportions against your `ref-spec.md` or intent, a limb on the wrong side, a part that is too small to read (under about 3 px), a silhouette that is plainly not the object. The renderer is orthographic with flat Lambert light: it shows shape and winding, not materials, textures or rigging.
+Look for what numbers miss: floating or sinking against the grey line, proportions against your `ref-spec.md` or intent, a limb on the wrong side, a part that is too small to read (under about 3 px), a silhouette that is plainly not the object. Because `review.png` uses arbitrary flat Lambert colors per part, it validates **coarse shape, grounding, winding, and watertightness only**—never use it to judge real colors, surface markings, facial detail, VFX, or animation posture. Always inspect actual rendered studio captures alongside the reopened source reference for detail and motion (`references/work-modes.md`, `references/studio-preview.md`).
 
 ## The "Done" rule and report
 
