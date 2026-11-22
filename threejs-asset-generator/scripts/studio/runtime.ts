@@ -5,6 +5,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { assetFingerprint } from '../../src/fingerprint';
 import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
+import { clipMotion } from '../clip-motion';
 import { boundsRecord, collectPoseVertices, frameCamera, poseBounds, samplesPerClip } from './framing';
 import type {
   StudioApi, StudioBackground, StudioConfig, StudioDiagnostic, StudioFrame, StudioFrameEvidence, StudioInfo, StudioPose,
@@ -316,7 +317,8 @@ export async function startStudio(
         }) as ArrayBuffer;
         const before = countScene(fresh.root);
         const clipNames = fresh.animations.map((clip) => clip.name);
-        return { buffer, before, clipNames };
+        const sourceMotion = fresh.animations.length ? clipMotion(THREE, fresh.root, fresh.animations) : [];
+        return { buffer, before, clipNames, sourceMotion };
       } finally {
         disposeObjectTree(fresh.root);
       }
@@ -354,18 +356,46 @@ export async function startStudio(
       verifyGlbBtn.disabled = true;
       glbStatus.textContent = 'Verifying GLB…';
       try {
-        const { buffer, before, clipNames } = await exportFreshGlb();
+        const { buffer, before, clipNames, sourceMotion } = await exportFreshGlb();
         const reloaded = await new GLTFLoader().parseAsync(buffer, '');
         try {
           const after = countScene(reloaded.scene);
-          const outClips = (reloaded.animations ?? []).map((clip) => clip.name);
+          const reloadedClips = reloaded.animations ?? [];
+          const outClips = reloadedClips.map((clip) => clip.name);
+          const reloadedMotion = reloadedClips.length ? clipMotion(THREE, reloaded.scene, reloadedClips) : [];
+          let bindingOk = true;
+          let motionPreserved = true;
+          const staticNames: string[] = [];
+          let movingCount = 0;
+          for (let i = 0; i < sourceMotion.length; i++) {
+            const src = sourceMotion[i];
+            const rel = reloadedMotion[i]?.clip === src.clip ? reloadedMotion[i] : reloadedMotion.find((r) => r.clip === src.clip);
+            const hasMorphMove = src.moving.some((m) => m.property === 'morphTargetInfluences');
+            if (src.unsupported.length || src.unbound.length || !rel || rel.unsupported.length || rel.unbound.length
+              || (rel.tracks < src.tracks && !hasMorphMove)) {
+              bindingOk = false;
+            }
+            if (src.static || !rel || rel.static) staticNames.push(src.clip);
+            else movingCount++;
+            if (!src.static) {
+              if (!rel || rel.static) motionPreserved = false;
+              else {
+                const relKeys = new Set(rel.moving.map((m) => `${m.node}|${m.property}`));
+                if (src.moving.some((m) => !relKeys.has(`${m.node}|${m.property}`))) motionPreserved = false;
+              }
+            }
+          }
           const ok = before.tris > 0 && before.tris === after.tris
             && before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes
             && before.skins === after.skins && before.bones === after.bones
-            && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name);
+            && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name)
+            && bindingOk && motionPreserved;
+          const motionNote = reloadedMotion.length
+            ? ` · moving clips ${movingCount}/${reloadedMotion.length}${staticNames.length ? ` · static: ${staticNames.join(', ')}` : ''}`
+            : '';
           glbStatus.textContent = ok
-            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips`
-            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}`;
+            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
+            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
         } finally {
           disposeObjectTree(reloaded.scene);
         }

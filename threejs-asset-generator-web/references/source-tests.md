@@ -1064,10 +1064,46 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
   const rigParsed = runRigged(injected, 'sample-rigged.glb', '--export', 'buildSample', '--params', '{"size":0.5}');
   assert.deepEqual(rigParsed.clips, ['Nod']);
   assert.deepEqual(rigParsed.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 1 });
+  assert.equal(rigParsed.gates?.find((gate) => gate.gate === 'RG6 track binding')?.pass, true);
+  assert.equal(rigParsed.gates?.find((gate) => gate.gate === 'RG7 clip motion')?.pass, true);
   await checkTrack('sample-rigged.glb', 'Nod', 'head.quaternion', [0, 0.5, 1]);
   const blocked = spawnTsx(rigCli, ['--module', injected, '--params', '{"size":0.5}', '--out', join(injected, 'bad.glb')], { cwd: out, env });
   assert.equal(blocked.status, 1);
   assert.match(String(parseResult(blocked.stdout)?.error), /cannot write or re-open/);
+
+  const rigidModule = 'voxelRigid.ts';
+  writeFileSync(join(out, rigidModule), `
+    export function buildVoxel(params: { mode?: string }, THREE: any) {
+      const root = new THREE.Group(); root.name = 'voxel_root';
+      const armL = new THREE.Group(); armL.name = 'armL'; armL.position.set(0.5, 1, 0);
+      root.add(armL);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), new THREE.MeshStandardMaterial({ color: '#4c9f50' }));
+      mesh.name = 'armL_mesh';
+      armL.add(mesh);
+      if (params.mode === 'euler') {
+        const track = new THREE.NumberKeyframeTrack('armL.rotation[x]', [0, 0.5, 1], [0, 0.6, 0]);
+        return { root, animations: [new THREE.AnimationClip('Walk', 1, [track])] };
+      }
+      const track = new THREE.QuaternionKeyframeTrack('armL.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+      return { root, animations: [new THREE.AnimationClip('Hold', 1, [track])] };
+    }
+  `);
+  const eulerRes = spawnTsx(rigCli, ['--module', rigidModule, '--params', '{"mode":"euler"}', '--out', 'voxel-euler.glb'], { cwd: out, env });
+  assert.equal(eulerRes.status, 2, eulerRes.stdout + eulerRes.stderr);
+  const eulerJson = parseResult(eulerRes.stdout)!;
+  assert.equal(eulerJson.ok, false);
+  const eulerRg6 = eulerJson.gates?.find((g) => g.gate === 'RG6 track binding');
+  const eulerRg7 = eulerJson.gates?.find((g) => g.gate === 'RG7 clip motion');
+  assert.equal(eulerRg6?.pass, false);
+  assert.match(String(eulerRg6?.value), /rotation/);
+  assert.equal(eulerRg7?.pass, false);
+
+  const holdFail = spawnTsx(rigCli, ['--module', rigidModule, '--params', '{"mode":"hold"}', '--out', 'voxel-hold.glb'], { cwd: out, env });
+  assert.equal(holdFail.status, 2, holdFail.stdout + holdFail.stderr);
+  const holdJson = parseResult(holdFail.stdout)!;
+  assert.equal(holdJson.gates?.find((g) => g.gate === 'RG7 clip motion')?.pass, false);
+  const holdPass = runRigged(rigidModule, 'voxel-hold-ok.glb', '--params', '{"mode":"hold"}', '--static-clips', 'Hold');
+  assert.equal(holdPass.gates?.find((g) => g.gate === 'RG7 clip motion')?.pass, true);
 
   if (typeof nodeModule.registerHooks === 'function') {
     writeFileSync(join(out, 'dimensions.ts'), 'export const size: number = 2;');
@@ -1117,6 +1153,7 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
     `);
     const js = runRigged(join('esm', 'asset.js'), join('results', 'sample-js.glb'));
     assert.deepEqual(js.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 0 });
+    assert.ok(!js.gates?.some((gate) => gate.gate.startsWith('RG6') || gate.gate.startsWith('RG7')));
     console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS');
   } else {
     console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
@@ -1501,7 +1538,7 @@ console.log('REFCHECK OK');
 ## scripts/rigcheck.test.ts
 
 ~~~typescript source-excerpt
-// scripts/rigcheck.test.ts: R1 to R6 must pass on valid rigged metadata and catch every defect class.
+// scripts/rigcheck.test.ts: R1 to R7 must pass on valid rigged metadata and catch every defect class.
 // Run: npx tsx scripts/rigcheck.test.ts
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -1547,10 +1584,10 @@ const baseMeta = (): RigMeta => ({
 
 const failedNames = (m: RigMeta) => rigGates(m).gates.filter((g) => !g.pass).map((g) => g.gate);
 
-// 1. valid character passes all 6 gates
-assert.deepEqual(failedNames(baseMeta()), [], 'valid rig passes R1 to R6');
+// 1. valid character passes all 7 gates
+assert.deepEqual(failedNames(baseMeta()), [], 'valid rig passes R1 to R7');
 const valid = rigGates(baseMeta());
-assert.equal(valid.gates.length, 6, 'valid rig evaluates all six gates');
+assert.equal(valid.gates.length, 7, 'valid rig evaluates all seven gates');
 assert.deepEqual(valid.skipped, [], 'valid rig has complete evidence');
 
 // 2. each defect triggers its own gate
@@ -1649,6 +1686,34 @@ const miss = run(); assert.equal(miss.status, 1);
   writeFileSync(krakenFile, JSON.stringify(krakenMeta));
   const kCli = run('--meta', krakenFile, '--kind', 'creature', '--motion', 'free');
   assert.equal(kCli.status, 0, kCli.stdout + kCli.stderr);
+}
+
+// 5. v4.3.3: Euler rotation tracks fail R4; static clips fail R7 unless listed in staticClips / --static-clips
+{
+  const eulerMeta = baseMeta();
+  eulerMeta.animations![0].tracks!.push({ name: 'head_pivot.rotation[x]', times: [0, 1], values: [0, 0.5] });
+  const eulerRes = rigGates(eulerMeta);
+  const r4 = eulerRes.gates.find((g) => g.gate === 'R4 tracks & drift')!;
+  assert.equal(r4.pass, false, 'Euler rotation track must fail R4');
+  assert.match(r4.value, /Euler|\.quaternion/);
+
+  const staticMeta = baseMeta();
+  staticMeta.animations = [{
+    name: 'Hold', durationSeconds: 1.0, loop: true, expression: 'neutral',
+    tracks: [{ name: 'head_pivot.quaternion', times: [0, 0.5, 1.0], values: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] }],
+  }];
+  assert.ok(failedNames(staticMeta).includes('R7 clip motion'), 'static clip holding first key fails R7');
+  const holdFile = join(dir, 'hold.json');
+  writeFileSync(holdFile, JSON.stringify(staticMeta));
+  const holdFail = run('--meta', holdFile);
+  assert.equal(holdFail.status, 2, 'CLI fails on static clip without --static-clips');
+
+  const holdCliOk = run('--meta', holdFile, '--static-clips', 'Hold');
+  assert.equal(holdCliOk.status, 0, holdCliOk.stdout + holdCliOk.stderr);
+  assert.equal(parseResult(holdCliOk.stdout)!.ok, true);
+
+  staticMeta.qa!.staticClips = ['Hold'];
+  assert.deepEqual(failedNames(staticMeta), [], 'qa.staticClips allows intentional static clip');
 }
 
 console.log('RIGCHECK OK');

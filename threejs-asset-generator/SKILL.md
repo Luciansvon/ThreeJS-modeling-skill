@@ -9,13 +9,12 @@ This harness edition assumes a workspace and Node.js. Use the bundled builders a
 
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
 
-**Exploration vs Build Mode:** When the user is still exploring ideas, asking for advice, or leaves major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults—do NOT write full 3D model code until aligned. Go straight to **Build Mode** when the brief is already complete or the user asks to build right away. Ask only what is missing from these **6 core intake items**:
-1. **Reference & style:** existing image, generate a reference image first, or build from text.
-2. **Surface & materials:** match the requested style and viewing distance. Choose smooth or faceted normals, material colors, vertex colors or fixed texture inputs as appropriate.
-3. **Animation:** choose pivots, a deforming skin or morph targets for the requested actions. Include facial articulation when the performance calls for it.
-4. **Preview mode:** **Fast Preview** (orbit, textures, clip scrub) vs **Full Preview** (live sliders, rig/clip inspection). Do not build a heavy studio before the user chooses (`references/studio-preview.md`).
-5. **Runtime VFX:** design effects for the intended action and judge their impact during playback at the delivery camera distance. Preview-only effects live outside the exported model (§13).
-6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
+**Before modeling, confirm three things:** Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip choices already answered explicitly in the session, but **always confirm the brief summary** first:
+1. **Brief summary & reference check:** summarize the asset, style, requested clips/VFX, and deliverables, then ask the user to confirm or correct it. If a reference shows a neutral **T-pose / A-pose**, state it is used for proportions and bind/rest pose only—animations start from a natural standing pose (`references/rigging-biped.md`). If a referenced image is missing or cropped in the current session, suggest re-uploading it first.
+2. **Work mode:** `1) Quick` (blockout & core geometry checks), `2) Balance` *(recommended default: reference match, QA, budget, rig checks, GLB round trip when asked)*, or `3) Quality` *(Balance + iterative refinement, richer VFX, multi-view renders, per-clip motion evidence before/after export)*.
+3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). For complex assets, offer optional two-stage approval (blockout first, then detail & animation).
+
+When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (use rigid/skinned/morph articulation with micro-motion like breathing, blinks, and follow-through; be **as creative as possible with no creative limits** on layered particles, sparks, dust, debris, trails, glow, shockwaves, and small details—default to rich layered VFX unless minimal effects are requested; preview-only `_studio_vfx` does not count toward export triangle budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -133,7 +132,7 @@ Geometry and look
 
 Rigging, humanoids, textures (only when they apply)
 - [ ] Choose joint pivots or skinning to suit the motion and preserve the chosen surface normals. Inspect joins under deformation. For an expressive face, play the requested gesture on the reloaded asset (§18).
-- [ ] Play the clips on the rig root with `AnimationMixer`. Choose timing, interpolation and follow-through to suit the performance, including held poses for a stop-motion style. Use the mirror helpers for symmetric bones.
+- [ ] Play the clips on the rig root with `AnimationMixer`, using `QuaternionKeyframeTrack` (`<node>.quaternion`) and unique node names; sample mid-cycle/peak timestamps per clip before and after GLB export. Choose timing, interpolation, and expressive micro-motion/follow-through to suit the performance, including held poses for a stop-motion style. Use the mirror helpers for symmetric bones.
 - [ ] Limb chains go through `twoBoneIK` or fixed point chains; feet and hands have explicit forward/up
 - [ ] Extruded and lofted parts have positive `signedVolume`, also after mirroring
 - [ ] UV is off unless a texture is used; with a texture, `PartBuilder({ uv })` is set for every part of that material and `disposeAsset` frees `map`
@@ -197,7 +196,7 @@ Keep a short `ref-spec.md` with visible views, proportions, identifying features
 
 For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`). It reruns Q1 to Q5 and verifies the output with E1 to E6.
 
-When the GLB must retain vertex colors, materials, UVs, maps, rigging (`RigBuilder` or `SkinnedMesh`), or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb`. It runs `GLTFExporter` → disk → `GLTFLoader` and reports RG1–RG5 (`@@RESULT`). See `references/glb-export.md`.
+When the GLB must retain vertex colors, materials, UVs, maps, rigging (`RigBuilder` or `SkinnedMesh`), or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--static-clips a,b]`. It runs `GLTFExporter` → disk → `GLTFLoader` and reports RG1–RG7 (`@@RESULT`), checking track binding and per-clip motion before and after export. See `references/glb-export.md`.
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
@@ -205,4 +204,4 @@ Choose a budget from the asset's delivery target. A browser used to inspect a mo
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 
-Run `npx tsx scripts/rig-check.ts --meta char_metadata.json --kind creature --motion free` (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping/lunging sway) to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & drift · R5 static expression mapping · R6 slide & floor (`qa.clipMinY`) clearance. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.
+Run `npx tsx scripts/rig-check.ts --meta char_metadata.json --kind creature --motion free [--static-clips a,b]` (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping/lunging sway) to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & drift (rejects Euler `.rotation`) · R5 static expression mapping · R6 slide & floor (`qa.clipMinY`) clearance · R7 clip motion. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.

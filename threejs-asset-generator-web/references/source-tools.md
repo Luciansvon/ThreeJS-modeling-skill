@@ -1,6 +1,6 @@
 # Tool and fixture source
 
-Contents: package.json · scripts/asset-builder.ts · scripts/budget.ts · scripts/capture-studio.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/pack-studio.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · scripts/studio/framing.ts · scripts/studio/index.html · scripts/studio/runtime.ts · scripts/studio/types.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
+Contents: package.json · scripts/asset-builder.ts · scripts/budget.ts · scripts/capture-studio.ts · scripts/clip-motion.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/pack-studio.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · scripts/studio/framing.ts · scripts/studio/index.html · scripts/studio/runtime.ts · scripts/studio/types.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.2",
+  "version": "4.3.3",
   "private": true,
   "type": "module",
   "description": "Style-adaptive procedural Three.js assets, reference matching, geometry checks, animation, VFX previews and GLB export.",
@@ -575,6 +575,318 @@ try {
 }
 ~~~
 
+## scripts/clip-motion.ts
+
+~~~typescript source-excerpt
+// scripts/clip-motion.ts: per-clip track binding and playback motion sampler. Accepts injected THREE so both Node CLIs and browser studio share it.
+import type * as THREE from 'three';
+
+export const MOTION_PROPERTIES = ['position', 'quaternion', 'scale', 'morphTargetInfluences'] as const;
+export type MotionProperty = (typeof MOTION_PROPERTIES)[number];
+export const DEFAULT_MOTION_THRESHOLDS = { angle: 1e-3, distance: 1e-4 };
+
+export type NodeMotion = {
+  node: string;
+  property: MotionProperty;
+  change: number;
+  at: number;
+  restChange: number;
+};
+
+export type ClipMotion = {
+  clip: string;
+  duration: number;
+  times: number[];
+  tracks: number;
+  unsupported: string[];
+  unbound: string[];
+  moving: NodeMotion[];
+  static: boolean;
+  tPoseNotice?: string;
+};
+
+export type ClipMotionOptions = {
+  samples?: number;
+  thresholds?: { angle?: number; distance?: number };
+};
+
+type RestSnapshot = {
+  node: THREE.Object3D;
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  scale: THREE.Vector3;
+  morphs?: number[];
+};
+
+type SampleValue = THREE.Vector3 | THREE.Quaternion | number[];
+
+const SUPPORTED_SET = new Set<string>(MOTION_PROPERTIES);
+const LIMB_NAME_RE = /(upper.?arm|fore.?arm|shoulder|arm|wing|thigh|leg)[_.-]?(l|r|left|right)?$/i;
+const REST_CLIP_NAME_RE = /refpose|tpose|t_pose|bind/i;
+
+function buildSampleTimes(duration: number, clip: THREE.AnimationClip, samples: number): number[] {
+  if (!(Number.isFinite(duration) && duration > 0)) return [0];
+  const raw: number[] = [0];
+  const steps = Math.max(2, Math.floor(samples));
+  for (let i = 1; i < steps - 1; i++) raw.push((duration * i) / (steps - 1));
+  raw.push(duration);
+  for (const track of clip.tracks) {
+    for (let i = 0; i < track.times.length; i++) {
+      const t = track.times[i];
+      if (Number.isFinite(t) && t > 0 && t < duration) raw.push(t);
+    }
+  }
+  raw.sort((a, b) => a - b);
+  const unique: number[] = [];
+  for (const t of raw) {
+    if (!unique.length || t - unique[unique.length - 1] > 1e-6) unique.push(t);
+  }
+  if (unique[unique.length - 1] !== duration) unique[unique.length - 1] = duration;
+  return unique;
+}
+
+function readValue(node: THREE.Object3D, prop: MotionProperty): SampleValue {
+  if (prop === 'quaternion') return node.quaternion.clone();
+  if (prop === 'position') return node.position.clone();
+  if (prop === 'scale') return node.scale.clone();
+  const influences = (node as THREE.Mesh).morphTargetInfluences;
+  return Array.isArray(influences) ? influences.slice() : [];
+}
+
+function measureDiff(prop: MotionProperty, base: SampleValue, current: SampleValue): number {
+  if (prop === 'quaternion') {
+    const dot = Math.min(1, Math.abs((base as THREE.Quaternion).dot(current as THREE.Quaternion)));
+    return 2 * Math.acos(dot);
+  }
+  if (prop === 'position' || prop === 'scale') {
+    return (base as THREE.Vector3).distanceTo(current as THREE.Vector3);
+  }
+  const a = base as number[], b = current as number[];
+  const len = Math.max(a.length, b.length);
+  let max = 0;
+  for (let i = 0; i < len; i++) max = Math.max(max, Math.abs((b[i] ?? 0) - (a[i] ?? 0)));
+  return max;
+}
+
+function measureRestDiff(prop: MotionProperty, rest: RestSnapshot, current: SampleValue): number {
+  if (prop === 'quaternion') return measureDiff(prop, rest.quaternion, current);
+  if (prop === 'position') return measureDiff(prop, rest.position, current);
+  if (prop === 'scale') return measureDiff(prop, rest.scale, current);
+  return measureDiff(prop, rest.morphs ?? [], current);
+}
+
+/** Sample each AnimationClip independently against a fresh rest pose and report track binding plus per-pivot motion. */
+export function clipMotion(
+  THREE: typeof import('three'),
+  root: THREE.Object3D,
+  clips: readonly THREE.AnimationClip[],
+  opts: ClipMotionOptions = {},
+): ClipMotion[] {
+  const samples = opts.samples ?? 9;
+  const angleThresh = opts.thresholds?.angle ?? DEFAULT_MOTION_THRESHOLDS.angle;
+  const distThresh = opts.thresholds?.distance ?? DEFAULT_MOTION_THRESHOLDS.distance;
+
+  const counts = new Map<string, number>();
+  const limbNodes: string[] = [];
+  root.traverse((obj) => {
+    if (!obj.name) return;
+    counts.set(obj.name, (counts.get(obj.name) ?? 0) + 1);
+    if (LIMB_NAME_RE.test(obj.name)) limbNodes.push(obj.name);
+  });
+
+  const results: ClipMotion[] = [];
+  for (const clip of clips) {
+    const clipName = clip.name || '(unnamed)';
+    const duration = Number.isFinite(clip.duration) && clip.duration >= 0 ? clip.duration : 0;
+    const times = buildSampleTimes(duration, clip, samples);
+    const unsupported: string[] = [];
+    const unbound: string[] = [];
+    const targets = new Map<string, { node: THREE.Object3D; label: string; prop: MotionProperty }>();
+
+    for (const track of clip.tracks) {
+      let parsed: ReturnType<typeof THREE.PropertyBinding.parseTrackName>;
+      try {
+        parsed = THREE.PropertyBinding.parseTrackName(track.name);
+      } catch {
+        unbound.push(`${track.name} (unparseable track name)`);
+        continue;
+      }
+
+      const { nodeName, objectName, objectIndex, propertyName, propertyIndex } = parsed;
+      if (!SUPPORTED_SET.has(propertyName)) {
+        unsupported.push(`${track.name} (unsupported property "${propertyName}")`);
+        continue;
+      }
+      if (objectName !== undefined && objectName !== 'bones') {
+        unsupported.push(`${track.name} (unsupported sub-object "${objectName}")`);
+        continue;
+      }
+      if (propertyIndex !== undefined && propertyName !== 'morphTargetInfluences') {
+        unsupported.push(`${track.name} (scalar channel "${propertyName}[${propertyIndex}]" is not exported as a glTF track)`);
+        continue;
+      }
+
+      const prop = propertyName as MotionProperty;
+      let targetNode: THREE.Object3D | null | undefined;
+      let label: string;
+
+      if (objectName === 'bones') {
+        if (nodeName && (counts.get(nodeName) ?? 0) > 1) {
+          unbound.push(`${track.name} (ambiguous node name "${nodeName}": ${counts.get(nodeName)} matches)`);
+          continue;
+        }
+        const meshNode = THREE.PropertyBinding.findNode(root, nodeName) as THREE.SkinnedMesh | null;
+        if (!meshNode?.isSkinnedMesh || !objectIndex) {
+          unbound.push(`${track.name} (SkinnedMesh "${nodeName || '(root)'}" or bone "${objectIndex}" not found)`);
+          continue;
+        }
+        const bone = meshNode.skeleton?.getBoneByName(objectIndex);
+        if (!bone) {
+          unbound.push(`${track.name} (bone "${objectIndex}" not found on skeleton)`);
+          continue;
+        }
+        if ((counts.get(bone.name) ?? 0) > 1) {
+          unbound.push(`${track.name} (ambiguous bone name "${bone.name}": ${counts.get(bone.name)} matches)`);
+          continue;
+        }
+        targetNode = bone;
+        label = bone.name || objectIndex;
+      } else {
+        if (!nodeName || nodeName === '.') {
+          unbound.push(`${track.name} (missing node name)`);
+          continue;
+        }
+        const matches = counts.get(nodeName) ?? 0;
+        if (matches > 1) {
+          unbound.push(`${track.name} (ambiguous node name "${nodeName}": ${matches} matches)`);
+          continue;
+        }
+        targetNode = THREE.PropertyBinding.findNode(root, nodeName);
+        if (!targetNode) {
+          unbound.push(`${track.name} (node "${nodeName}" not found under root)`);
+          continue;
+        }
+        label = targetNode.name || nodeName;
+      }
+
+      if (prop === 'morphTargetInfluences' && !Array.isArray((targetNode as THREE.Mesh).morphTargetInfluences)) {
+        unbound.push(`${track.name} (node "${label}" has no morphTargetInfluences)`);
+        continue;
+      }
+
+      const key = `${targetNode.uuid}|${prop}`;
+      if (!targets.has(key)) targets.set(key, { node: targetNode, label, prop });
+    }
+
+    const snapshots = new Map<THREE.Object3D, RestSnapshot>();
+    for (const { node } of targets.values()) {
+      if (snapshots.has(node)) continue;
+      const morphs = (node as THREE.Mesh).morphTargetInfluences;
+      snapshots.set(node, {
+        node,
+        position: node.position.clone(),
+        quaternion: node.quaternion.clone(),
+        scale: node.scale.clone(),
+        morphs: Array.isArray(morphs) ? morphs.slice() : undefined,
+      });
+    }
+
+    const firstValues = new Map<string, SampleValue>();
+    const maxMotion = new Map<string, { change: number; at: number; restChange: number }>();
+    const mixer = new THREE.AnimationMixer(root);
+    const action = mixer.clipAction(clip);
+    action.setLoop(THREE.LoopOnce, 1);
+    action.clampWhenFinished = true;
+    action.play();
+
+    try {
+      for (let i = 0; i < times.length; i++) {
+        const t = times[i];
+        mixer.setTime(t);
+        root.updateMatrixWorld(true);
+        for (const [key, { node, prop }] of targets) {
+          const val = readValue(node, prop);
+          const rest = snapshots.get(node)!;
+          const restDelta = measureRestDiff(prop, rest, val);
+          if (i === 0) {
+            firstValues.set(key, val);
+            maxMotion.set(key, { change: 0, at: t, restChange: Number.isFinite(restDelta) ? restDelta : 0 });
+            continue;
+          }
+          const delta = measureDiff(prop, firstValues.get(key)!, val);
+          const prev = maxMotion.get(key)!;
+          if (Number.isFinite(delta) && delta > prev.change) {
+            prev.change = delta;
+            prev.at = t;
+          }
+          if (Number.isFinite(restDelta) && restDelta > prev.restChange) {
+            prev.restChange = restDelta;
+          }
+        }
+      }
+    } finally {
+      action.stop();
+      mixer.uncacheClip(clip);
+      mixer.uncacheRoot(root);
+      for (const snap of snapshots.values()) {
+        snap.node.position.copy(snap.position);
+        snap.node.quaternion.copy(snap.quaternion);
+        snap.node.scale.copy(snap.scale);
+        if (snap.morphs && Array.isArray((snap.node as THREE.Mesh).morphTargetInfluences)) {
+          const dst = (snap.node as THREE.Mesh).morphTargetInfluences!;
+          for (let k = 0; k < snap.morphs.length; k++) dst[k] = snap.morphs[k];
+        }
+      }
+      root.updateMatrixWorld(true);
+    }
+
+    const moving: NodeMotion[] = [];
+    for (const [key, { label, prop }] of targets) {
+      const stats = maxMotion.get(key) ?? { change: 0, at: 0, restChange: 0 };
+      const threshold = prop === 'quaternion' ? angleThresh : distThresh;
+      if (stats.change > threshold) {
+        moving.push({
+          node: label,
+          property: prop,
+          change: stats.change,
+          at: stats.at,
+          restChange: stats.restChange,
+        });
+      }
+    }
+    moving.sort((a, b) => b.change - a.change);
+
+    let tPoseNotice: string | undefined;
+    if (!REST_CLIP_NAME_RE.test(clipName) && moving.length > 0) {
+      const maxRest = Math.max(...moving.map((m) => m.restChange));
+      if (maxRest < 0.08) {
+        tPoseNotice = `All moving channels stay near the rest pose (max ${maxRest.toFixed(4)}); inspect visually to verify the clip leaves any T-pose.`;
+      } else if (limbNodes.length >= 2) {
+        const limbSet = new Set(limbNodes);
+        const limbRotMoves = moving.some((m) => limbSet.has(m.node) && m.property === 'quaternion' && m.restChange >= 0.08);
+        if (!limbRotMoves) {
+          tPoseNotice = 'Arm/shoulder/leg pivots stay near rest pose (< 0.08 rad); inspect visually to verify limbs leave any T-pose.';
+        }
+      }
+    }
+
+    results.push({
+      clip: clipName,
+      duration,
+      times,
+      tracks: clip.tracks.length,
+      unsupported,
+      unbound,
+      moving,
+      static: moving.length === 0,
+      ...(tPoseNotice ? { tPoseNotice } : {}),
+    });
+  }
+
+  return results;
+}
+~~~
+
 ## scripts/export-glb.ts
 
 ~~~typescript source-excerpt
@@ -651,7 +963,7 @@ process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, skipped:
 
 ~~~typescript source-excerpt
 // scripts/export-rigged-glb.ts: official Three.js GLB export + disk round-trip verifier for assets with vertex colors, materials, skins/bones, or AnimationClips.
-// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}']
+// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}'] [--static-clips a,b]
 // The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
 // Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -659,6 +971,7 @@ import * as nodeModule from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { countScene, selectBuilder, unpackAsset } from './asset-builder';
+import { clipMotion, type ClipMotion, type NodeMotion } from './clip-motion';
 import { emit, type Gate } from './result';
 
 // Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
@@ -686,7 +999,9 @@ const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && 
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
 
 const modFile = opt('module'), outFile = opt('out');
-if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] --out asset.glb');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] --out asset.glb');
+const staticClipsList = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const staticClips = new Set(staticClipsList);
 let params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
@@ -755,12 +1070,103 @@ if (before.skins > 0 || before.bones > 0) {
   gates.push({ gate: 'RG5 skin/bones', value: `skins ${before.skins}->${after.skins}, bones ${before.bones}->${after.bones}`, pass: before.skins === after.skins && before.bones === after.bones, hint: 'SkinnedMesh or Bone count changed across round-trip' });
 }
 
+const fmtDelta = (m: NodeMotion) => {
+  const unit = m.property === 'quaternion' ? ' rad' : m.property === 'position' ? ' m' : '';
+  return `${m.change.toFixed(3)}${unit} @${m.at.toFixed(2)}s`;
+};
+
+let sourceMotion: ClipMotion[] = [];
+let reloadedMotion: ClipMotion[] = [];
+if (animations.length > 0) {
+  sourceMotion = clipMotion(THREE, root, animations);
+  reloadedMotion = clipMotion(THREE, reloaded.scene, reloaded.animations ?? []);
+
+  const bindingIssues: string[] = [];
+  const boundProps = new Set<string>();
+  let totalInTracks = 0;
+  let totalOutTracks = 0;
+  for (let i = 0; i < sourceMotion.length; i++) {
+    const src = sourceMotion[i];
+    const rel = reloadedMotion[i]?.clip === src.clip ? reloadedMotion[i] : reloadedMotion.find((r) => r.clip === src.clip);
+    totalInTracks += src.tracks;
+    totalOutTracks += rel?.tracks ?? 0;
+    for (const u of src.unsupported) bindingIssues.push(`${src.clip}: ${u}; GLTFExporter drops non-glTF tracks — bake rotation to <node>.quaternion`);
+    for (const u of src.unbound) bindingIssues.push(`${src.clip} [source]: ${u}`);
+    if (rel) {
+      for (const u of rel.unsupported) bindingIssues.push(`${rel.clip} [reloaded]: ${u}`);
+      for (const u of rel.unbound) bindingIssues.push(`${rel.clip} [reloaded]: ${u}`);
+    }
+    const hasMergedMorphs = animations[i].tracks.some((t: any) => t.name.includes('morphTargetInfluences['));
+    if (!rel || (!hasMergedMorphs && rel.tracks < src.tracks)) {
+      bindingIssues.push(`${src.clip}: ${src.tracks} tracks in -> ${rel?.tracks ?? 0} out`);
+    }
+    for (const m of src.moving) boundProps.add(m.property);
+  }
+  const propSummary = boundProps.size ? [...boundProps].join('/') : 'position/quaternion/scale';
+  gates.push({
+    gate: 'RG6 track binding',
+    value: bindingIssues.length ? bindingIssues.join('; ') : `${totalInTracks} in -> ${totalOutTracks} out track(s) bound to ${propSummary} before and after export`,
+    pass: bindingIssues.length === 0,
+    hint: 'bake rotations to unique <nodeName>.quaternion tracks (never .rotation/.rotation[x]) and ensure every target node resolves uniquely from root',
+  });
+
+  const motionIssues: string[] = [];
+  const clipSummaries: string[] = [];
+  for (let i = 0; i < sourceMotion.length; i++) {
+    const src = sourceMotion[i];
+    const rel = reloadedMotion[i]?.clip === src.clip ? reloadedMotion[i] : reloadedMotion.find((r) => r.clip === src.clip);
+    if (staticClips.has(src.clip)) {
+      const movedNote = !src.static || (rel && !rel.static) ? ' (moved despite --static-clips)' : '';
+      clipSummaries.push(`${src.clip}: static-allowed${movedNote}`);
+      continue;
+    }
+    if (src.static) {
+      motionIssues.push(`${src.clip}: no pivot moves across ${src.times.length} samples before export`);
+      continue;
+    }
+    if (!rel || rel.static) {
+      motionIssues.push(`${src.clip}: no pivot moves across ${rel?.times.length ?? 0} samples in the reloaded GLB`);
+      continue;
+    }
+    const relKeys = new Set(rel.moving.map((m) => `${m.node}|${m.property}`));
+    for (const m of src.moving) {
+      if (!relKeys.has(`${m.node}|${m.property}`)) {
+        motionIssues.push(`${src.clip}: ${m.node}.${m.property} moved before export (${fmtDelta(m)}) but stayed static in reloaded GLB`);
+      }
+    }
+    clipSummaries.push(`${src.clip}: ${rel.moving.length} pivot(s) move (max ${fmtDelta(rel.moving[0])})`);
+  }
+  gates.push({
+    gate: 'RG7 clip motion',
+    value: motionIssues.length ? motionIssues.join('; ') : clipSummaries.join('; '),
+    pass: motionIssues.length === 0,
+    hint: 'ensure every non-static clip moves at least one bound pivot across timestamps before and after export, or pass intentionally static clip names via --static-clips',
+  });
+}
+
 const unverified = ['Visual appearance, lighting, and target-engine import (e.g. Blender / Roblox Studio) are not tested by headless GLTFLoader parse'];
 console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
+for (const [label, list] of [['source', sourceMotion], ['reloaded', reloadedMotion]] as const) {
+  for (const cm of list) {
+    if (!cm.moving.length) {
+      console.log(`MOTION [${label}] ${cm.clip}: static (0 moving pivots across ${cm.times.length} samples)`);
+    } else {
+      for (const m of cm.moving.slice(0, 5)) {
+        console.log(`MOTION [${label}] ${cm.clip}: ${m.node}.${m.property} ${fmtDelta(m)} (rest delta ${m.restChange.toFixed(3)})`);
+      }
+    }
+    if (label === 'reloaded' && cm.tPoseNotice) console.log(`NOTE ${cm.clip}: ${cm.tPoseNotice}`);
+  }
+}
 console.log(`wrote ${outPath}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const ok = gates.every((g) => g.pass);
-process.exit(emit({ tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, before, after, clips: outClips, gates, unverified }, ok ? 0 : 2));
+process.exit(emit({
+  tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, before, after, clips: outClips,
+  staticClips: staticClipsList,
+  ...(animations.length ? { motion: { source: sourceMotion, reloaded: reloadedMotion } } : {}),
+  gates, unverified,
+}, ok ? 0 : 2));
 ~~~
 
 ## scripts/fixtures/crate.qa.ts
@@ -2057,8 +2463,8 @@ export function renderSheet(parts: Parts, o: { open?: string[]; panel?: number }
 ## scripts/rig-check.ts
 
 ~~~typescript source-excerpt
-// scripts/rig-check.ts: CLI validator for rigged character/creature/vehicle metadata, clip contracts, track sanity, expression mappings & clearance (R1 to R6).
-//   npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]
+// scripts/rig-check.ts: CLI validator for rigged character/creature/vehicle metadata, clip contracts, track sanity, expression mappings, clearance & motion (R1 to R7).
+//   npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
 // Prints gate table; last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -2072,13 +2478,14 @@ const fail = (msg: string): never => { console.error(msg); process.exit(emit({ t
 const fmtGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 
 const metaFile = opt('meta') ?? args.find((a) => !a.startsWith('--'));
-if (!metaFile) fail('usage: tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]');
+if (!metaFile) fail('usage: tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]');
 const kind = (opt('kind') ?? 'hero') as RigKind;
 if (!(kind in DEFAULT_MAX_PIVOTS)) fail(`--kind must be one of ${Object.keys(DEFAULT_MAX_PIVOTS).join(', ')}, got "${kind}"`);
 const motionMode = opt('motion') as 'in-place' | 'free' | undefined;
 if (motionMode !== undefined && motionMode !== 'in-place' && motionMode !== 'free') fail('--motion must be in-place or free');
 const maxPivots = opt('max-pivots') !== undefined ? Number(opt('max-pivots')) : undefined;
 if (maxPivots !== undefined && (!Number.isFinite(maxPivots) || maxPivots <= 0)) fail('--max-pivots needs a positive number');
+const staticClips = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
 let meta: RigMeta;
 try { meta = JSON.parse(readFileSync(resolve(metaFile), 'utf8')); } catch (e) { fail(`cannot read ${metaFile}: ${(e as Error).message}`); }
@@ -2087,6 +2494,7 @@ const { gates, skipped, stats } = rigGates(meta!, {
   kind,
   motionMode,
   maxPivots,
+  staticClips: staticClips.length ? staticClips : undefined,
   excludeClips: flag('allow-refpose') ? [] : ['RefPose'],
 });
 const unverified = ['Visual skinning/animation playback and engine-native import (e.g. Roblox Motor6D / Blender) are not tested by JSON checks'];
@@ -2104,7 +2512,7 @@ process.exit(emit({ tool: 'rig-check', ok: failed.length === 0, gates, stats, sk
 ## scripts/rigcheck.ts
 
 ~~~typescript source-excerpt
-// scripts/rigcheck.ts: pure rig, clip, track, expression & slide-clearance gates (R1 to R6). No THREE, no fs.
+// scripts/rigcheck.ts: pure rig, clip, track, expression, clearance & motion gates (R1 to R7). No THREE, no fs.
 import type { Gate } from './result';
 
 export type RigTrack = { name: string; times: number[]; values: number[] };
@@ -2130,6 +2538,7 @@ export type RigMeta = {
     slideDropPct?: number;
     slideMinY?: number;
     clipMinY?: number;
+    staticClips?: string[];
   };
 };
 
@@ -2144,6 +2553,9 @@ export type RigCheckOptions = {
   minSlideDropPct?: number;
   minSlideY?: number;
   maxHorizDrift?: number;
+  staticClips?: string[];
+  minAngle?: number;
+  minDistance?: number;
 };
 
 const isFinite3 = (v: unknown): v is [number, number, number] =>
@@ -2250,8 +2662,15 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     for (const c of trackClips) {
       for (const tr of c.tracks!) {
         totalTracks++;
-        const target = tr.name.includes('.') ? tr.name.slice(0, tr.name.lastIndexOf('.')) : tr.name;
+        const lastDot = tr.name.lastIndexOf('.');
+        const target = lastDot >= 0 ? tr.name.slice(0, lastDot) : tr.name;
+        const rawProp = lastDot >= 0 ? tr.name.slice(lastDot + 1) : '';
+        const prop = rawProp.replace(/\[[^\]]*\]$/, '');
         if (pivotSet.size && !pivotSet.has(target)) tIssues.push(`${c.name}: unknown track target "${target}"`);
+        if (prop === 'rotation') {
+          tIssues.push(`${c.name}/${tr.name}: Euler rotation track is dropped by GLTFExporter; bake rotation to .quaternion`);
+          continue;
+        }
         if (!Array.isArray(tr.times) || !Array.isArray(tr.values) || !tr.times.length || !tr.values.length) {
           tIssues.push(`${c.name}/${tr.name}: missing or empty track samples`);
           continue;
@@ -2364,6 +2783,56 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     });
   } else {
     skipped.push('R6 slide clearance (missing qa.slideDropPct and qa.slideMinY)');
+  }
+
+  // R7 clip motion
+  if (trackClips.length) {
+    const staticSet = new Set([...(o.staticClips ?? []), ...(meta.qa?.staticClips ?? [])]);
+    const minAngle = o.minAngle ?? 1e-3;
+    const minDistance = o.minDistance ?? 1e-4;
+    const mIssues: string[] = [];
+    const mNotes: string[] = [];
+    for (const c of trackClips) {
+      if (staticSet.has(c.name)) {
+        mNotes.push(`${c.name} (static-allowed)`);
+        continue;
+      }
+      let clipMoves = false;
+      for (const tr of c.tracks!) {
+        if (!Array.isArray(tr.times) || !Array.isArray(tr.values) || tr.times.length < 2) continue;
+        const width = tr.values.length / tr.times.length;
+        if (!Number.isInteger(width) || width <= 0 || tr.values.some((v) => !Number.isFinite(v))) continue;
+        const isQuat = tr.name.endsWith('.quaternion') && width === 4;
+        if (isQuat) {
+          const l0 = Math.hypot(tr.values[0], tr.values[1], tr.values[2], tr.values[3]);
+          if (!(l0 > 0)) continue;
+          const x0 = tr.values[0] / l0, y0 = tr.values[1] / l0, z0 = tr.values[2] / l0, w0 = tr.values[3] / l0;
+          for (let i = 4; i + 3 < tr.values.length; i += 4) {
+            const li = Math.hypot(tr.values[i], tr.values[i + 1], tr.values[i + 2], tr.values[i + 3]);
+            if (!(li > 0)) continue;
+            const dot = Math.min(1, Math.abs(x0 * (tr.values[i] / li) + y0 * (tr.values[i + 1] / li) + z0 * (tr.values[i + 2] / li) + w0 * (tr.values[i + 3] / li)));
+            if (2 * Math.acos(dot) > minAngle) { clipMoves = true; break; }
+          }
+        } else {
+          for (let i = width; i + width - 1 < tr.values.length; i += width) {
+            let sq = 0;
+            for (let k = 0; k < width; k++) { const d = tr.values[i + k] - tr.values[k]; sq += d * d; }
+            if (Math.sqrt(sq) > minDistance) { clipMoves = true; break; }
+          }
+        }
+        if (clipMoves) break;
+      }
+      if (!clipMoves) mIssues.push(`${c.name}: all ${c.tracks!.length} track(s) hold their first key`);
+      else mNotes.push(c.name);
+    }
+    const untracked = (clips?.length ?? 0) - trackClips.length;
+    const suffix = untracked > 0 ? `, ${untracked} clip(s) without tracks unchecked` : '';
+    gates.push({
+      gate: 'R7 clip motion',
+      value: mIssues.length ? mIssues.join('; ') : `${mNotes.join(', ')} move across keys${suffix}`,
+      pass: mIssues.length === 0,
+      hint: 'animate at least one pivot between keys, or list intentionally static clips in qa.staticClips / --static-clips',
+    });
   }
 
   return {
@@ -2628,6 +3097,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { assetFingerprint } from '../../src/fingerprint';
 import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
+import { clipMotion } from '../clip-motion';
 import { boundsRecord, collectPoseVertices, frameCamera, poseBounds, samplesPerClip } from './framing';
 import type {
   StudioApi, StudioBackground, StudioConfig, StudioDiagnostic, StudioFrame, StudioFrameEvidence, StudioInfo, StudioPose,
@@ -2939,7 +3409,8 @@ export async function startStudio(
         }) as ArrayBuffer;
         const before = countScene(fresh.root);
         const clipNames = fresh.animations.map((clip) => clip.name);
-        return { buffer, before, clipNames };
+        const sourceMotion = fresh.animations.length ? clipMotion(THREE, fresh.root, fresh.animations) : [];
+        return { buffer, before, clipNames, sourceMotion };
       } finally {
         disposeObjectTree(fresh.root);
       }
@@ -2977,18 +3448,46 @@ export async function startStudio(
       verifyGlbBtn.disabled = true;
       glbStatus.textContent = 'Verifying GLB…';
       try {
-        const { buffer, before, clipNames } = await exportFreshGlb();
+        const { buffer, before, clipNames, sourceMotion } = await exportFreshGlb();
         const reloaded = await new GLTFLoader().parseAsync(buffer, '');
         try {
           const after = countScene(reloaded.scene);
-          const outClips = (reloaded.animations ?? []).map((clip) => clip.name);
+          const reloadedClips = reloaded.animations ?? [];
+          const outClips = reloadedClips.map((clip) => clip.name);
+          const reloadedMotion = reloadedClips.length ? clipMotion(THREE, reloaded.scene, reloadedClips) : [];
+          let bindingOk = true;
+          let motionPreserved = true;
+          const staticNames: string[] = [];
+          let movingCount = 0;
+          for (let i = 0; i < sourceMotion.length; i++) {
+            const src = sourceMotion[i];
+            const rel = reloadedMotion[i]?.clip === src.clip ? reloadedMotion[i] : reloadedMotion.find((r) => r.clip === src.clip);
+            const hasMorphMove = src.moving.some((m) => m.property === 'morphTargetInfluences');
+            if (src.unsupported.length || src.unbound.length || !rel || rel.unsupported.length || rel.unbound.length
+              || (rel.tracks < src.tracks && !hasMorphMove)) {
+              bindingOk = false;
+            }
+            if (src.static || !rel || rel.static) staticNames.push(src.clip);
+            else movingCount++;
+            if (!src.static) {
+              if (!rel || rel.static) motionPreserved = false;
+              else {
+                const relKeys = new Set(rel.moving.map((m) => `${m.node}|${m.property}`));
+                if (src.moving.some((m) => !relKeys.has(`${m.node}|${m.property}`))) motionPreserved = false;
+              }
+            }
+          }
           const ok = before.tris > 0 && before.tris === after.tris
             && before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes
             && before.skins === after.skins && before.bones === after.bones
-            && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name);
+            && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name)
+            && bindingOk && motionPreserved;
+          const motionNote = reloadedMotion.length
+            ? ` · moving clips ${movingCount}/${reloadedMotion.length}${staticNames.length ? ` · static: ${staticNames.join(', ')}` : ''}`
+            : '';
           glbStatus.textContent = ok
-            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips`
-            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}`;
+            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
+            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
         } finally {
           disposeObjectTree(reloaded.scene);
         }

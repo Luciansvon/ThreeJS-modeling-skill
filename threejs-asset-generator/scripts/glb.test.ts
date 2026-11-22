@@ -154,10 +154,46 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
   const rigParsed = runRigged(injected, 'sample-rigged.glb', '--export', 'buildSample', '--params', '{"size":0.5}');
   assert.deepEqual(rigParsed.clips, ['Nod']);
   assert.deepEqual(rigParsed.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 1 });
+  assert.equal(rigParsed.gates?.find((gate) => gate.gate === 'RG6 track binding')?.pass, true);
+  assert.equal(rigParsed.gates?.find((gate) => gate.gate === 'RG7 clip motion')?.pass, true);
   await checkTrack('sample-rigged.glb', 'Nod', 'head.quaternion', [0, 0.5, 1]);
   const blocked = spawnTsx(rigCli, ['--module', injected, '--params', '{"size":0.5}', '--out', join(injected, 'bad.glb')], { cwd: out, env });
   assert.equal(blocked.status, 1);
   assert.match(String(parseResult(blocked.stdout)?.error), /cannot write or re-open/);
+
+  const rigidModule = 'voxelRigid.ts';
+  writeFileSync(join(out, rigidModule), `
+    export function buildVoxel(params: { mode?: string }, THREE: any) {
+      const root = new THREE.Group(); root.name = 'voxel_root';
+      const armL = new THREE.Group(); armL.name = 'armL'; armL.position.set(0.5, 1, 0);
+      root.add(armL);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), new THREE.MeshStandardMaterial({ color: '#4c9f50' }));
+      mesh.name = 'armL_mesh';
+      armL.add(mesh);
+      if (params.mode === 'euler') {
+        const track = new THREE.NumberKeyframeTrack('armL.rotation[x]', [0, 0.5, 1], [0, 0.6, 0]);
+        return { root, animations: [new THREE.AnimationClip('Walk', 1, [track])] };
+      }
+      const track = new THREE.QuaternionKeyframeTrack('armL.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+      return { root, animations: [new THREE.AnimationClip('Hold', 1, [track])] };
+    }
+  `);
+  const eulerRes = spawnTsx(rigCli, ['--module', rigidModule, '--params', '{"mode":"euler"}', '--out', 'voxel-euler.glb'], { cwd: out, env });
+  assert.equal(eulerRes.status, 2, eulerRes.stdout + eulerRes.stderr);
+  const eulerJson = parseResult(eulerRes.stdout)!;
+  assert.equal(eulerJson.ok, false);
+  const eulerRg6 = eulerJson.gates?.find((g) => g.gate === 'RG6 track binding');
+  const eulerRg7 = eulerJson.gates?.find((g) => g.gate === 'RG7 clip motion');
+  assert.equal(eulerRg6?.pass, false);
+  assert.match(String(eulerRg6?.value), /rotation/);
+  assert.equal(eulerRg7?.pass, false);
+
+  const holdFail = spawnTsx(rigCli, ['--module', rigidModule, '--params', '{"mode":"hold"}', '--out', 'voxel-hold.glb'], { cwd: out, env });
+  assert.equal(holdFail.status, 2, holdFail.stdout + holdFail.stderr);
+  const holdJson = parseResult(holdFail.stdout)!;
+  assert.equal(holdJson.gates?.find((g) => g.gate === 'RG7 clip motion')?.pass, false);
+  const holdPass = runRigged(rigidModule, 'voxel-hold-ok.glb', '--params', '{"mode":"hold"}', '--static-clips', 'Hold');
+  assert.equal(holdPass.gates?.find((g) => g.gate === 'RG7 clip motion')?.pass, true);
 
   if (typeof nodeModule.registerHooks === 'function') {
     writeFileSync(join(out, 'dimensions.ts'), 'export const size: number = 2;');
@@ -207,6 +243,7 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
     `);
     const js = runRigged(join('esm', 'asset.js'), join('results', 'sample-js.glb'));
     assert.deepEqual(js.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 0 });
+    assert.ok(!js.gates?.some((gate) => gate.gate.startsWith('RG6') || gate.gate.startsWith('RG7')));
     console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS');
   } else {
     console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');

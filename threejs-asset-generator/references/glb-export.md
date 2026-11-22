@@ -59,14 +59,14 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, and re-parses the exact disk bytes with `GLTFLoader` to emit `@@RESULT` gates RG1–RG5):
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates RG1–RG7):
 
 ```
-npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b]
 ```
 
 The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
 
 Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
 
-Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` can omit scalar Euler tracks such as `.rotation[x]`. RG4 verifies clip names and counts. Validate track playback, procedural textures, and target-engine import with an asset-specific check. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.
+Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` silently omits scalar Euler tracks such as `.rotation[x]` while keeping the clip name, leaving exported models frozen in rest pose. When animations are present, `RG6 track binding` rejects unsupported properties, unbound/ambiguous node names, and dropped tracks; `RG7 clip motion` verifies every non-static clip moves at least one pivot across timestamps both before export and in the reloaded GLB (list intentionally motionless pose clips via `--static-clips`). Inspect procedural textures, rendered appearance, and target-engine import with visual checks. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.

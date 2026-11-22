@@ -1,4 +1,4 @@
-// scripts/rigcheck.test.ts: R1 to R6 must pass on valid rigged metadata and catch every defect class.
+// scripts/rigcheck.test.ts: R1 to R7 must pass on valid rigged metadata and catch every defect class.
 // Run: npx tsx scripts/rigcheck.test.ts
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -44,10 +44,10 @@ const baseMeta = (): RigMeta => ({
 
 const failedNames = (m: RigMeta) => rigGates(m).gates.filter((g) => !g.pass).map((g) => g.gate);
 
-// 1. valid character passes all 6 gates
-assert.deepEqual(failedNames(baseMeta()), [], 'valid rig passes R1 to R6');
+// 1. valid character passes all 7 gates
+assert.deepEqual(failedNames(baseMeta()), [], 'valid rig passes R1 to R7');
 const valid = rigGates(baseMeta());
-assert.equal(valid.gates.length, 6, 'valid rig evaluates all six gates');
+assert.equal(valid.gates.length, 7, 'valid rig evaluates all seven gates');
 assert.deepEqual(valid.skipped, [], 'valid rig has complete evidence');
 
 // 2. each defect triggers its own gate
@@ -146,6 +146,34 @@ const miss = run(); assert.equal(miss.status, 1);
   writeFileSync(krakenFile, JSON.stringify(krakenMeta));
   const kCli = run('--meta', krakenFile, '--kind', 'creature', '--motion', 'free');
   assert.equal(kCli.status, 0, kCli.stdout + kCli.stderr);
+}
+
+// 5. v4.3.3: Euler rotation tracks fail R4; static clips fail R7 unless listed in staticClips / --static-clips
+{
+  const eulerMeta = baseMeta();
+  eulerMeta.animations![0].tracks!.push({ name: 'head_pivot.rotation[x]', times: [0, 1], values: [0, 0.5] });
+  const eulerRes = rigGates(eulerMeta);
+  const r4 = eulerRes.gates.find((g) => g.gate === 'R4 tracks & drift')!;
+  assert.equal(r4.pass, false, 'Euler rotation track must fail R4');
+  assert.match(r4.value, /Euler|\.quaternion/);
+
+  const staticMeta = baseMeta();
+  staticMeta.animations = [{
+    name: 'Hold', durationSeconds: 1.0, loop: true, expression: 'neutral',
+    tracks: [{ name: 'head_pivot.quaternion', times: [0, 0.5, 1.0], values: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] }],
+  }];
+  assert.ok(failedNames(staticMeta).includes('R7 clip motion'), 'static clip holding first key fails R7');
+  const holdFile = join(dir, 'hold.json');
+  writeFileSync(holdFile, JSON.stringify(staticMeta));
+  const holdFail = run('--meta', holdFile);
+  assert.equal(holdFail.status, 2, 'CLI fails on static clip without --static-clips');
+
+  const holdCliOk = run('--meta', holdFile, '--static-clips', 'Hold');
+  assert.equal(holdCliOk.status, 0, holdCliOk.stdout + holdCliOk.stderr);
+  assert.equal(parseResult(holdCliOk.stdout)!.ok, true);
+
+  staticMeta.qa!.staticClips = ['Hold'];
+  assert.deepEqual(failedNames(staticMeta), [], 'qa.staticClips allows intentional static clip');
 }
 
 console.log('RIGCHECK OK');

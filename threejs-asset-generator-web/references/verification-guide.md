@@ -260,17 +260,17 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, and re-parses the exact disk bytes with `GLTFLoader` to emit `@@RESULT` gates RG1–RG5):
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates RG1–RG7):
 
 ```
-npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b]
 ```
 
 The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
 
 Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
 
-Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` can omit scalar Euler tracks such as `.rotation[x]`. RG4 verifies clip names and counts. Validate track playback, procedural textures, and target-engine import with an asset-specific check. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.
+Use `QuaternionKeyframeTrack` targeting `.quaternion` for rotation and `VectorKeyframeTrack` targeting `.position` or `.scale` for movement and scale. `GLTFExporter` silently omits scalar Euler tracks such as `.rotation[x]` while keeping the clip name, leaving exported models frozen in rest pose. When animations are present, `RG6 track binding` rejects unsupported properties, unbound/ambiguous node names, and dropped tracks; `RG7 clip motion` verifies every non-static clip moves at least one pivot across timestamps both before export and in the reloaded GLB (list intentionally motionless pose clips via `--static-clips`). Inspect procedural textures, rendered appearance, and target-engine import with visual checks. See `references/studio-preview.md` for the browser preview workflow and `references/detail.md` for texture cases.
 ~~~
 
 ## references/qa-gates.md
@@ -354,6 +354,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 ## 1 Intake and working views
 
 1. Open each available reference. Identify the facing direction, camera angle, pose, and requested style.
+   - **Detect T-pose / A-pose turnaround sheets:** If the reference shows outstretched horizontal arms, straight legs, a symmetric stance, and a plain background (or orthographic front/side/back views), record explicitly in `ref-spec.md` and the initial confirmation summary that the pose is for proportions and rest/bind pose only. Match silhouette checks (`ref-compare`) against the rest pose, and verify animated clips start from a natural standing pose rather than T-pose (`references/rigging-biped.md`).
 2. Write a short `ref-spec.md` with measurable width/height and depth/height ratios, the relative size and placement of important parts, the palette, and the features that make the subject recognizable. Note which details the brief changes and which views leave depth or construction uncertain.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
 4. Check the masks for leaked background or missing parts and adjust `--tol` if needed. `--out refs/round-1/asset.json` puts masks beside the JSON, such as `asset-front-mask.png`. The last `@@RESULT` lists the paths.
@@ -444,30 +445,38 @@ Summarize the latest measured results alongside the visual findings and unresolv
 
 Reference for `threejs-asset-generator`. Use it after authoring a rig, animation clips, or face controls.
 
-Contents: §18 Run rig-check · The gates (R1 to R6) · Metadata JSON shape · Export and playback
+Contents: §18 Run rig-check · The gates (R1 to R7) · Per-clip motion check · Metadata JSON shape · Export and playback
 
-Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/rigcheck.ts`; test `scripts/rigcheck.test.ts`. Needs `tsx` only (no `three`). Output contract: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = gate failed, 1 = usage/load error.
+Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/rigcheck.ts`, `scripts/clip-motion.ts`; test `scripts/rigcheck.test.ts`. Needs `tsx` only for metadata gates (`three` for live `clipMotion` playback sampling). Output contract: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 
 ## §18. Run rig-check
 
 ```
-npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--allow-refpose]
+npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
 ```
 
-Default `--max-pivots` scales by `--kind`: `hero` / `prop` = 16, `building` = 24, `vehicle` = 32, `creature` = 64 (for serpentine dragons, spiders, or kraken tentacles). Pass `--motion free` (or set `qa.motionMode: "free"`) for hovering, swimming, leaping, or lunging creatures whose root sways naturally in X/Z.
+Default `--max-pivots` scales by `--kind`: `hero` / `prop` = 16, `building` = 24, `vehicle` = 32, `creature` = 64 (for serpentine dragons, spiders, or kraken tentacles). Pass `--motion free` (or set `qa.motionMode: "free"`) for hovering, swimming, leaping, or lunging creatures whose root sways naturally in X/Z. List intentionally motionless pose clips under `--static-clips` (or `qa.staticClips`) so R7 allows them.
 
-## The gates (R1 to R6)
+## The gates (R1 to R7)
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
 | R1 hierarchy | unique `pivotNames`, single root, valid `{ parent, child }[]` edges, acyclic tree, count <= max pivots for `--kind` (or `--max-pivots`) | missing root, cycle, passing a map instead of `{ parent, child }[]`, too many pivots |
 | R2 rest-pose | every pivot has a finite `[x, y, z]` entry in `rig.restLocalPositions` | `NaN` or missing pivot entry |
 | R3 clips | unique clip names, finite positive `durationSeconds`, inspection clip (`RefPose`) excluded from export | `RefPose` accidentally baked into gameplay GLB, zero duration |
-| R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets; in `--motion in-place` (default), horizontal root X/Z drift <= `1e-5` m; in `--motion free`, natural X/Z sway/lunge is permitted | truncated track, duplicate timestamp, unintended horizontal root movement on an in-place runner |
+| R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), no Euler `.rotation` tracks, valid pivot targets; in `--motion in-place` (default), horizontal root X/Z drift <= `1e-5` m; in `--motion free`, natural X/Z sway/lunge is permitted | `.rotation` / `.rotation[x]` Euler track (dropped by `GLTFExporter`), truncated track, duplicate timestamp, unintended horizontal root movement on an in-place runner |
 | R5 expressions | static face metadata declares a square power-of-two `textureResolution` (e.g. `512x512`), a valid `defaultExpressionInGlb`, and valid clip expression mappings when supplied | unmapped expression name or non-square resolution |
 | R6 floor / slide clearance | for runner slide clips: `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m; for general creatures/vehicles: `qa.clipMinY >= -0.025` m | animation clips below the floor or slide does not duck enough |
+| R7 clip motion | every tracked clip not listed in `qa.staticClips` / `--static-clips` changes at least one track across timestamps (`> 1e-3` rad for quaternion, `> 1e-4` for position/scale) | all keyframes hold the first pose, unmoving loop, or forgotten pose changes |
 
-Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 checks slide measurements when supplied, or general `qa.clipMinY` when no slide clip applies.
+Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 checks slide measurements when supplied, or general `qa.clipMinY` when no slide clip applies. R7 evaluates clips that include `tracks` and reports untracked clips as unchecked.
+
+## Per-clip motion check
+
+1. Activate and test **one clip at a time** (do not blend multiple clips when checking motion).
+2. Sample multiple timestamps per clip, including mid-cycle or peak action frames, and compare each target pivot's transform **across timestamps within the same clip** (`scripts/clip-motion.ts`). Start and end poses may match in looping clips. Difference from rest pose is auxiliary information only (also flags potential T-pose lock if moving limbs stay close to rest).
+3. Verify every track binds uniquely to its target node and uses `GLTFExporter`-safe properties (`position`, `quaternion`, `scale`, `morphTargetInfluences`). When GLB export is requested, repeat the per-clip motion test on the reloaded GLB (`scripts/export-rigged-glb.ts`, gates RG6–RG7).
+4. Record `PASS` / `FAIL` per clip and moving pivot along with the timestamps sampled. Mark any test that was not run as `Unchecked`, and keep silhouette, proportions, and clipping `Unchecked` until renders are visually inspected.
 
 ## Metadata JSON shape
 
@@ -564,13 +573,13 @@ Choose controls for the asset and the requested review.
 
 ### Optional VFX references
 
-Use these examples as creative references. Choose or invent the effect, timing, scale, colors, layers, and blending that serve the brief. Adapt, combine, or skip any example. If a technique or tool is unavailable, use a suitable alternative and continue the deliverable.
+Push animation VFX and fine surface/motion details as creatively as possible—there are **zero creative limits** on particle count, layering, color palettes, custom shaders, or techniques when crafting preview VFX. Use these examples strictly as inspiration, never as ceilings; combine, layer, or invent new effects (bursts, sparks, dust clouds, debris, energy arcs, motion trails, shockwaves, rim glows, smoke, flashes, ground decals) so every action feels alive. Default to rich, expressive multi-layered VFX unless the user explicitly asks for minimal effects. Triangle budgets apply to the exported model only, not preview-only `_studio_vfx`.
 
 - **Lightning burst.** One possible rhythm is inward-moving energy, a short flash, an expanding wave, then lingering sparks. Change the stages and their timing to match the action. A continuous aura can use a different rhythm.
 - **Gradient ribbon.** A translucent tinted shell with soft edges and a thin bright core can keep a bolt legible on pale backgrounds. `NormalBlending` is one way to preserve its tint. A short additive flash can give the peak more impact when it suits the lighting. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
 - **Ground contact.** A surface ripple, dust wake, or brief aftermark can give a grounded strike a sense of weight. Use a response that fits the surface and the action.
 
-Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine the effects while preserving the motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
+Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine and enrich the effects while preserving the character motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
 
 Add `--vfx ./effect.ts` to `pack-studio` to include requested effects in the same self-contained preview. Supplied effects start enabled. Use **Studio VFX** to toggle them while playing or scrubbing. Export a factory such as `createStudioVfx({ root, asset, params, group, THREE })` and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. An optional `update({ clip, time, duration })` callback sets the effect at each pose, including rest (`clip: null`), so action-timed effects appear where authored.
 
@@ -594,7 +603,7 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 ## 4. Export and round-trip verify
 
 - Always build a fresh, clean asset instance in rest pose before calling `GLTFExporter` (never export live gizmos, wireframe/silhouette overrides, or circular `userData`).
-- Packaged studios (`pack-studio`) include built-in `Export .glb` and `Verify GLB` buttons (`GLTFExporter` -> `GLTFLoader.parse`) that test clip count/names, bones, skins, and mesh/triangle parity in RAM without triggering a file download; custom studios should expose the same rest-pose check.
+- Packaged studios (`pack-studio`) include built-in `Export .glb` and `Verify GLB` buttons (`GLTFExporter` -> `GLTFLoader.parse`) that test clip count/names, bones, skins, mesh/triangle parity, track binding, and per-clip motion preservation in RAM without triggering a file download, reporting moving vs static clips; custom studios should expose the same rest-pose check.
 - Export static expression PNGs separately (`512x512`) alongside a metadata JSON file compatible with `scripts/rig-check.ts` (`references/rig-check.md`).
 
 ## 5. Final visual and animation checks

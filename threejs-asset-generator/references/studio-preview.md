@@ -49,13 +49,13 @@ Choose controls for the asset and the requested review.
 
 ### Optional VFX references
 
-Use these examples as creative references. Choose or invent the effect, timing, scale, colors, layers, and blending that serve the brief. Adapt, combine, or skip any example. If a technique or tool is unavailable, use a suitable alternative and continue the deliverable.
+Push animation VFX and fine surface/motion details as creatively as possible—there are **zero creative limits** on particle count, layering, color palettes, custom shaders, or techniques when crafting preview VFX. Use these examples strictly as inspiration, never as ceilings; combine, layer, or invent new effects (bursts, sparks, dust clouds, debris, energy arcs, motion trails, shockwaves, rim glows, smoke, flashes, ground decals) so every action feels alive. Default to rich, expressive multi-layered VFX unless the user explicitly asks for minimal effects. Triangle budgets apply to the exported model only, not preview-only `_studio_vfx`.
 
 - **Lightning burst.** One possible rhythm is inward-moving energy, a short flash, an expanding wave, then lingering sparks. Change the stages and their timing to match the action. A continuous aura can use a different rhythm.
 - **Gradient ribbon.** A translucent tinted shell with soft edges and a thin bright core can keep a bolt legible on pale backgrounds. `NormalBlending` is one way to preserve its tint. A short additive flash can give the peak more impact when it suits the lighting. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
 - **Ground contact.** A surface ripple, dust wake, or brief aftermark can give a grounded strike a sense of weight. Use a response that fits the surface and the action.
 
-Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine the effects while preserving the motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
+Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine and enrich the effects while preserving the character motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
 
 Add `--vfx ./effect.ts` to `pack-studio` to include requested effects in the same self-contained preview. Supplied effects start enabled. Use **Studio VFX** to toggle them while playing or scrubbing. Export a factory such as `createStudioVfx({ root, asset, params, group, THREE })` and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. An optional `update({ clip, time, duration })` callback sets the effect at each pose, including rest (`clip: null`), so action-timed effects appear where authored.
 
@@ -79,7 +79,7 @@ Use the distance as a starting fit. Open both three-quarter presets and scrub to
 ## 4. Export and round-trip verify
 
 - Always build a fresh, clean asset instance in rest pose before calling `GLTFExporter` (never export live gizmos, wireframe/silhouette overrides, or circular `userData`).
-- Packaged studios (`pack-studio`) include built-in `Export .glb` and `Verify GLB` buttons (`GLTFExporter` -> `GLTFLoader.parse`) that test clip count/names, bones, skins, and mesh/triangle parity in RAM without triggering a file download; custom studios should expose the same rest-pose check.
+- Packaged studios (`pack-studio`) include built-in `Export .glb` and `Verify GLB` buttons (`GLTFExporter` -> `GLTFLoader.parse`) that test clip count/names, bones, skins, mesh/triangle parity, track binding, and per-clip motion preservation in RAM without triggering a file download, reporting moving vs static clips; custom studios should expose the same rest-pose check.
 - Export static expression PNGs separately (`512x512`) alongside a metadata JSON file compatible with `scripts/rig-check.ts` (`references/rig-check.md`).
 
 ## 5. Final visual and animation checks

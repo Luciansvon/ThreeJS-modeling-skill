@@ -1,4 +1,4 @@
-// scripts/rigcheck.ts: pure rig, clip, track, expression & slide-clearance gates (R1 to R6). No THREE, no fs.
+// scripts/rigcheck.ts: pure rig, clip, track, expression, clearance & motion gates (R1 to R7). No THREE, no fs.
 import type { Gate } from './result';
 
 export type RigTrack = { name: string; times: number[]; values: number[] };
@@ -24,6 +24,7 @@ export type RigMeta = {
     slideDropPct?: number;
     slideMinY?: number;
     clipMinY?: number;
+    staticClips?: string[];
   };
 };
 
@@ -38,6 +39,9 @@ export type RigCheckOptions = {
   minSlideDropPct?: number;
   minSlideY?: number;
   maxHorizDrift?: number;
+  staticClips?: string[];
+  minAngle?: number;
+  minDistance?: number;
 };
 
 const isFinite3 = (v: unknown): v is [number, number, number] =>
@@ -144,8 +148,15 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     for (const c of trackClips) {
       for (const tr of c.tracks!) {
         totalTracks++;
-        const target = tr.name.includes('.') ? tr.name.slice(0, tr.name.lastIndexOf('.')) : tr.name;
+        const lastDot = tr.name.lastIndexOf('.');
+        const target = lastDot >= 0 ? tr.name.slice(0, lastDot) : tr.name;
+        const rawProp = lastDot >= 0 ? tr.name.slice(lastDot + 1) : '';
+        const prop = rawProp.replace(/\[[^\]]*\]$/, '');
         if (pivotSet.size && !pivotSet.has(target)) tIssues.push(`${c.name}: unknown track target "${target}"`);
+        if (prop === 'rotation') {
+          tIssues.push(`${c.name}/${tr.name}: Euler rotation track is dropped by GLTFExporter; bake rotation to .quaternion`);
+          continue;
+        }
         if (!Array.isArray(tr.times) || !Array.isArray(tr.values) || !tr.times.length || !tr.values.length) {
           tIssues.push(`${c.name}/${tr.name}: missing or empty track samples`);
           continue;
@@ -258,6 +269,56 @@ export function rigGates(meta: RigMeta, o: RigCheckOptions = {}): { gates: Gate[
     });
   } else {
     skipped.push('R6 slide clearance (missing qa.slideDropPct and qa.slideMinY)');
+  }
+
+  // R7 clip motion
+  if (trackClips.length) {
+    const staticSet = new Set([...(o.staticClips ?? []), ...(meta.qa?.staticClips ?? [])]);
+    const minAngle = o.minAngle ?? 1e-3;
+    const minDistance = o.minDistance ?? 1e-4;
+    const mIssues: string[] = [];
+    const mNotes: string[] = [];
+    for (const c of trackClips) {
+      if (staticSet.has(c.name)) {
+        mNotes.push(`${c.name} (static-allowed)`);
+        continue;
+      }
+      let clipMoves = false;
+      for (const tr of c.tracks!) {
+        if (!Array.isArray(tr.times) || !Array.isArray(tr.values) || tr.times.length < 2) continue;
+        const width = tr.values.length / tr.times.length;
+        if (!Number.isInteger(width) || width <= 0 || tr.values.some((v) => !Number.isFinite(v))) continue;
+        const isQuat = tr.name.endsWith('.quaternion') && width === 4;
+        if (isQuat) {
+          const l0 = Math.hypot(tr.values[0], tr.values[1], tr.values[2], tr.values[3]);
+          if (!(l0 > 0)) continue;
+          const x0 = tr.values[0] / l0, y0 = tr.values[1] / l0, z0 = tr.values[2] / l0, w0 = tr.values[3] / l0;
+          for (let i = 4; i + 3 < tr.values.length; i += 4) {
+            const li = Math.hypot(tr.values[i], tr.values[i + 1], tr.values[i + 2], tr.values[i + 3]);
+            if (!(li > 0)) continue;
+            const dot = Math.min(1, Math.abs(x0 * (tr.values[i] / li) + y0 * (tr.values[i + 1] / li) + z0 * (tr.values[i + 2] / li) + w0 * (tr.values[i + 3] / li)));
+            if (2 * Math.acos(dot) > minAngle) { clipMoves = true; break; }
+          }
+        } else {
+          for (let i = width; i + width - 1 < tr.values.length; i += width) {
+            let sq = 0;
+            for (let k = 0; k < width; k++) { const d = tr.values[i + k] - tr.values[k]; sq += d * d; }
+            if (Math.sqrt(sq) > minDistance) { clipMoves = true; break; }
+          }
+        }
+        if (clipMoves) break;
+      }
+      if (!clipMoves) mIssues.push(`${c.name}: all ${c.tracks!.length} track(s) hold their first key`);
+      else mNotes.push(c.name);
+    }
+    const untracked = (clips?.length ?? 0) - trackClips.length;
+    const suffix = untracked > 0 ? `, ${untracked} clip(s) without tracks unchecked` : '';
+    gates.push({
+      gate: 'R7 clip motion',
+      value: mIssues.length ? mIssues.join('; ') : `${mNotes.join(', ')} move across keys${suffix}`,
+      pass: mIssues.length === 0,
+      hint: 'animate at least one pivot between keys, or list intentionally static clips in qa.staticClips / --static-clips',
+    });
   }
 
   return {

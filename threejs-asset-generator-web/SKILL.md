@@ -28,24 +28,26 @@ The packs reproduce canonical files under headings named for the original paths.
 3. Keep working on independent outputs. Preserve the brief, design decisions, geometry conventions, and gate thresholds. Hold only the step or result that needs the missing tool or input.
 4. Deliver the usable artifacts and evidence first. Put unresolved tool failures and their impact in the last section, **Blocked**. Report the failed stage, what prevented it, what you delivered in its place, and what would unblock the missing result.
 
-## Exploration vs Build Mode
+## Before modeling, confirm three things
 
-When the user is still exploring ideas, asking for advice, or has left major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults before writing full model code. Ask only what is missing from these 6 core items:
+Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip options already answered explicitly in the session, but **always confirm the brief summary** first:
+
+1. **Brief summary & reference check:** summarize the asset, style, requested actions/VFX, and deliverables, and ask the user to confirm or correct it. If a reference shows a neutral **T-pose / A-pose**, explicitly note it is used for proportions and bind/rest pose only—animations start from a natural standing pose (`references/modeling-guide.md`). If a referenced image is missing or cropped in this chat, suggest re-uploading it before modeling.
+2. **Work mode:** `1) Quick` (fast blockout & core geometry checks), `2) Balance` *(recommended default: reference comparison, QA, budget, rig checks, and GLB round trip when supported)*, or `3) Quality` *(Balance + iterative visual refinement, richer VFX, multi-view renders, and per-clip motion evidence before/after export)*.
+3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip playback/scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip controls)*. Wait for the user's choice before building a heavy Full Preview studio. For complex assets, offer optional two-stage approval (blockout first, then detail & animation).
+
+When requirements remain open, ask only for missing items in the same message:
 1. **Reference & style:** existing image, generate a reference concept first, or build from text.
-2. **Surface & materials:** choose normals and surface detail for the requested style and viewing distance.
-3. **Animation:** choose pivots, skinning or morph targets for the actions, including facial gestures where appropriate.
-4. **Preview mode:** **Fast Preview** (quick orbit/scrub) vs **Full Preview** (studio controls, rig/clip inspection).
-5. **Runtime VFX:** design for the intended action. Review the effect during playback from the delivery camera. Keep preview-only effects outside the exported asset.
-6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
-
-Jump straight to **Build Mode** when the brief is already complete or the user asks to build directly.
+2. **Surface & materials:** choose normals and surface detail for the requested style and viewing distance (for hinged voxel parts, cull interior faces only within one rigid pivot part).
+3. **Animation & VFX creativity:** choose rigid pivots (`QuaternionKeyframeTrack` on `<node>.quaternion` with unique names), skinning or morph targets, starting from a natural base pose with expressive micro-motion (breathing, blinks, secondary follow-through). Be **as creative as possible with no creative limits** on animation VFX and small details (layered particles, sparks, dust, debris, trails, glow, shockwaves, smoke, flashes); default to rich layered VFX unless minimal effects are requested. Preview-only effects stay outside the exported model and are not bound by export polygon budgets.
+4. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 ## Build from one model
 
 1. Record the brief, output, available views and any deployment target or explicit triangle budget. A browser preview alone establishes no polygon ceiling. Report counts when the target is open. Revisit the source image at a comparable angle and scale when judging proportions, expression, materials or seams.
 2. Block out the silhouette before adding detail. Use metres, Y up, front at +Z, and the footprint centered on X/Z with the base at Y=0. Name sides by axis where left and right are ambiguous. Record named parts, dimensions, positions, material indices, and any pivots in a single parameter schema or mesh builder. Use a deterministic seed for variation, including seed zero. Keep silhouettes and pivots stable across detail levels.
 3. Deliver a reusable JavaScript builder, for example `buildAsset(params, THREE)` returning a `THREE.Group` or `{ root, animations }`. Use named meshes, outward-facing triangles, and the same asset in preview and export. Choose smooth, flat or mixed normals to match the style. Keep scene controls and lighting separate. Use the user's Three.js version when supplied.
-4. Give relevant dimensions and clip details. Where a facial action matters, check the face in playback on the delivered model (for example, the jaw opening during a roar). Report what was visible and any requested checks still unavailable.
+4. Give relevant dimensions and clip details. Where animation applies, author exported rotations as `QuaternionKeyframeTrack` (`<node>.quaternion`) on uniquely named pivots starting from a natural standing pose (not T-pose). Activate one clip at a time, sample multiple timestamps including mid-cycle or peak action, and verify target pivots actually change **between timestamps within the same clip** (start/end loop poses may match). Where a facial action matters, check the face in playback on the delivered model (for example, the jaw opening during a roar). Repeat the binding and per-clip motion check on the reloaded `.glb` when binary export is available, and report `PASS` / `FAIL` / `Unchecked` per clip, pivot, and timestamp (keep silhouette, proportions, and clipping `Unchecked` until renders are inspected).
 
 ## Choose surface detail
 

@@ -10,7 +10,7 @@ Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §
 |---|---|---|
 | Faceted low-poly | Put facets where they describe the form. Bake per-face normals on surfaces meant to stay faceted in GLB. | Use deliberate color blocks and readable joints. |
 | Clay or claymation | Favor rounded volumes and smooth normals across curves. | Blend soft connections or show the pressed seams visible in the reference. Use a matte finish with subtle surface grain when it reads at the intended distance. |
-| Voxel | Use a shared grid and consistent block size. Keep hard edges at changes in face direction. | Keep the block joins sharp where required. Match any per-block color or grain to the grid and reference. |
+| Voxel | Use a shared grid and consistent block size. Keep hard edges at changes in face direction. | Keep the block joins sharp where required. Match any per-block color or grain to the grid and reference. For rigged or hinged voxel parts, cull interior faces only within one rigid pivot part so bent joints never open gaps (`references/rigging-biped.md`). |
 | Realistic | Preserve smoothing across curved surfaces and sharp edges at actual breaks. Use geometry for profile and joints that affect the silhouette. | Follow real seams and construction. Use material maps at the correct scale and direction where their detail is visible. |
 
 Mix these treatments where the brief calls for it. `PartBuilder` bakes flat normals via `bakeFlat`. Use it for intentionally faceted surfaces. For smooth or mixed shading, author normals on the geometry and retain hard edges only where the shape needs them. The glTF export carries the normals, so inspect the reloaded file when GLB is requested.

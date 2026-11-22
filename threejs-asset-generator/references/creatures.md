@@ -62,4 +62,4 @@ For stylized blocky characters (goblins, villagers, robots) that need controlled
 
 `taperedBoxTris(wBot, dBot, wTop, dTop, h)` lives in `src/biped.ts`.
 
-- **Biped limb pivots:** Build the left limb (`+X`) in local joint space (`[0, 0, 0]` at shoulder/hip), mirror its `Tris` with `mirrorTris(limb, 0)` for the right limb (`-X`), and attach each to a named `THREE.Group` (`armL_pivot`, `armR_pivot`, `head_pivot`) positioned at the joint on the torso so animations can rotate `pivot.rotation.x/z` cleanly without breaking flat shading.
+- **Biped limb pivots:** Build the left limb (`+X`) in local joint space (`[0, 0, 0]` at shoulder/hip), mirror its `Tris` with `mirrorTris(limb, 0)` for the right limb (`-X`), and attach each to a uniquely named `THREE.Group` (`armL_pivot`, `armR_pivot`, `head_pivot`) positioned at the joint on the torso. Author exported clip rotations using `QuaternionKeyframeTrack('<pivot>.quaternion', ...)` or `makeClip` in `src/rig.ts` (`GLTFExporter` drops `.rotation` Euler tracks; set `pivot.rotation` directly only for non-animated static poses).
