@@ -1,6 +1,6 @@
 ---
 name: threejs-asset-generator-web
-description: Use when creating or revising a procedural low-poly Three.js asset in ChatGPT web, Gemini, Claude web, or another chat with limited execution, including reference matching, dimensions, textures, previews, or GLB export.
+description: Create or revise procedural Three.js assets in ChatGPT web, Gemini, Claude web or another chat. Match references in low-poly, voxel, claymation, stylized or realistic styles, with materials, animation, VFX, previews and GLB export where supported.
 ---
 
 # Three.js Asset Generator for Web Chat
@@ -9,7 +9,7 @@ Produce a portable procedural model and evidence for the requested checks. Use t
 
 ## Read the relevant references
 
-Start with the [web runtime guide](references/runtime.md) before using commands or code from the source excerpts. Open the chapters that match the brief.
+Start with the [web runtime guide](references/runtime.md). Open the chapter for the decision in front of you. Load builder or test source when adapting a helper or diagnosing a failure.
 
 | Work | Read |
 | --- | --- |
@@ -32,24 +32,24 @@ The packs reproduce canonical files under headings named for the original paths.
 
 When the user is still exploring ideas, asking for advice, or has left major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults before writing full model code. Ask only what is missing from these 6 core items:
 1. **Reference & style:** existing image, generate a reference concept first, or build from text.
-2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed.
-3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
+2. **Surface & materials:** choose normals and surface detail for the requested style and viewing distance.
+3. **Animation:** choose pivots, skinning or morph targets for the actions, including facial gestures where appropriate.
 4. **Preview mode:** **Fast Preview** (quick orbit/scrub) vs **Full Preview** (studio controls, rig/clip inspection).
-5. **Runtime VFX:** choose optional effects suited to the brief. Adapt the reference techniques and keep preview effects outside the exported asset.
+5. **Runtime VFX:** design for the intended action. Review the effect during playback from the delivery camera. Keep preview-only effects outside the exported asset.
 6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 Jump straight to **Build Mode** when the brief is already complete or the user asks to build directly.
 
 ## Build from one model
 
-1. Record the target platform, requested file type, main dimensions, palette, and which reference views are visible. Use a labeled assumption where information is missing. When an image is available, note the silhouette breaks, part layout, and proportions visible in that view. Report obscured features as assumptions.
+1. Record the brief, output, available views and any deployment target or explicit triangle budget. A browser preview alone establishes no polygon ceiling. Report counts when the target is open. Revisit the source image at a comparable angle and scale when judging proportions, expression, materials or seams.
 2. Block out the silhouette before adding detail. Use metres, Y up, front at +Z, and the footprint centered on X/Z with the base at Y=0. Name sides by axis where left and right are ambiguous. Record named parts, dimensions, positions, material indices, and any pivots in a single parameter schema or mesh builder. Use a deterministic seed for variation, including seed zero. Keep silhouettes and pivots stable across detail levels.
-3. Deliver complete JavaScript for a reusable Three.js builder, for example `buildAsset(params, THREE)` returning a `THREE.Group` or `{ root, animations }`. Pass in the Three.js namespace so the source can be copied without repository helpers or network imports. Use named meshes, flat-shaded materials, outward-facing triangles, and the same geometry for preview and any export. Keep scene controls and lighting separate from the asset. Use the user's current Three.js version when supplied.
-4. Give front and side dimensions in the answer. For characters, include the pivot tree and a clip table with durations, root motion, and expression mappings as applicable. Keep inspection poses separate from exported gameplay clips.
+3. Deliver a reusable JavaScript builder, for example `buildAsset(params, THREE)` returning a `THREE.Group` or `{ root, animations }`. Use named meshes, outward-facing triangles, and the same asset in preview and export. Choose smooth, flat or mixed normals to match the style. Keep scene controls and lighting separate. Use the user's Three.js version when supplied.
+4. Give relevant dimensions and clip details. Where a facial action matters, check the face in playback on the delivered model (for example, the jaw opening during a roar). Report what was visible and any requested checks still unavailable.
 
 ## Choose surface detail
 
-- **Solid material or vertex color by default.** Leave simple low-poly props untextured when their shape, palette, and roughness carry the look at the intended camera distance. Add image detail for a visible requirement such as markings, a label, or a close-up material.
+- **Match the surface at the intended viewing distance.** Simple props can use shape, palette and roughness. For clay grain, markings or close-up detail, choose a material, vertex treatment or map that preserves that feature on the final mesh.
 - **Use supplied or deterministic artwork for precision.** Reuse suitable user artwork. Make simple repeated patterns from seeded pixels and exact lettering from editable SVG paths or drawn glyphs. Provide the source in text-only chat.
 - **Use image generation for original image detail.** For painted markings or irregular surface detail, call the chat's image tool when it is active and can return a usable image. Request a flat, straight-on base-color map with a specified UV region or tile, palette, and scale. Use even illumination and exclude shadows, highlights, and backgrounds. Ask for seamless edges only for tiled maps. If image generation is unavailable, provide a procedural approximation or a solid-color placeholder and a prompt for the missing artwork.
 - **Hand off the map and the binding.** Attach the generated image when possible and wire an optional texture input into the builder. State the intended mesh, UV placement, map slot, and resolution. Use one fixed map for both preview and export. Use sRGB for base-color or emissive images and linear data for normal, roughness, and metalness maps. Choose a resolution appropriate to visibility and budget.

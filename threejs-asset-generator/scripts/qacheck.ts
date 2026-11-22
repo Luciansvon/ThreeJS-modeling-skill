@@ -8,7 +8,7 @@ export type { Gate };
 export type Tris = number[];
 export type Parts = Record<string, Tris>;
 export type QAOptions = {
-  budget?: number;          // max triangles, default 2000 (a prop; use ~20000 for a composite plot, references/lifecycle.md §9)
+  budget?: number;          // max triangles when a deployment profile or explicit limit is selected
   open?: string[];          // part names that are sheets (no volume); 'all' skips Q3 and Q4 for everything
   symmetric?: boolean;      // Q7: the vertex set must equal its mirror image through x = 0
   grounding?: boolean;      // run Q6, default true. A raw kernel is not grounded (groundAsset does that), so qa-asset turns it off for --module unless --grounded
@@ -17,7 +17,7 @@ export type QAOptions = {
   weld?: number;            // vertex weld distance for Q4 and Q7, default 1e-4 (0.1 mm)
   maxDegenerate?: number;   // allowed degenerate triangles, default 0
 };
-export const DEFAULTS = { budget: 2000, weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
+export const DEFAULTS = { weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
 
 const num = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number');
 /** Normalize the triangle formats used by the QA, budget, export, and reference tools. */
@@ -109,7 +109,7 @@ export function hashTris(t: Tris): number {
 const fmt = (v: number, d = 3) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d);
 const list = (names: string[], max = 4) => names.slice(0, max).join(', ') + (names.length > max ? `, +${names.length - max} more` : '');
 
-/** Q1..Q7 over a built asset. `skipped` names the gates that a flag turned off, so the report can say so. */
+/** Q1..Q7 over a built asset. `skipped` names the unchecked gates and why they were skipped. */
 export function qaGates(parts: Parts, o: QAOptions = {}): { gates: Gate[]; skipped: string[]; stats: Record<string, unknown> } {
   const gates: Gate[] = [], skipped: string[] = [], all = flatten(parts), names = Object.keys(parts);
   const tris = triCount(all), bad = all.findIndex((v) => !Number.isFinite(v));
@@ -138,8 +138,8 @@ export function qaGates(parts: Parts, o: QAOptions = {}): { gates: Gate[]; skipp
     gates.push({ gate: 'Q4 closed', value: leaky.length ? leaky.map(([n, r]) => `${n}: ${r.boundary} open edges, ${r.duplicated} duplicated`).join('; ') : `${closed.length} closed part(s), every edge has a partner`, pass: leaky.length === 0, hint: 'open edges: a missing cap or a seam that is not welded (jitter before add(), then weld). duplicated edges: overlapping faces or one triangle with flipped winding' });
   }
 
-  const budget = o.budget ?? DEFAULTS.budget;
-  gates.push({ gate: 'Q5 budget', value: `${tris} of ${budget} triangles`, pass: tris <= budget, hint: 'lower segments/sides first, merge or drop small details; raise --budget only for a composite (about 20000)' });
+  if (o.budget === undefined) skipped.push('Q5 budget (set --profile or --budget)');
+  else gates.push({ gate: 'Q5 budget', value: `${tris} of ${o.budget} triangles`, pass: tris <= o.budget, hint: 'reduce segments or sides, merge parts, or drop small details to fit the selected limit' });
 
   if (o.grounding === false) skipped.push('Q6 grounding (raw kernel: groundAsset does this; check the final asset with --tris, or pass --grounded if this builder grounds itself)');
   else {

@@ -18,9 +18,11 @@ npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 
 The builder and `--tris` accept a bare triangle array (9 numbers per triangle, CCW from outside), `{ tris }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Named parts let the gates identify the part at fault. Use the same JSON with `mesh-stats` and `ref-compare`. Include hex `colors` in a wrapper to run the reference palette gate. `scripts/fixtures/crate.qa.ts` gives a complete named-parts builder.
 
-Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
+Select a deployment with `--profile` and `--kind` (default `prop`), or set a positive `--budget N` to supply the triangle limit. The override takes precedence over the profile's triangle limit. With no selected limit, QA reports the triangle count and marks Q5 unchecked. [Budget profiles](budget.md)
 
-Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the next result unreadable.
+Other options include `--open a,b` or `all` for zero-thickness sheets, `--symmetric`, `--grounded` for a self-grounding kernel, `--footprint` to check centring, `--ground-y N` for a terrain slab top, `--out dir` and `--no-render`.
+
+Use failed checks to locate the affected geometry. Related corrections can share a rebuild. Verify the deliverable after the changes.
 
 ## The gates
 
@@ -30,7 +32,7 @@ Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the 
 | Q2 degenerate | no zero-area triangles | tube or loft ring of radius 0, collapsed stage |
 | Q3 winding | every closed part has positive signed volume | inside-out part: swap two vertices per triangle (`mirrorTris` does) |
 | Q4 closed | every edge of a closed part has exactly one partner | missing cap, unwelded seam (jitter before `add()`, then weld), overlapping faces |
-| Q5 budget | triangles within `--budget` | too many segments or details |
+| Q5 budget | triangles within the selected profile and kind limit or `--budget N` | too many segments or details |
 | Q6 grounding | lowest Y equals `--ground-y` (0); with `--footprint` also centred | asset not wrapped by `groundAsset` |
 | Q7 symmetry (opt-in) | every vertex has a mirror partner through x = 0 | one side built twice, or an odd side count |
 | Q8 determinism (`--module` only) | two builds give identical numbers | `Math.random`, `Date.now`, shared mutable state, shared stream |
@@ -51,21 +53,9 @@ Look for what numbers miss: floating or sinking against the grey line, proportio
 
 ## The "Done" rule and report
 
-"Done" may be reported only when all of these hold:
-1. `qa-asset` ran on the current build and exited 0, or every failing gate is named in the answer with the reason it stays.
-2. `review.png` was opened with the `view` tool and the answer says in one line per panel what was seen. "Looks good" is not a finding.
-3. Everything the run listed under `UNVERIFIED` and `not checked` is repeated in the answer.
-4. Image given by the user: the `ref-compare` gate table (`references/reference-matching.md` §6) is in the answer as well.
+Keep the current build's `qa-asset` result and inspect `review.png` when it is available. If the request includes matching a reference, retain the last `ref-compare` result as well.
 
-End the answer with the gate table of the LAST run:
-
-| Gate | Result |
-|---|---|
-| Q3 winding | 3 closed parts, all volumes > 0 (open: wingL, wingR) |
-| Q6 grounding | lowest Y 0.000 (final asset, `--tris`) |
-| Q8 determinism | not run (`--tris`), UNVERIFIED |
-
-Review: front, legs evenly spaced and on the line; side, head at +Z (left) and higher than the tail; top, wings symmetric; 3/4, no magenta.
+In the handoff, link the evidence and summarize the outcomes and unresolved checks that affect the delivery. For visual QA, describe the relevant observation, such as feet aligning with the ground line or a limb overlapping the body. If a tool fails, record which check remains unresolved and continue the checks and deliverables that can run independently.
 
 ## What the gates do not cover
 

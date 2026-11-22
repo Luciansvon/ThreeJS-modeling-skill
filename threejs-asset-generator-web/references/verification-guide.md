@@ -22,18 +22,26 @@ Numbers aligned with blender-skills. Each range is *target to hard limit*: the g
 | Platform | Hero / Creature tris | Vehicle tris | Building tris | Prop tris | Materials (default / vehicle & building) | Texture max | Bones | Draw calls |
 |---|---|---|---|---|---|---|---|---|
 | `mobile` | 5k to 15k | 3k to 12k | 2k to 10k | 0.3k to 3k | 1 to 2 / 3 to 5 (`building` 2–4) | 1024 | 75 | 50 |
-| `web` (three.js, default) | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
+| `web` | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
 | `vr` (standalone) | 10k to 40k | 8k to 30k | 5k to 25k | 1k to 10k | 1 to 3 / 3 to 6 | 2048 | 100 | not in the table |
 | `desktop` | 50k to 150k | 30k to 120k | 20k to 100k | 5k to 50k | 2 to 6 / 4 to 8 | 4096 | 150 to 300 | not in the table |
 
 Web delivery: a `hero`, `creature`, or `vehicle` model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
-`--kind` accepts `prop`, `hero`, `creature`, `vehicle`, or `building`. `--lods` automatically passes the selected `--profile` + `--kind` max triangle limit (or `--budget N`) into L0 QA instead of clamping at 2,000 triangles.
+
+Pass `--profile mobile|web|vr|desktop` when you know the deployment target. `--kind` accepts `prop` (default), `hero`, `creature`, `vehicle`, or `building`. Choose `web` for a web deployment. A browser preview can be used for any target.
+
+`qa-asset`, `mesh-stats`, and geometry `export-glb` use the same triangle limit. The profile and kind select the table maximum. A positive `--budget N` supplies the triangle limit and takes precedence over the table. With a profile selected, its other limits still apply in `mesh-stats`. `--lods` applies the same triangle limit in L0 for every level.
+
+Without `--profile` or `--budget`, the tools report triangle counts and mark the triangle limit as unchecked. `mesh-stats` reports available measurements and checks LOD when requested. It needs a profile to check B2 through B6. The result includes `platform`, `kind` and `triangleLimit`, with `null` for a missing profile or triangle limit.
 
 A limit the table does not give is reported under `not checked`. Do not fill it with a number you remember.
 
 ## Run it
 
 ```
+# Counts for an asset whose deployment target is still open
+npx tsx scripts/mesh-stats.ts --tris tris.json
+
 # A kernel, no THREE (the builder is called with `{...params}`)
 npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris --profile web --kind prop
 
@@ -54,16 +62,17 @@ npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods --open wingL,wingR -
 
 ## What is counted
 
-- **Triangles**: from the arrays. **GPU vertices = 3 x triangles**, because flat shading keeps every triangle non-indexed (a hard edge or a seam duplicates vertices anyway). A smooth, indexed asset would have fewer; this skill does not build one.
+- The triangle arrays provide the triangle count. The reported `gpuVertices` value counts three corners per triangle. Indexed geometry can share vertices. Read the exported position accessor to count stored vertices for an indexed mesh.
 - **Draw calls**: one per group of (bone, material), because parts are merged per bone and material (`PartBuilder.build`). Without `--meta` the number is **an upper bound** (one per part) and is labelled so; with a material for every part it is exact. One asset is only a share of a scene's calls.
 - **Texture memory**: RGBA8 with a full mip chain, uncompressed: 1024 = 5.33 MiB, 2048 = 21.33 MiB, 4096 = 85.33 MiB. Compression (KTX2) lowers memory, not the size limit.
 - **Materials, bones, textures**: only from `--meta`. No meta, no claim: they are listed as `not checked`.
+- **GLB size**: from `--glb`, in bytes as `stats.glbBytes`.
 
 ## The gates
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| B1 triangles | triangles within the limit for the platform and kind (`--kind prop` default, `hero`) | too many segments or details: lower `detail` |
+| B1 triangles | triangles within the selected profile and kind limit or `--budget N` | too many segments or details: lower `detail` |
 | B2 materials | distinct materials within the limit (needs `--meta`) | parts that could share one material |
 | B3 textures | the largest texture within the platform limit; total MiB is reported | an atlas too big for mobile |
 | B4 bones | bone count within the limit (needs `--meta`) | small moving parts with their own bone |
@@ -100,7 +109,7 @@ Thin the middle, keep the ends and extremes: the lowest dragon level keeps the s
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| L0 QA at detail N | only shown when a level fails Q1 to Q5 (and Q7 with `--symmetric`) | a level is a full asset: a hole, an odd side count |
+| L0 QA at detail N | only shown when a level fails geometry QA, the selected triangle limit, or requested symmetry | a hole, an odd side count, too many triangles |
 | L1 LOD triangle ratio | each level is 0.35 to 0.65 of the one above | the builder ignores `detail`, or one level drops far more than half |
 | L2 LOD parts | the same part names at every level | a level dropped a part instead of faces |
 | L3 LOD bounds and pivot | size, lowest Y and footprint centre within 5% of the longest side | thinning removed an extreme (a sampled ring that no longer reaches the maximum radius) |
@@ -108,7 +117,7 @@ Thin the middle, keep the ends and extremes: the lowest dragon level keeps the s
 
 ## The Done report
 
-When you report a budget or a LOD, the answer must contain: the profile and kind used, the gate table of the last `mesh-stats` run, everything under `not checked`, and the `UNVERIFIED` line (the numbers are counted, not measured).
+Report the selected limit and the relevant results of the current `mesh-stats` run. If the target is open, report the counts and any requested LOD results. Note unresolved checks that affect the requested delivery.
 
 ## What it does not cover
 
@@ -208,9 +217,11 @@ npx tsx scripts/export-glb.ts --module ./myKernel.ts --export buildMyTris --para
 npx tsx scripts/export-glb.ts --tris tris.json --out asset.glb
 ```
 
-Options: `--open a,b` or `all` (zero-thickness sheets, as in qa-asset) · `--budget N` · `--color r,g,b` (0 to 1, one base colour) · `--skip-qa` (export although Q1 to Q5 fail; the result lists it under `unverified`).
+Use `--profile` and `--kind` to select the same triangle limit as QA and mesh stats. A positive `--budget N` overrides it. With no selected limit, the exporter reports the triangle count and marks Q5 unchecked. [Budget profiles](budget.md)
 
-Order of work: `qa-asset.ts` first (all of Q1 to Q10 and the review image), `export-glb.ts` second. The exporter reruns Q1 to Q5 on the same parts and refuses to write a file for a non-finite, inside-out or open asset, because a GLB of that is worse than no file. Q6 to Q10 stay in `qa-asset.ts`.
+Other options include `--open a,b` or `all` for zero-thickness sheets and `--color r,g,b` for the base colour (0 to 1). `--skip-qa` permits export after a QA failure and records the overridden failure under `unverified`.
+
+Run `qa-asset.ts` for the current build and review image. Before writing, the exporter checks geometry with Q1 to Q4 and enforces Q5 when a limit is selected. Q6 to Q10 run in `qa-asset.ts`.
 
 ## What the file contains
 
@@ -224,7 +235,7 @@ Order of work: `qa-asset.ts` first (all of Q1 to Q10 and the review image), `exp
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| QA Q1 to Q5 | the parts are finite, non-degenerate, outward-wound, closed (or listed in `--open`) and inside the budget | fix with `qa-asset.ts`; `--skip-qa` only knowingly |
+| QA Q1 to Q4, plus Q5 with a budget | the parts are finite, non-degenerate, outward-wound and closed (or listed in `--open`), and the triangle count fits any selected limit | run `qa-asset.ts` to identify the failing part or limit |
 | E1 container | magic `glTF`, version 2, header length equals file size, JSON chunk first, chunk lengths multiples of 4 | a hand-patched file; rewrite with `partsToGlb` |
 | E2 json | `asset.version` 2.0, scene 0, node names equal the part names in order, buffer length fits the BIN chunk | renamed parts; a JSON chunk that does not parse |
 | E3 accessors | float32 VEC3, inside their bufferView and the BIN chunk, aligned, `POSITION` min/max equal the data bounds | stale `min`/`max` after editing positions (viewers reject it) |
@@ -236,10 +247,7 @@ E1 to E6 are checked on the file **re-read from disk**, not on the buffer in mem
 
 ## The Done report
 
-When you export a GLB, the answer must contain:
-1. The path of the file and its size.
-2. The gate table of the last run (QA Q1 to Q5 and E1 to E6).
-3. Everything under `UNVERIFIED` that remains after any separate loader test. The CLI emits one default material and geometry. Use the Three.js route below for assets that need vertex colours, rich materials, rigging, or animation.
+Give the path and size of the exported file. Link the current export evidence and summarize any unresolved checks that affect the requested use. The Three.js route below supports vertex colours, materials, rigging and animation.
 
 If the user needs to see the result, say how to check it: drag the file into a glTF viewer or Blender, and confirm the part names appear as objects.
 
@@ -288,9 +296,11 @@ npx tsx scripts/qa-asset.ts --tris tris.json --footprint --symmetric
 
 The builder and `--tris` accept a bare triangle array (9 numbers per triangle, CCW from outside), `{ tris }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Named parts let the gates identify the part at fault. Use the same JSON with `mesh-stats` and `ref-compare`. Include hex `colors` in a wrapper to run the reference palette gate. `scripts/fixtures/crate.qa.ts` gives a complete named-parts builder.
 
-Options: `--budget N` (default 2000 for small props; pass a category-appropriate budget such as `6000`–`15000` for hero/creature/vehicle models or `20000` for buildings/composites per `references/budget.md`) · `--open a,b` or `all` (zero-thickness sheets) · `--symmetric` · `--grounded` (run Q6 on a kernel that grounds itself) · `--footprint` (Q6 also checks centring) · `--ground-y N` (terrain slab top) · `--out dir` · `--no-render`.
+Select a deployment with `--profile` and `--kind` (default `prop`), or set a positive `--budget N` to supply the triangle limit. The override takes precedence over the profile's triangle limit. With no selected limit, QA reports the triangle count and marks Q5 unchecked. [Budget profiles](budget.md)
 
-Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the next result unreadable.
+Other options include `--open a,b` or `all` for zero-thickness sheets, `--symmetric`, `--grounded` for a self-grounding kernel, `--footprint` to check centring, `--ground-y N` for a terrain slab top, `--out dir` and `--no-render`.
+
+Use failed checks to locate the affected geometry. Related corrections can share a rebuild. Verify the deliverable after the changes.
 
 ## The gates
 
@@ -300,7 +310,7 @@ Fix the FIRST failing gate, rebuild, run again. Two fixes in one round make the 
 | Q2 degenerate | no zero-area triangles | tube or loft ring of radius 0, collapsed stage |
 | Q3 winding | every closed part has positive signed volume | inside-out part: swap two vertices per triangle (`mirrorTris` does) |
 | Q4 closed | every edge of a closed part has exactly one partner | missing cap, unwelded seam (jitter before `add()`, then weld), overlapping faces |
-| Q5 budget | triangles within `--budget` | too many segments or details |
+| Q5 budget | triangles within the selected profile and kind limit or `--budget N` | too many segments or details |
 | Q6 grounding | lowest Y equals `--ground-y` (0); with `--footprint` also centred | asset not wrapped by `groundAsset` |
 | Q7 symmetry (opt-in) | every vertex has a mirror partner through x = 0 | one side built twice, or an odd side count |
 | Q8 determinism (`--module` only) | two builds give identical numbers | `Math.random`, `Date.now`, shared mutable state, shared stream |
@@ -321,21 +331,9 @@ Look for what numbers miss: floating or sinking against the grey line, proportio
 
 ## The "Done" rule and report
 
-"Done" may be reported only when all of these hold:
-1. `qa-asset` ran on the current build and exited 0, or every failing gate is named in the answer with the reason it stays.
-2. `review.png` was opened with the `view` tool and the answer says in one line per panel what was seen. "Looks good" is not a finding.
-3. Everything the run listed under `UNVERIFIED` and `not checked` is repeated in the answer.
-4. Image given by the user: the `ref-compare` gate table (`references/reference-matching.md` §6) is in the answer as well.
+Keep the current build's `qa-asset` result and inspect `review.png` when it is available. If the request includes matching a reference, retain the last `ref-compare` result as well.
 
-End the answer with the gate table of the LAST run:
-
-| Gate | Result |
-|---|---|
-| Q3 winding | 3 closed parts, all volumes > 0 (open: wingL, wingR) |
-| Q6 grounding | lowest Y 0.000 (final asset, `--tris`) |
-| Q8 determinism | not run (`--tris`), UNVERIFIED |
-
-Review: front, legs evenly spaced and on the line; side, head at +Z (left) and higher than the tail; top, wings symmetric; 3/4, no magenta.
+In the handoff, link the evidence and summarize the outcomes and unresolved checks that affect the delivery. For visual QA, describe the relevant observation, such as feet aligning with the ground line or a limb overlapping the body. If a tool fails, record which check remains unresolved and continue the checks and deliverables that can run independently.
 
 ## What the gates do not cover
 
@@ -345,85 +343,72 @@ Still manual, from the §13 checklist: materials and `metalness` environment, UV
 ## references/reference-matching.md
 
 ~~~markdown source-excerpt
-# Reference matching: build against a reference, check after every step
+# Reference matching
 
-Reference for `threejs-asset-generator` §15. Read it BEFORE writing code whenever the user gives an image, screenshot, sketch, photo or "make it look like this". The point: the agent never works from memory of the reference. It writes the reference down once as a spec, then measures its own result against it after every build step, cheapest check first.
+Reference for `threejs-asset-generator` §15. Use it when the brief includes an image, screenshot, sketch, or photo. Record the visible design and keep the source available to compare against the model as it changes.
 
-Contents: 1 Intake (once) · 2 The loop · 3 Gates and thresholds · 4 Efficiency rules · 5 Getting triangles out · 6 Final report · 7 When numbers do not apply
+Contents: 1 Intake and working views · 2 Choose a modeling stage · 3 Gates and thresholds · 4 Compare and refine · 5 Getting triangles out · 6 Final report · 7 When numbers do not apply
 
 Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-compare.ts`; library `scripts/refcheck.ts`, `scripts/png.ts`; test `scripts/refcheck.test.ts`. Needs `tsx`; writes mask and diff PNGs and reads standard 8-bit PNG inputs with pure Node (`scripts/png.ts`, no `sharp` required). Install `sharp` only when reading JPEG/WebP references. Copy `scripts/` next to the project if the skill folder is read-only.
 
-## 1 Intake (once per reference)
+## 1 Intake and working views
 
-1. `view` the reference image ONCE. Several views (front, side, top)? Use each file.
-2. Write `ref-spec.md` (max 15 lines). This is the only description of the reference that later steps use:
-   - **Subject and facing** (which way it looks, which view each image is).
-   - **Proportions**: width/height `w` and depth/height `d`, measured on the image (count pixels or grid squares, do not eyeball). Also 3 to 6 part ratios (head vs body height, leg length vs body, roof vs cabin).
-   - **Parts**: list top to bottom or front to back, each with relative size and position.
-   - **Palette**: what `ref-intake` prints (do not guess hex values from memory).
-   - **Signature features**: the 3 things that make it recognisable (horns, round windows, striped tail). These decide G4.
-   - **Out of scope**: shadows, background, texture noise, anything the low-poly style drops on purpose.
+1. Open each available reference. Identify the facing direction, camera angle, pose, and requested style.
+2. Write a short `ref-spec.md` with measurable width/height and depth/height ratios, the relative size and placement of important parts, the palette, and the features that make the subject recognizable. Note which details the brief changes and which views leave depth or construction uncertain.
 3. Run intake: `npx tsx scripts/ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json --w 1.2 --d 2.5` (`--w`/`--d` are the ratios you just measured; omit what you could not measure). One image without a name is `front`. Angled concept art is supported directly via `34=ref_34.png` and `34_back=ref_34_back.png` (and `--sheet sheet.png --grid 2x1 --views 34,34_back` or `3x2` with `--views front,back,top,bottom,side,34`). Opaque images use border flood-fill by default so light interior patches (such as a cream belly on a light background) do not poke holes in the silhouette (pass `--no-flood` for flat thresholding).
-4. Open each printed mask once and check for leaked background or missing parts. Adjust `--tol` and repeat intake if needed. All masks are written beside the JSON. For example, `--out refs/round-1/asset.json` writes `refs/round-1/asset-front-mask.png`. Each JSON view has a sibling-relative `mask` name. The last `@@RESULT` line gives absolute paths in `out` and `views.<view>.mask`.
+4. Check the masks for leaked background or missing parts and adjust `--tol` if needed. `--out refs/round-1/asset.json` puts masks beside the JSON, such as `asset-front-mask.png`. The last `@@RESULT` lists the paths.
+5. Reopen or crop the reference whenever details matter. Use the full view to judge proportions, and close-ups for eye placement, muzzle shape, seam treatment, grain direction, and material finish. Keep analytical crops separate from the whole-object masks.
 
-## 2 The loop
+## 2 Choose a modeling stage
 
-Build coarse to fine. After EVERY step run the compare, not only at the end:
+Start coarse on a new build. On a revision, enter where the requested change belongs and check the parts it affects.
 
-| Step | What you build | Gates that must pass before the next step |
+| Stage | What you change | Evidence to collect |
 |---|---|---|
-| A Blockout | primitives with the right size and position, one colour | G1 proportions, G2 aspect |
-| B Silhouette | real shapes, tubes, lofts, limbs, no colour work yet | G2 IoU (every view you have) |
-| C Colour | palette, per-part colours | G3 palette |
-| D Detail | chamfer, atlas, AO, small parts (`references/detail.md`) | G4 checklist |
+| A Blockout | main volumes, facing, relative placement | G1 proportions, G2 aspect, visual comparison of landmarks |
+| B Silhouette | actual curves, limbs, rooflines or profiles | G2 IoU and aligned renders from relevant views |
+| C Surface | normals, palette, joints, texture or grain | G3 when colors are comparable and a render in delivery lighting |
+| D Detail | distinguishing features, small parts, facial shapes | G4 close-ups. Scrub moving details through their poses. |
 
-Each iteration:
-1. Write `tris.json` from your generator driver using a format from §5, then run `npx tsx scripts/ref-compare.ts ref.json tris.json`.
-2. Read the output. It lists PASS/FAIL per gate and the hint for each failure.
-3. Fix **only the first failing gate**. Change one group of parameters (for example only leg length and body depth), then compare again.
-4. On a failing IoU gate `view` `diff-<view>.png` once: red is missing in the model, blue is extra. Name the part that is wrong before touching code.
-5. Log one line in your notes: `step B, round 2: side IoU 0.71 -> 0.83, shortened neck`. No log, no next round.
-
-Stop rules: max 3 rounds per gate. After 3 rounds without reaching the threshold, keep the best version, write the remaining gap into the final report and move on. Never chase a number by distorting the shape (a leg 3x too thick to fill a red area is a fail, not a fix).
+Use a closely matched camera and pose for visual comparisons. Check head-to-body ratio, joint placement, and other important landmarks even when aspect and IoU pass. Cropped views can reveal a misplaced eye or awkward neck join that barely changes the whole silhouette.
 
 ## 3 Gates and thresholds
 
 | Gate | Measures | Pass when | Typical fix when it fails |
 |---|---|---|---|
-| G1 proportions | size ratios w/h and d/h of the model against `--w`, `--d` | within 10% | scale the whole part groups, not single vertices |
-| G2 aspect | tight silhouette width/height per view | within 8% | proportions first, details later |
-| G2 IoU | silhouette overlap per view (64x64 grid, tight crop) | at least 0.85 | read `diff-<view>.png`, fix the largest red or blue blob |
+| G1 proportions | size ratios w/h and d/h of the model against `--w`, `--d` | within 10% | adjust the affected part proportions |
+| G2 aspect | tight silhouette width/height per view | within 8% for orthographic views, 14% for angled views | compare facing and major proportions |
+| G2 IoU | silhouette overlap per view (64×64 grid, tight crop) | at least 0.85 for orthographic views, 0.70 for angled views | use the diff to locate a mismatch, then confirm it against the source |
 | G3 palette | every reference colour with 5% or more share has a colour within RGB distance 60 | all | retune that one colour |
-| G4 checklist | the signature features from `ref-spec.md` (visual) | all present | add or reshape that feature |
+| G4 checklist | the signature features from `ref-spec.md` | features read correctly in the relevant render or pose | adjust their shape, material, placement, or motion |
 
 - The CLI reports when a mirrored reference gives the higher IoU. A +Z-facing asset faces left in `side` and down in `top`.
 - Angled views `34` and `34_back` start at 38° and 142° azimuth respectively, both at 16° elevation. They sample azimuth offsets of 0°, ±6°, ±12° and elevation offsets of 0°, ±6°. The comparison chooses the highest IoU among cameras within the 14% aspect tolerance. If all fail aspect, it reports the highest-IoU camera for diagnosis. The canonical camera wins ties within either group. The selected camera supplies both G2 measurements and the diff PNG. The IoU threshold is 0.70. The gate text and `@@RESULT.angles` list the selected angles and offsets; when the sweep shifts the angle, the gate text also prints `canonical IoU` and flags `passed via angle sweep` if only the shifted angle cleared the threshold.
-- G4 is the only visual gate. Take ONE screenshot per milestone (end of B, end of D), same camera angle as the reference, reference and render in the same message, and tick each signature feature. If you cannot render, use the diff PNGs and say that G4 was checked from silhouettes only.
-- Thresholds live in `THRESH` in `scripts/refcheck.ts`. Loosen them (IoU 0.7) only for photos with strong perspective and say so in the report.
+- Thresholds live in `THRESH` in `scripts/refcheck.ts`. Treat them as diagnostic signals when pose, perspective, mask quality, or intentional style changes affect comparability. Report the CLI's actual status and what the visual comparison showed.
 
-## 4 Efficiency rules
+## 4 Compare and refine
 
-- Use the numeric compare at each build step. Open images for the mask check, a failing IoU diff and the G4 milestones.
-- Never re-read the reference image after intake. Use `ref-spec.md` and `ref.json`.
-- Compare after every step, but run only gates that exist for that step; gates for later steps are not failures yet. Ignore a G3 FAIL during step A.
-- One failing gate per round, one parameter group per change. Two changes at once make the next number unreadable.
-- Keep the generator seeded and deterministic (§2). The compare is only meaningful when the same params give the same triangles.
-- Do not build detail (step D) while G2 fails. Detail on a wrong silhouette is wasted work.
+1. Compare the evidence for the change. For geometry, write `tris.json` and run `npx tsx scripts/ref-compare.ts ref.json tris.json`. In a diff image, red marks missing silhouette and blue marks extra silhouette. For material or face changes, inspect matched renders or crops.
+2. Correct the most consequential mismatch. Separate changes when it helps diagnose their effect. Keep the seed and camera consistent while comparing iterations.
+3. Continue while another edit can improve the requested result. A numeric failure can coexist with usable evidence for surface work or expression. Keep the best result and report any unresolved discrepancy, including a clear visual mismatch after a numeric pass.
 
 ## 5 Getting triangles out
 
-Kernel-based assets already have `tris` (the output of the kernel, in asset space). For `PartBuilder` or rigged assets collect them from the built object:
+Kernel-based assets already have `tris` in asset space. For a skinned build, use `extractQaArtifacts(built).tris` from `src/skinnedRig.ts` to get named rest-pose triangles. For a simple mesh or rigid assembly, visit the built object and transform its rest vertices into asset space. For example:
 
 ```ts
-// THREE side. Untested in the session that wrote it: run it once and check that tris.length / 9 equals the triangle count you expect.
+// Simple meshes using the full geometry draw range.
 import * as THREE from 'three';
 export function groupToTris(root: THREE.Object3D): number[] {
   root.updateWorldMatrix(true, true);
   const out: number[] = [], v = new THREE.Vector3();
-  root.traverse((o) => {
+  root.traverseVisible((o) => {
     const m = o as THREE.Mesh; if (!m.isMesh) return;
-    const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry, p = g.attributes.position;
-    for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(m.matrixWorld); out.push(v.x, v.y, v.z); }
+    const index = m.geometry.index, position = m.geometry.getAttribute('position');
+    for (let i = 0; i < (index?.count ?? position.count); i++) {
+      v.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(m.matrixWorld);
+      out.push(v.x, v.y, v.z);
+    }
   });
   return out;
 }
@@ -432,26 +417,24 @@ export function groupToTris(root: THREE.Object3D): number[] {
 
 Pose the asset in its rest pose before collecting. QA, mesh stats and reference comparison accept the same triangle JSON. Use a bare array, `{ tris, colors? }`, a named map such as `{ body: bodyTris, legs: legTris }`, or `{ parts: { body: bodyTris, legs: legTris }, colors? }`. Include the hex palette as `colors` to enable G3.
 
-## 6 Final report (always include)
+## 6 Final report
 
-End the answer with the gate table of the LAST compare run and the leftover gaps, for example:
+Summarize the latest measured results alongside the visual findings and unresolved gaps. Include the comparable views or crops when they show why a score differs from the visual result. For example:
 
 | Gate | Result |
 |---|---|
 | G1 width/height | 1.21 vs 1.20, pass |
 | G2 front IoU | 0.88, pass |
-| G2 side IoU | 0.79, fail (3 rounds used, tail curve still short) |
+| G2 side IoU | 0.79, fail. The side render still shows a short tail curve. |
 | G3 palette | pass |
-| G4 | horns yes, striped tail yes, round windows no |
-
-Never write "matches the reference" without this table.
+| G4 | Horns and tail stripes read well. The eye crop shows the model's eyes sit too high. |
 
 ## 7 When numbers do not apply
 
-- No usable silhouette (busy photo, no background): skip masks, keep `--w`/`--d` and the palette, run G4 with two screenshots, and say that G2 was not measured.
-- Concept art with stylised or impossible perspective: set the IoU target to 0.7 and treat G4 as the main gate.
-- The user wants "inspired by", not a match: do intake and G4 only, one screenshot, no rounds.
-- Reference changes mid-task: delete `ref.json`, run intake again, restart at step A for the changed parts.
+- For a busy photo, keep the ratios and palette you can measure. Review the readable details and state that G2 was unmeasured if a clean mask could not be made.
+- For exaggerated perspective or an inspiration brief, prioritize the agreed visual traits and note the limits of the camera match.
+- If the reference changes, update the affected views and repeat the relevant modeling stage. Keep working parts and motions that still fit the brief.
+- With only silhouettes or diff PNGs, report shape evidence and mark finish, facial detail, or playback unverified as applicable.
 ~~~
 
 ## references/rig-check.md
@@ -459,9 +442,9 @@ Never write "matches the reference" without this table.
 ~~~markdown source-excerpt
 # Rig, clip and expression checks
 
-Reference for `threejs-asset-generator`. Read it after authoring a rigged character with animation clips or static facial expression swaps.
+Reference for `threejs-asset-generator`. Use it after authoring a rig, animation clips, or face controls.
 
-Contents: §18 Run rig-check · The gates (R1 to R6) · Metadata JSON shape · What is not checked
+Contents: §18 Run rig-check · The gates (R1 to R6) · Metadata JSON shape · Export and playback
 
 Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/rigcheck.ts`; test `scripts/rigcheck.test.ts`. Needs `tsx` only (no `three`). Output contract: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 
@@ -481,7 +464,7 @@ Default `--max-pivots` scales by `--kind`: `hero` / `prop` = 16, `building` = 24
 | R2 rest-pose | every pivot has a finite `[x, y, z]` entry in `rig.restLocalPositions` | `NaN` or missing pivot entry |
 | R3 clips | unique clip names, finite positive `durationSeconds`, inspection clip (`RefPose`) excluded from export | `RefPose` accidentally baked into gameplay GLB, zero duration |
 | R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets; in `--motion in-place` (default), horizontal root X/Z drift <= `1e-5` m; in `--motion free`, natural X/Z sway/lunge is permitted | truncated track, duplicate timestamp, unintended horizontal root movement on an in-place runner |
-| R5 expressions | square power-of-two `textureResolution` (e.g. `512x512`), `defaultExpressionInGlb` and every clip expression mapping exist | unmapped expression name or non-square resolution |
+| R5 expressions | static face metadata declares a square power-of-two `textureResolution` (e.g. `512x512`), a valid `defaultExpressionInGlb`, and valid clip expression mappings when supplied | unmapped expression name or non-square resolution |
 | R6 floor / slide clearance | for runner slide clips: `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m; for general creatures/vehicles: `qa.clipMinY >= -0.025` m | animation clips below the floor or slide does not duck enough |
 
 Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 checks slide measurements when supplied, or general `qa.clipMinY` when no slide clip applies.
@@ -518,9 +501,13 @@ Missing evidence is reported under `not checked`. R4 reports separately when roo
 }
 ```
 
-## What is not checked
+## Export and playback
 
-JSON checks cannot verify visual skinning deformations, texture alignment on the mesh, or target-engine import compatibility (such as Roblox Motor6D or Blender). Visually inspect the character in a live preview (`references/studio-preview.md`) and test import in the target engine before shipping.
+1. For a GLB deliverable, load the exact exported file in [Fast Preview](studio-preview.md#1-choose-a-preview) or the target viewer. Use [the Three.js export checks](glb-export.md#threejs-export-route) for file, mesh, clip, and skeleton evidence.
+2. Play the clips and scrub the frames that show each requested motion. For a roar, compare the mouth closed, widest open, and closed again. Inspect the hinge, deformation, and clearance from an angle where they are visible. Check that a morph changes the surface and a face map aligns with the intended features. [glTF morph targets](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#morph-targets)
+3. Recheck existing loops and transitions after a face or root change. For a motion issue, use a preview-only root-track isolation as described in [facial motion and root isolation](rigging-biped.md#facial-motion-and-root-isolation).
+
+Record the export checks and visible playback observations. R5 covers static texture metadata. If loading or playback is unavailable, mark the corresponding visual or target-engine checks `UNVERIFIED`.
 ~~~
 
 ## references/studio-preview.md
@@ -577,14 +564,15 @@ Choose controls for the asset and the requested review.
 
 ### Optional VFX references
 
-Use these examples as creative references. Choose or invent the effect, timing, scale, colors, particle counts, layers, and blending that best serve the brief. Adapt, combine, or skip any example. If a particular technique or tool is unavailable, use a suitable alternative and continue the deliverable.
+Use these examples as creative references. Choose or invent the effect, timing, scale, colors, layers, and blending that serve the brief. Adapt, combine, or skip any example. If a technique or tool is unavailable, use a suitable alternative and continue the deliverable.
 
 - **Lightning burst.** One possible rhythm is inward-moving energy, a short flash, an expanding wave, then lingering sparks. Change the stages and their timing to match the action. A continuous aura can use a different rhythm.
 - **Gradient ribbon.** A translucent tinted shell with soft edges and a thin bright core can keep a bolt legible on pale backgrounds. `NormalBlending` is one way to preserve its tint. A short additive flash can give the peak more impact when it suits the lighting. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
+- **Ground contact.** A surface ripple, dust wake, or brief aftermark can give a grounded strike a sense of weight. Use a response that fits the surface and the action.
 
-Review any requested effect in motion against the intended backdrop and focal point. When the preview supports multiple backgrounds, check the ones relevant to delivery. Judge the result by the brief and actual evidence. Attach preview-only effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
+Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine the effects while preserving the motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
 
-The packer can load your effect module with `--vfx ./effect.ts`. Export a factory, for example `createStudioVfx({ root, asset, params, group, THREE })`, and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. The factory can return an `update({ clip, time, duration })` callback to sync the effect to playback and captured frames. The preview's effect module stays outside the model builder and GLB command.
+Add `--vfx ./effect.ts` to `pack-studio` to include requested effects in the same self-contained preview. Supplied effects start enabled. Use **Studio VFX** to toggle them while playing or scrubbing. Export a factory such as `createStudioVfx({ root, asset, params, group, THREE })` and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. An optional `update({ clip, time, duration })` callback sets the effect at each pose, including rest (`clip: null`), so action-timed effects appear where authored.
 
 ### Frame the full motion inside the HUD
 
@@ -616,7 +604,7 @@ When a browser tool is available, open the delivered preview for the final model
 1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
 2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
 3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
-4. **Action and effects.** Inspect a representative frame of the intended action and any requested effects. Check that the timing and focal point serve the brief in the actual lighting.
+4. **Action and effects.** Play the action and inspect a representative frame in the delivery lighting. Use the [VFX review](#optional-vfx-references) when effects are requested.
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
@@ -626,5 +614,5 @@ For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chro
 npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --motion-view side --action LightningBurst --peak 0.53 --background light
 ```
 
-Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.
+Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. The VFX pixel comparison records whether the effect changed the action frame. Judge the effect's quality in playback at the intended delivery view. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.
 ~~~

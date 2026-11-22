@@ -1,11 +1,11 @@
 // scripts/budget.test.ts: the budget gates must pass inside the limits AND fail just outside them; the LOD gates must fail on each defect they exist for. Run: npx tsx scripts/budget.test.ts
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROFILES, textureMiB, assetStats, budgetGates, lodGates, type Stats } from './budget';
+import { PROFILES, textureMiB, assetStats, budgetGates, lodGates, parseBudgetArgs, type Stats } from './budget';
 import { normalizeParts, type Parts } from './qacheck';
 import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
@@ -20,6 +20,13 @@ assert.equal(PROFILES.web.tris.prop.max, 10000); assert.equal(PROFILES.mobile.tr
 for (const [name, p] of Object.entries(PROFILES)) for (const k of ['hero', 'prop'] as const) { assert.ok(p.tris[k].target <= p.tris[k].max, `${name} ${k}`); assert.ok(p.tris.prop.max <= p.tris.hero.max, `${name}: a prop is not bigger than a hero`); }
 assert.ok(Math.abs(textureMiB(1024) - 5.33) < 0.01 && Math.abs(textureMiB(2048) - 21.33) < 0.01 && Math.abs(textureMiB(4096) - 85.33) < 0.01, 'the 5.3 / 21 / 85 MiB of the table');
 assert.equal(textureMiB(1024, 1024, false), 4);
+assert.equal(parseBudgetArgs([]).triangleLimit, null);
+assert.equal(parseBudgetArgs(['--kind', 'creature']).platform, null);
+assert.equal(parseBudgetArgs(['--profile', 'mobile']).triangleLimit, PROFILES.mobile.tris.prop.max);
+assert.throws(() => parseBudgetArgs(['--profile', 'toString']), /--profile must be one of/);
+assert.throws(() => parseBudgetArgs(['--profile']), /--profile needs a value/);
+assert.throws(() => parseBudgetArgs(['--budget', 'Infinity']), /--budget needs a positive number/);
+assert.throws(() => parseBudgetArgs(['--budget']), /--budget needs a value/);
 
 // 1. stats: GPU vertices are 3 x triangles (flat, non-indexed); draw calls group by (bone, material) when meta says so, else one per part (an upper bound)
 {
@@ -84,8 +91,9 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
 
 // 4. the CLI end to end
 {
-  const out = mkdtempSync(join(tmpdir(), 'budget-')), cli = join(here, 'mesh-stats.ts');
-  const run = (...a: string[]) => { const r = spawnTsx(cli, a, { cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
+  const out = mkdtempSync(join(tmpdir(), 'budget-'));
+  const runTool = (name: string, a: string[]) => { const r = spawnTsx(join(here, `${name}.ts`), a, { cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
+  const run = (...a: string[]) => runTool('mesh-stats', a);
   const dragon = join(here, 'fixtures', 'dragon.qa.ts'), crate = join(here, 'fixtures', 'crate.qa.ts');
 
   const lods = run('--module', dragon, '--lods', '--open', 'wingL,wingR', '--symmetric');
@@ -101,9 +109,20 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
 
   const meta = join(out, 'meta.json'); writeFileSync(meta, JSON.stringify({ parts: { blob: { material: 'm', bone: 'root' } }, bones: 120, textures: [4096] }));
   const withMeta = run('--tris', big, '--profile', 'desktop', '--meta', meta); assert.equal(withMeta.code, 0, withMeta.out); assert.equal((withMeta.res?.stats as { materials: number }).materials, 1); assert.equal((withMeta.res?.stats as { drawCallsExact: boolean }).drawCallsExact, true);
-  assert.equal(run('--tris', big, '--meta', meta).code, 2, 'web: the 4096 texture and 120 bones fail');
+  assert.equal(run('--tris', big, '--profile', 'web', '--meta', meta).code, 2, 'web: the 4096 texture and 120 bones fail');
   const glb = join(out, 'a.glb'); writeFileSync(glb, new Uint8Array(6 * 1048576));
-  assert.equal(run('--tris', big, '--kind', 'hero', '--glb', glb).code, 2, 'a 6 MiB hero GLB is over 5');
+  assert.equal(run('--tris', big, '--profile', 'web', '--kind', 'hero', '--glb', glb).code, 2, 'a 6 MiB hero GLB is over 5 on web');
+  const measured = run('--tris', big, '--kind', 'hero', '--meta', meta, '--glb', glb);
+  assert.equal(measured.code, 0, measured.out);
+  assert.equal(measured.res?.platform, null);
+  assert.equal(measured.res?.triangleLimit, null);
+  assert.deepEqual(measured.res?.gates, []);
+  const metrics = measured.res?.stats as Stats & { glbBytes: number };
+  assert.equal(metrics.triangles, 4000);
+  assert.equal(metrics.bones, 120);
+  assert.equal(metrics.textures[0].w, 4096);
+  assert.equal(metrics.glbBytes, 6 * 1048576);
+  assert.doesNotMatch(measured.out, /Within budget/);
 
   assert.equal(run().code, 1); assert.equal(run('--tris', big, '--profile', 'phone').code, 1); assert.equal(run('--tris', big, '--kind', 'boss').code, 1);
   assert.equal(run('--tris', big, '--lods').code, 1, '--lods needs a builder'); assert.equal(run('--tris', big, '--meta', join(out, 'nope.json')).code, 1); assert.equal(run('--tris', big, '--glb', join(out, 'nope.glb')).code, 1);
@@ -120,16 +139,64 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
     import { box } from ${JSON.stringify(join(here, 'fixtures', 'crate.qa.ts'))};
     export function buildHeavy(p: { detail?: number } = {}) {
       const d = p.detail ?? 2;
-      const count = d === 2 ? 240 : d === 1 ? 120 : 60; // 2880 -> 1440 -> 720 tris (>2000 at detail 2)
+      const count = d === 2 ? 256 : d === 1 ? 128 : 64; // 3,084 -> 1,548 -> 780 triangles including the end box
       const tris: number[] = [];
       for (let i = 0; i < count; i++) { const x = i * 2; tris.push(...box(x, 0, 0, x + 1, 1, 1)); }
       // keep identical outer bounds at all LODs by anchoring end box at fixed X
-      const endX = 240 * 2; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
+      const endX = 512; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
       return { body: tris };
     }
   `);
   const heavyRes = run('--module', heavyMod, '--export', 'buildHeavy', '--profile', 'web', '--kind', 'creature', '--lods');
   assert.equal(heavyRes.code, 0, `>2000-tri creature must pass L0 under web/creature budget:\n${heavyRes.out}`);
   assert.equal(heavyRes.res?.ok, true);
+
+  // One real closed asset exercises the same limit through all three CLIs. Stats also checks every LOD.
+  const full = 3084;
+  const builder = ['--module', heavyMod, '--export', 'buildHeavy'];
+  for (const tool of ['qa-asset', 'mesh-stats', 'export-glb']) {
+    const check = (file: string, ...args: string[]) => {
+      const path = join(out, `${file}.glb`);
+      const extra = tool === 'qa-asset' ? ['--no-render'] : tool === 'mesh-stats' ? ['--lods'] : ['--out', path];
+      return { ...runTool(tool, [...builder, ...extra, ...args]), path };
+    };
+    const untargeted = check('untargeted');
+    assert.equal(untargeted.code, 0, untargeted.out);
+    assert.equal(untargeted.res?.triangleLimit, null);
+    assert.equal(untargeted.res?.triangles ?? (untargeted.res?.stats as Stats).triangles, full);
+    assert.ok((untargeted.res?.skipped as string[]).some((s) => /^(Q5 budget|B1 triangle limit)/.test(s)));
+
+    const profile = check('profile', '--profile', 'mobile', '--kind', 'prop');
+    assert.equal(profile.code, 2, profile.out);
+    assert.equal(profile.res?.triangleLimit, 3000);
+    assert.match(profile.out, /(?:Q5 budget|B1 triangles).*3000/);
+
+    const raised = check('raised', '--profile', 'mobile', '--kind', 'prop', '--budget', String(full));
+    assert.equal(raised.code, 0, raised.out);
+    assert.equal(raised.res?.triangleLimit, full);
+    assert.equal(raised.res?.platform, 'mobile', 'a triangle override leaves the target platform selected');
+
+    const tooLow = check('below-limit', '--budget', String(full - 1));
+    assert.equal(tooLow.code, 2, tooLow.out);
+    assert.equal(tooLow.res?.triangleLimit, full - 1);
+    assert.equal(tooLow.res?.platform, null);
+
+    const invalid = check('invalid', '--budget', '0');
+    assert.equal(invalid.code, 1, invalid.out);
+    assert.match(String(invalid.res?.error), /--budget needs a positive number/);
+
+    if (tool === 'mesh-stats') {
+      assert.deepEqual(untargeted.res?.gates?.map((g) => g.gate.split(' ')[0]), ['L1', 'L2', 'L3', 'L4']);
+      assert.equal(raised.res?.gates?.find((g) => g.gate.startsWith('B1'))?.pass, true);
+      assert.equal(raised.res?.gates?.find((g) => g.gate.startsWith('B5'))?.pass, true);
+      assert.equal(tooLow.res?.gates?.find((g) => g.gate.startsWith('B1'))?.pass, false);
+      assert.match(tooLow.res?.gates?.find((g) => g.gate.startsWith('L0'))?.value ?? '', /Q5 budget: 3084 of 3083/);
+    }
+    if (tool === 'export-glb') {
+      assert.ok(existsSync(untargeted.path) && existsSync(raised.path));
+      assert.equal(tooLow.res?.file, null);
+      assert.ok(!existsSync(profile.path) && !existsSync(tooLow.path) && !existsSync(invalid.path));
+    }
+  }
 }
 console.log('BUDGET OK');

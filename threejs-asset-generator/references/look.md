@@ -1,28 +1,29 @@
-# Low-poly look and natural shapes
+# Surface style, materials, and natural shapes
 
-Reference for `threejs-asset-generator`. Read it when choosing a material, texture, palette, flat shading, or vertex jitter. Section numbers match `SKILL.md`.
+Reference for `threejs-asset-generator`. Use it to choose geometry, normals, materials, and texture treatment from the brief or reference. Section numbers match `SKILL.md`.
 
-Contents: §4 Low-poly look (`lowpoly.ts`) and texture choices · §5 Vertex jitter (`jitter.ts`)
+Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`)
 
-## 4. Low-poly look
+## 4. Surface style and materials
 
-**Flat shading, two layers.** Set `flatShading: true` (it works for the WebGL preview), and also bake real per-face normals into the geometry (`bakeFlat`). The flag is not stored in glTF, so a flag-only asset looks smooth after `GLTFExporter`; baked normals survive export and behave the same under WebGL and WebGPU.
+| Brief or reference | Shape and normals | Joins and finish |
+|---|---|---|
+| Faceted low-poly | Put facets where they describe the form. Bake per-face normals on surfaces meant to stay faceted in GLB. | Use deliberate color blocks and readable joints. |
+| Clay or claymation | Favor rounded volumes and smooth normals across curves. | Blend soft connections or show the pressed seams visible in the reference. Use a matte finish with subtle surface grain when it reads at the intended distance. |
+| Voxel | Use a shared grid and consistent block size. Keep hard edges at changes in face direction. | Keep the block joins sharp where required. Match any per-block color or grain to the grid and reference. |
+| Realistic | Preserve smoothing across curved surfaces and sharp edges at actual breaks. Use geometry for profile and joints that affect the silhouette. | Follow real seams and construction. Use material maps at the correct scale and direction where their detail is visible. |
 
-**Materials.**
-- Organic and stone: `roughness` 0.7–0.9, `metalness` 0–0.2.
-- Painted or metal parts: `roughness` 0.35–0.6, `metalness` 0.5–0.8. Rough metal (roughness 0.7–0.9 with metalness 0.6–0.9) renders almost black without an environment map; metals only reflect their surroundings. Tell the user that metal parts need `scene.environment` (for example `RoomEnvironment` through `PMREMGenerator`), or lower `metalness` to ≤ 0.35 for an environment-free scene.
-- Lamps and windows: use `emissive` and `emissiveIntensity`, not extra lights (§10).
-- Transparent glass (vehicle windshields, cockpits, building windows): put glass in its own material (`MeshStandardMaterial` with `transparent: true`, `opacity: 0.42–0.58`, `roughness: 0.12`, `metalness: 0.15`, `depthWrite: false`, muted tint `#88c9e8`). Keep glass panes as clean closed slabs or thin single-sided outward panes over a dark interior shell so alpha sorting stays clean and survives `GLTFExporter` without needing `MeshPhysicalMaterial` transmission extensions.
-- Palette: muted hex tones (`#2e7d32`, `#e6a100`, `#1e222a`); avoid pure primaries.
-- Since r181 PBR energy conservation, and since r187 PMREM, shading differs slightly between versions. Judge a palette by relative contrast, not by absolute screenshots.
+Mix these treatments where the brief calls for it. `PartBuilder` bakes flat normals via `bakeFlat`. Use it for intentionally faceted surfaces. For smooth or mixed shading, author normals on the geometry and retain hard edges only where the shape needs them. The glTF export carries the normals, so inspect the reloaded file when GLB is requested.
 
-**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly. Writing `hex / 255` yourself produces washed-out colors.
+**Materials.** Match the reference palette and response under delivery lighting. Set roughness by finish. Use metallic response for exposed metal and an environment when it needs reflections. Give transparent glass its own material and check opacity and sorting from the relevant views. Use `emissive` for visible glow and add actual lighting when the brief calls for a light source.
+
+**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly.
 
 ### Choose the texture path
 
 | Need at the target camera distance | Use |
 | --- | --- |
-| Silhouette, flat color blocks, or gloss are enough | Solid material, vertex colors, and scalar roughness or metalness. Keep simple bollards and distant barriers UV-free. |
+| Shape and material colors are enough | Use solid or vertex colors with scalar roughness and metalness. Keep surfaces UV-free when they need no map. |
 | A pattern or marking is visible, or an exact label was requested | Reuse suitable supplied art. Otherwise use seeded pixels for repeatable patterns, vector paths or authored artwork for exact lettering and logos. |
 | Original image detail such as painted fur markings or an irregular weathered surface | If an image tool is available in this session and can return a usable image, call it for the needed map. If unavailable, provide a procedural approximation or a color placeholder plus a handoff prompt. |
 
@@ -30,11 +31,13 @@ For image generation, specify the material, palette, coverage, scale, and UV reg
 
 Save the selected image as a fixed asset and load it outside the seeded builder. Pass the loaded texture in as an explicit input so preview and export use the same data. Use the UV and atlas workflow in [rigging and UVs](rigging-biped.md#67-uv-and-seeded-textures) and [detail](detail.md). In Three.js mark ordinary PNG or JPEG base-color and emissive maps as `SRGBColorSpace`, and normal, roughness, and metalness maps as `NoColorSpace`. Add data maps for a specific material requirement and validate them separately. Use the smallest useful resolution within [the target budget](budget.md).
 
+Use a reference crop to set grain direction, size, and contrast. Align wood grain along each board and inspect end grain where cuts expose it. Keep color and texture continuous across a smooth join, or let them change where the material or construction changes. Check the actual asset both close up and at the intended viewing distance.
+
 Report the image file or procedural source, the material slot, and which part it covers. Inspect the actual mesh for UV alignment, scale, seams, and legibility. If GLB is requested, use [the Three.js export path](glb-export.md#threejs-export-route) and inspect the reloaded material and target map. Keep image creation, mesh application, and export checks as separate evidence.
 
 For preview effects, choose the treatment by the intended focus, motion, and background. Check the actual result in the delivery lighting. Use a separate scene group for preview effects and export the actual model materials. [Optional VFX references](studio-preview.md#optional-vfx-references)
 
-**One mesh per material, colors in vertices.** Paint each part with a vertex color and merge all parts that share a material. A part that must move on its own (a limb, a head, a door) is the exception: merge per bone, not per asset (§6.4). A tree becomes 2 meshes instead of 60, and the colors stay editable through parameters.
+**Merge compatible parts.** Merge static parts that share a material when their normals, UVs, and animation requirements allow it. Keep each independently moving part on its own pivot (§6.4). Preserve skin and morph attributes in any animated merge.
 
 Code: `src/lowpoly.ts`. API:
 
@@ -64,7 +67,7 @@ body.add(geo, ({ normal, centroid }) =>
   matrix);
 ```
 
-- **Fake AO.** Wrap any colorizer with `aoShade(base, { zones, downBias, groundY… })` (`references/detail.md` §3) to darken pockets (under chin, under a cap, inside a cabin, near the ground). Contact and crease shading is what makes low-poly read as volume.
+- **Baked contact shading.** Use `aoShade(base, { zones, downBias, groundY… })` (`references/detail.md` §3) when subtle pocket shading helps the chosen look. Check it alongside material maps and lighting for overdark joins.
 - The function must be pure: it depends only on its argument, or on its own forked stream (triangle order is fixed, so that stays deterministic). Never read `Math.random`.
 - Return a hex string (read as sRGB) or a `THREE.Color` (already working-space). Both are correct; do not divide hex by 255 yourself.
 - The `tri` object is reused between calls. Copy values out if you keep them.
@@ -78,7 +81,7 @@ Merge rules (`mergeFlat` throws when they are broken; the addons `mergeGeometrie
 
 ## 5. Natural shapes: vertex jitter
 
-Displace vertices **before** `add()` (in the primitive's local space) with a dedicated forked stream. Vertices that share a position must receive the same offset or the mesh tears open at seams.
+Use vertex jitter for irregular shapes visible in the reference. Preserve exact grid edges and fitted joins where the design depends on them. Displace vertices **before** `add()` in the primitive's local space with a dedicated forked stream. Give vertices that share a position the same offset to prevent gaps.
 
 Code: `src/jitter.ts`. API:
 

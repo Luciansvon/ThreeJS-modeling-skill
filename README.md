@@ -1,12 +1,12 @@
 # ThreeJS Modeling Skill
 
-Procedural low-poly 3D asset generator skill for **Three.js (r170+)**. It combines seeded deterministic geometry builders, automated mesh QA gates, a 4-panel software preview renderer, platform polygon/memory budget & LOD checks, and standalone `.glb` export without requiring Blender.
+Generate procedural 3D assets in **Three.js (r170+)** from a brief or reference. Choose geometry, shading and surface detail for the requested style, including low-poly, voxel, smooth claymation and realistic materials. The skill provides seeded builders, mesh checks, previews, animation and `.glb` export.
 
 ## Choose an edition
 
 | Edition | Use it in | What it provides |
 | --- | --- | --- |
-| [Harness](./threejs-asset-generator/SKILL.md) | Codex, Claude Code, Gemini CLI, or another agent with a workspace and terminal | TypeScript builders, image reference intake, mesh QA, software preview, polygon and memory budgets, LOD checks, rig/clip metadata validation, and geometry-only GLB export. |
+| [Harness](./threejs-asset-generator/SKILL.md) | Codex, Claude Code, Gemini CLI, or another agent with a workspace and terminal | TypeScript builders, reference matching, mesh and budget checks, previews, and geometry-only or animated GLB export. |
 | [Web Full](./threejs-asset-generator-web/SKILL.md) | ChatGPT web, Gemini, Claude web, or another browser chat | The harness workflow, guides, builders, tools, and test source in Markdown. Runs the stages supported by the current session. |
 
 For a harness, place the complete `threejs-asset-generator/` folder in the harness's skill directory and install its dependencies there. Keep the folder name and its `SKILL.md` together.
@@ -19,9 +19,9 @@ In Gemini, use `SKILL.md` as the Gem instructions and add the Markdown reference
 
 Both editions start with the brief and reference views, build one seeded model, choose surface detail, and verify the requested results before delivery. Web Full uses tools already available in the session. If a tool fails, the agent uses a fallback and continues independent work. A final **Blocked** report gives each unresolved requested stage, its cause, what was delivered in its place, and what would complete it. [Web asset pipeline](./threejs-asset-generator-web/references/runtime.md#asset-pipeline)
 
-Both editions start with material or vertex colors. If an asset needs original image detail, the agent can use the active session's image generator and preserve the resulting map as an input. Text-only sessions can supply procedural texture source or a placeholder. See [texture choices](./threejs-asset-generator/references/look.md#choose-the-texture-path).
+Compare the rendered asset with the reference at the intended viewing distance. Reopen the image when a face, joint or material needs a closer look. Surface detail can come from geometry, materials, vertex colors or maps, including session-generated images. Choose a triangle ceiling for an actual delivery requirement. Without one, report the count and preserve the intended look. [Texture choices](./threejs-asset-generator/references/look.md#choose-the-texture-path)
 
-Choose Fast Preview for a quick look at the final GLB. Orbit, pan, zoom, inspect its textures, and play or scrub embedded clips. Choose Full Preview for live parameters, rig inspection, clip authoring, or expressions. The agent prepares the chosen mode. [Fast Preview HTML](./threejs-asset-generator/assets/fast-preview.html), [preview modes and fallbacks](./threejs-asset-generator/references/studio-preview.md)
+Choose Fast Preview to orbit, pan, zoom and play or scrub clips. For preview-only VFX, use one preview that loads the effect and the model together. Review the action in motion and refine the effect if its timing, direction or strength is hard to read. Choose Full Preview for authoring controls or detailed rig inspection. [Fast GLB viewer](./threejs-asset-generator/assets/fast-preview.html) · [Preview modes and VFX](./threejs-asset-generator/references/studio-preview.md)
 
 ---
 
@@ -56,9 +56,9 @@ What was adapted from `EL4CTEO/blender-skills` (re-implemented independently in 
 
 ---
 
-## Current Status
+## Release history
 
-Per [`HANDOFF.md`](./threejs-asset-generator/HANDOFF.md) (Nov 20, 2026 — **v4.1**):
+Changes and verification for v4.3 are in the [audit record](./AUDIT.md). The [v4.1 handoff](./threejs-asset-generator/HANDOFF.md) covers the earlier work below.
 
 - **Completed:** **Phases 0, 1, 2, 3, 4, 5, plus v4.1 field-test patch & rig/clip validator**
   - **Phases 0–1 (Structure):** Trimmed `SKILL.md` into a concise router, moved builder modules to `src/`, and split detailed guides into `references/`.

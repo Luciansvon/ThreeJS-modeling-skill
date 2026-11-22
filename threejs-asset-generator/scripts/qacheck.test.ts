@@ -21,7 +21,7 @@ assert.deepEqual(edgeReport(cube), { boundary: 0, duplicated: 0, edges: 36 });
 
 // 1. a good asset passes every gate that applies (symmetric, grounded, closed)
 {
-  const { gates, skipped } = qaGates(buildCrateTris({ seed: 3 }), { symmetric: true });
+  const { gates, skipped } = qaGates(buildCrateTris({ seed: 3 }), { symmetric: true, budget: 2000 });
   assert.equal(gates.length, 7);
   assert.deepEqual(gates.filter((g) => !g.pass), []);
   assert.ok(skipped.some((s) => s.includes('footprint')), 'the report must say that footprint centring was not checked');
@@ -40,7 +40,13 @@ assert.equal(qaGates({ a: [0, 0, 0, 1, 0, 0] }).gates[0].pass, false, 'not whole
 { const right = cube.map((v, i) => (i % 3 === 0 ? v + 1 : v)); assert.equal(gateOf({ a: right }, 'Q6').pass, true); assert.equal(gateOf({ a: right }, 'Q6', { footprint: true }).pass, false, 'footprint off-centre'); }
 assert.equal(qaGates({ a: cube.map((v, i) => (i % 3 === 1 ? v + 3 : v)) }, { grounding: false }).gates.some((g) => g.gate.startsWith('Q6')), false, 'grounding: false removes Q6');
 assert.equal(gateOf({ a: cube }, 'Q5', { budget: 10 }).pass, false);
-assert.equal(gateOf({ a: cube }, 'Q5').pass, true);
+assert.equal(gateOf({ a: cube }, 'Q5', { budget: 12 }).pass, true);
+{
+  const counted = qaGates({ a: cube });
+  assert.equal(counted.stats.triangles, 12);
+  assert.ok(counted.skipped.some((s) => s.startsWith('Q5 budget')));
+  assert.ok(counted.gates.every((g) => !g.gate.startsWith('Q5')));
+}
 { const lopsided = { a: cube, b: box(0.7, 0, 0, 0.9, 0.2, 0.2) }; assert.equal(gateOf(lopsided, 'Q7', { symmetric: true }).pass, false); assert.ok(symmetryGap(cube) === 0); }
 
 // 3. sheets: a quad has no volume, so it needs `open`; a closed part next to it is still checked
@@ -91,7 +97,7 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
 
   const raw = run('--module', crate, '--export', 'buildCrateTris', '--no-render');
   assert.equal(raw.code, 0, raw.out); assert.ok(!(raw.res?.gates as { gate: string }[]).some((g) => g.gate.startsWith('Q6')), 'module mode does not run Q6 by default'); assert.ok((raw.res?.skipped as string[]).some((s) => s.startsWith('Q6 grounding')), 'and says so');
-  const good = run('--module', crate, '--export', 'buildCrateTris', '--symmetric', '--grounded', '--out', out);
+  const good = run('--module', crate, '--export', 'buildCrateTris', '--symmetric', '--grounded', '--budget', '2000', '--out', out);
   assert.equal(good.code, 0, good.out); assert.equal(good.res?.ok, true); assert.equal((good.res?.gates as unknown[]).length, 10, 'Q1..Q10 with --symmetric');
   if (good.res?.review) assert.ok(existsSync(good.res.review as string), 'review.png written'); else assert.ok((good.res?.unverified as string[]).some((u) => u.startsWith('review.png')), 'no PNG must be reported as UNVERIFIED');
   assert.ok((good.res?.wrongFacePixels as number) <= 4, 'a healthy asset has at most the noise limit of magenta pixels');
@@ -105,7 +111,7 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
 
   const trisFile = join(out, 'tris.json'); writeFileSync(trisFile, JSON.stringify({ tris: cube, colors: ['#8a6a45'] }));
   const viaTris = run('--tris', trisFile, '--out', out);
-  assert.equal(viaTris.code, 0, viaTris.out); assert.equal((viaTris.res?.gates as unknown[]).length, 7, 'Q1..Q6 and Q10'); assert.ok((viaTris.res?.unverified as string[]).some((u) => u.includes('Q8')), 'Q8/Q9 cannot run on tris.json');
+  assert.equal(viaTris.code, 0, viaTris.out); assert.equal((viaTris.res?.gates as unknown[]).length, 6, 'Q1..Q4, Q6 and Q10 without a budget'); assert.ok((viaTris.res?.unverified as string[]).some((u) => u.includes('Q8')), 'Q8/Q9 cannot run on tris.json');
 
   const usage = run(); assert.equal(usage.code, 1); assert.equal(usage.res?.ok, false);
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);

@@ -1,8 +1,8 @@
 # Rig, clip and expression checks
 
-Reference for `threejs-asset-generator`. Read it after authoring a rigged character with animation clips or static facial expression swaps.
+Reference for `threejs-asset-generator`. Use it after authoring a rig, animation clips, or face controls.
 
-Contents: §18 Run rig-check · The gates (R1 to R6) · Metadata JSON shape · What is not checked
+Contents: §18 Run rig-check · The gates (R1 to R6) · Metadata JSON shape · Export and playback
 
 Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/rigcheck.ts`; test `scripts/rigcheck.test.ts`. Needs `tsx` only (no `three`). Output contract: last stdout line `@@RESULT {json}`, exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 
@@ -22,7 +22,7 @@ Default `--max-pivots` scales by `--kind`: `hero` / `prop` = 16, `building` = 24
 | R2 rest-pose | every pivot has a finite `[x, y, z]` entry in `rig.restLocalPositions` | `NaN` or missing pivot entry |
 | R3 clips | unique clip names, finite positive `durationSeconds`, inspection clip (`RefPose`) excluded from export | `RefPose` accidentally baked into gameplay GLB, zero duration |
 | R4 tracks & drift | finite, strictly increasing timestamps, one finite value tuple per sample (3 for position/scale, 4 for quaternion), valid pivot targets; in `--motion in-place` (default), horizontal root X/Z drift <= `1e-5` m; in `--motion free`, natural X/Z sway/lunge is permitted | truncated track, duplicate timestamp, unintended horizontal root movement on an in-place runner |
-| R5 expressions | square power-of-two `textureResolution` (e.g. `512x512`), `defaultExpressionInGlb` and every clip expression mapping exist | unmapped expression name or non-square resolution |
+| R5 expressions | static face metadata declares a square power-of-two `textureResolution` (e.g. `512x512`), a valid `defaultExpressionInGlb`, and valid clip expression mappings when supplied | unmapped expression name or non-square resolution |
 | R6 floor / slide clearance | for runner slide clips: `qa.slideDropPct >= 22` and `qa.slideMinY >= -0.025` m; for general creatures/vehicles: `qa.clipMinY >= -0.025` m | animation clips below the floor or slide does not duck enough |
 
 Missing evidence is reported under `not checked`. R4 reports separately when root drift cannot be checked. R5 needs a declared expression set, default expression, and texture resolution. R6 checks slide measurements when supplied, or general `qa.clipMinY` when no slide clip applies.
@@ -59,6 +59,10 @@ Missing evidence is reported under `not checked`. R4 reports separately when roo
 }
 ```
 
-## What is not checked
+## Export and playback
 
-JSON checks cannot verify visual skinning deformations, texture alignment on the mesh, or target-engine import compatibility (such as Roblox Motor6D or Blender). Visually inspect the character in a live preview (`references/studio-preview.md`) and test import in the target engine before shipping.
+1. For a GLB deliverable, load the exact exported file in [Fast Preview](studio-preview.md#1-choose-a-preview) or the target viewer. Use [the Three.js export checks](glb-export.md#threejs-export-route) for file, mesh, clip, and skeleton evidence.
+2. Play the clips and scrub the frames that show each requested motion. For a roar, compare the mouth closed, widest open, and closed again. Inspect the hinge, deformation, and clearance from an angle where they are visible. Check that a morph changes the surface and a face map aligns with the intended features. [glTF morph targets](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#morph-targets)
+3. Recheck existing loops and transitions after a face or root change. For a motion issue, use a preview-only root-track isolation as described in [facial motion and root isolation](rigging-biped.md#facial-motion-and-root-isolation).
+
+Record the export checks and visible playback observations. R5 covers static texture metadata. If loading or playback is unavailable, mark the corresponding visual or target-engine checks `UNVERIFIED`.

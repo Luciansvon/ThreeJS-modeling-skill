@@ -195,8 +195,13 @@ export async function startStudio(
       return { clip: clip?.name ?? null, duration: clip?.duration ?? 0, time };
     }
 
+    function setEffectsEnabled(enabled: boolean) {
+      effects.checked = info.vfxAvailable && enabled;
+      vfxGroup.visible = effects.checked;
+    }
+
     function draw() {
-      if (vfxGroup.visible && vfx?.update) {
+      if (effects.checked && vfx?.update) {
         root.updateMatrixWorld(true);
         vfx.update(pose());
       }
@@ -212,6 +217,11 @@ export async function startStudio(
           .find((key) => gl[key as keyof typeof gl] === code);
         fail('webgl', name ?? `WebGL error 0x${code.toString(16)}`);
       }
+    }
+
+    function checkRenderedFrame() {
+      checkWebGL();
+      if (!diagnostics.length && renderer.info.render.triangles === 0) throw new Error('The asset did not draw any triangles in this frame');
     }
 
     function syncAnimation() {
@@ -283,15 +293,13 @@ export async function startStudio(
       fit(frame.view);
       syncAnimation();
 
-      vfxGroup.visible = false;
-      effects.checked = Boolean(frame.vfx && loadVfx);
+      setEffectsEnabled(false);
       draw();
-      checkWebGL();
-      if (!diagnostics.length && renderer.info.render.triangles === 0) throw new Error('The asset did not draw any triangles in this frame');
+      checkRenderedFrame();
       let vfxEvidence: StudioFrameEvidence['vfx'] = frame.vfx ? 'unavailable' : 'off';
-      if (effects.checked) {
+      if (frame.vfx && info.vfxAvailable) {
         const withoutEffects = canvas.toDataURL();
-        vfxGroup.visible = true;
+        setEffectsEnabled(true);
         draw();
         vfxEvidence = canvas.toDataURL() === withoutEffects ? 'no-visible-change' : 'visible';
         checkWebGL();
@@ -371,6 +379,7 @@ export async function startStudio(
 
     byId('metrics').textContent = `${stats.tris.toLocaleString('en-US')} triangles · ${stats.meshes} ${stats.meshes === 1 ? 'mesh' : 'meshes'}`;
     for (const [index, clip] of clips.entries()) clipSelect.add(new Option(clip.name || '(unnamed clip)', String(index)));
+    clipSelect.value = String(activeIndex);
     clipSelect.disabled = clips.length === 0;
     byId('effects-label').hidden = !loadVfx;
     for (const button of buttons) button.addEventListener('click', () => {
@@ -398,12 +407,14 @@ export async function startStudio(
       syncAnimation();
       draw();
     });
-    effects.addEventListener('change', () => { vfxGroup.visible = effects.checked; draw(); });
+    effects.addEventListener('change', () => { setEffectsEnabled(effects.checked); draw(); });
     controls.addEventListener('start', () => { view = null; syncCamera(); byId('capture-label').textContent = 'Orbit'; });
     controls.addEventListener('change', () => { if (!fitting) draw(); });
 
+    setEffectsEnabled(true);
+    syncAnimation();
     resize();
-    setFrame({ view: '34-front' });
+    checkRenderedFrame();
     api.info = () => structuredClone(info);
     api.setFrame = setFrame;
     if (!diagnostics.length) {

@@ -9,10 +9,10 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.1",
+  "version": "4.3.2",
   "private": true,
   "type": "module",
-  "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
+  "description": "Style-adaptive procedural Three.js assets, reference matching, geometry checks, animation, VFX previews and GLB export.",
   "scripts": {
     "check": "tsx tools/check.ts",
     "check:strict": "tsx tools/check.ts --strict",
@@ -193,16 +193,56 @@ export function assetStats(parts: Parts, meta: Meta = {}): Stats {
 }
 
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-export type BudgetOptions = { platform?: Platform; kind?: Kind; glbBytes?: number };
+// An omitted platform preserves the library's web default. The CLI passes null when no profile was requested.
+export type BudgetOptions = { platform?: Platform | null; kind?: Kind; budget?: number; glbBytes?: number };
+
+function triangleBudget({ platform = 'web', kind = 'prop', budget }: BudgetOptions): Range | undefined {
+  if (budget !== undefined) {
+    if (!Number.isFinite(budget) || budget <= 0) throw new Error('--budget needs a positive number');
+    return { target: budget, max: budget };
+  }
+  return platform ? PROFILES[platform].tris[kind] : undefined;
+}
+
+/** Read the same target and triangle override in every CLI. */
+export function parseBudgetArgs(args: readonly string[]) {
+  const value = (flag: string) => {
+    const i = args.indexOf(flag);
+    if (i < 0) return undefined;
+    const name = args[i + 1];
+    if (!name || name.startsWith('--')) throw new Error(`${flag} needs a value`);
+    return name;
+  };
+  const platform = (value('--profile') ?? null) as Platform | null;
+  const kind = (value('--kind') ?? 'prop') as Kind;
+  const rawBudget = value('--budget');
+  if (platform && !Object.hasOwn(PROFILES, platform)) throw new Error(`--profile must be one of ${Object.keys(PROFILES).join(', ')}, got "${platform}"`);
+  if (!KINDS.includes(kind)) throw new Error(`--kind must be one of ${KINDS.join(', ')}, got "${kind}"`);
+  const options = { platform, kind, budget: rawBudget === undefined ? undefined : Number(rawBudget) };
+  return { ...options, triangleLimit: triangleBudget(options)?.max ?? null };
+}
 
 /** Budget gates for one asset. `skipped` lists what could not be checked and why. */
 export function budgetGates(s: Stats, o: BudgetOptions = {}): { gates: Gate[]; skipped: string[] } {
-  const platform = o.platform ?? 'web', kind = o.kind ?? 'prop', P = PROFILES[platform], gates: Gate[] = [], skipped: string[] = [];
+  const { platform = 'web', kind = 'prop' } = o;
+  const gates: Gate[] = [], skipped: string[] = [];
   const range = (id: string, label: string, v: number, r: Range, hint: string, unit = '') => {
     const pass = v <= r.max;
-    gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}${id === 'B1 triangles' ? `, ${kind}` : ''}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
+    gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
   };
-  range('B1 triangles', `${s.triangles} triangles`, s.triangles, P.tris[kind], 'lower `detail`, fewer segments, drop small details (references/budget.md)');
+  const tri = triangleBudget(o);
+  if (!tri) skipped.push('B1 triangle limit (set --profile or --budget)');
+  else {
+    const pass = s.triangles <= tri.max;
+    const basis = o.budget !== undefined ? '(--budget)' : `(${platform}, ${kind}, target ${tri.target})${pass && s.triangles > tri.target ? ', above the target' : ''}`;
+    gates.push({ gate: 'B1 triangles', value: `${s.triangles} triangles of max ${tri.max} ${basis}`, pass, hint: 'optimize less visible geometry first and compare the revised render at the intended viewing distance (references/budget.md)' });
+  }
+
+  if (!platform) {
+    skipped.push('B2 to B6 platform limits (set --profile)');
+    return { gates, skipped };
+  }
+  const P = PROFILES[platform];
   const matRange = P.materialsByKind?.[kind] ?? P.materials;
   if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, matRange, 'merge parts that share a look into one material');
   if (!s.textures.length) skipped.push('B3 textures (no textures in --meta; an asset with vertex colours only has none)');
@@ -225,7 +265,7 @@ export async function lodGates(build: (p: Record<string, unknown>) => unknown | 
     const parts = normalize(await build({ ...params, detail })), b = boundsOf(flatten(parts));
     built[detail] = parts; levels.push({ detail, triangles: triCount(flatten(parts)), size: b.size.map((v) => +v.toFixed(4)), minY: +b.min[1].toFixed(4) });
     const bad = qaGates(parts, { ...qa, grounding: false }).gates.filter((g) => !g.pass);
-    if (bad.length) gates.push({ gate: `L0 QA at detail ${detail}`, value: bad.map((g) => `${g.gate}: ${g.value}`).join('; '), pass: false, hint: 'every level is a full asset: it must pass Q1 to Q5 (and Q7 if asked) like the top level' });
+    if (bad.length) gates.push({ gate: `L0 QA at detail ${detail}`, value: bad.map((g) => `${g.gate}: ${g.value}`).join('; '), pass: false, hint: 'each level must pass geometry QA and any selected triangle and symmetry checks' });
   }
   const ratios = [1, 2].map((i) => levels[i].triangles / levels[i - 1].triangles);
   gates.push({ gate: 'L1 LOD triangle ratio', value: `${levels.map((l) => `detail ${l.detail}: ${l.triangles}`).join(' -> ')} (ratios ${ratios.map((r) => r.toFixed(2)).join(', ')}, wanted ${LOD_TOL.ratioLo} to ${LOD_TOL.ratioHi} each)`, pass: ratios.every((r) => r >= LOD_TOL.ratioLo && r <= LOD_TOL.ratioHi), hint: ratios.some((r) => r >= 1) ? 'the builder ignores `detail`: wire lodPick into segments and details (src/lod.ts)' : 'about half the triangles per level: adjust segments or the number of small details' });
@@ -541,20 +581,24 @@ try {
 // scripts/export-glb.ts: write a GLB from a pure kernel or a tris.json, then read it back and check it (E1 to E6, references/glb-export.md).
 //   Kernel (no THREE):   npx tsx scripts/export-glb.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}'] [--out asset.glb]
 //   Any asset via tris:  npx tsx scripts/export-glb.ts --tris tris.json [--out asset.glb]
-// Options: --open a,b | all (sheets, passed to the QA gate)  --budget N  --skip-qa (export even if Q1 to Q5 fail; the result says so)  --color r,g,b (0..1, default 0.8,0.8,0.8)
-// Before writing it runs the QA gates Q1 to Q5 on the same parts (a GLB of an inside-out or non-finite asset is worse than no file). Q6 to Q10 stay in qa-asset.ts.
+// Options: --open a,b | all (sheets)  --profile web --kind prop  --budget N  --skip-qa  --color r,g,b (0..1, default 0.8,0.8,0.8)
+// Runs geometry QA before writing. Q5 applies with a selected budget. Q6 to Q10 stay in qa-asset.ts.
 // No THREE needed. Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizeParts, qaGates, type Parts } from './qacheck';
+import { parseBudgetArgs } from './budget';
 import { partsToGlb, glbGates } from './glb';
 import { emit, type Gate } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-glb', ok: false, error: msg }, 1)); };
 const modFile = opt('module'), trisFile = opt('tris'), outFile = resolve(opt('out') ?? 'asset.glb');
-if (!modFile === !trisFile) fail('usage: tsx scripts/export-glb.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--out asset.glb] [--open a,b|all] [--budget N] [--skip-qa] [--color r,g,b]');
+if (!modFile === !trisFile) fail('usage: tsx scripts/export-glb.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--out asset.glb] [--open a,b|all] [--profile name] [--kind name] [--budget N] [--skip-qa] [--color r,g,b]');
+let target: ReturnType<typeof parseBudgetArgs>;
+try { target = parseBudgetArgs(args); } catch (e) { fail((e as Error).message); }
+const { platform, kind, triangleLimit } = target;
 
 let color: [number, number, number, number] | undefined;
 if (opt('color')) { const c = opt('color')!.split(',').map(Number); if (c.length !== 3 || c.some((x) => !Number.isFinite(x) || x < 0 || x > 1)) fail('--color needs r,g,b with each value from 0 to 1'); color = [c[0], c[1], c[2], 1]; }
@@ -575,9 +619,12 @@ try {
 }
 
 const gates: Gate[] = [], unverified: string[] = [];
-const qa = qaGates(parts!, { budget: Number(opt('budget')) || undefined, open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), grounding: false });
+const qa = qaGates(parts!, { budget: triangleLimit ?? undefined, open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), grounding: false });
 const qaFail = qa.gates.filter((g) => !g.pass);
-gates.push({ gate: 'QA Q1 to Q5', value: qaFail.length ? qaFail.map((g) => `${g.gate}: ${g.value}`).join('; ') : 'Q1 to Q5 pass', pass: qaFail.length === 0 || flag('skip-qa'), hint: qaFail.length ? 'run qa-asset.ts and fix the first failing gate, or pass --skip-qa knowingly' : '' });
+const qaRange = triangleLimit === null ? 'Q1 to Q4' : 'Q1 to Q5';
+const triangles = qa.stats.triangles;
+const count = triangleLimit === null ? `${triangles} triangles` : `${triangles} of ${triangleLimit} triangles`;
+gates.push({ gate: `QA ${qaRange}`, value: qaFail.length ? qaFail.map((g) => `${g.gate}: ${g.value}`).join('; ') : `applicable ${qaRange} checks passed (${count})`, pass: qaFail.length === 0 || flag('skip-qa'), hint: qaFail.length ? 'run qa-asset.ts to inspect the affected geometry or chosen budget' : '' });
 if (qaFail.length && flag('skip-qa')) unverified.push(`exported with --skip-qa although ${qaFail.map((g) => g.gate).join(', ')} failed`);
 
 let bytes: Uint8Array | null = null;
@@ -592,11 +639,12 @@ unverified.push('GLB opened in a real viewer or loader (GLTFLoader, Blender, mod
 unverified.push('materials, vertex colours, UVs, rigging and animation: this exporter writes geometry only (one default material)');
 
 console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
-if (bytes) console.log(`\nwrote ${outFile} (${bytes.length} bytes, ${Object.keys(parts!).length} part(s), ${qa.stats.triangles ?? '?'} triangles)`);
+if (bytes) console.log(`\nwrote ${outFile} (${bytes.length} bytes, ${Object.keys(parts!).length} part(s), ${triangles} triangles)`);
+if (qa.skipped.length) console.log(`not checked: ${qa.skipped.join('; ')}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST one, run again.` : '\nAll export gates pass. Repeat the UNVERIFIED list in the answer.');
-process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, unverified, file: bytes ? outFile : null, bytes: bytes?.length ?? 0 }));
+console.log(failed.length ? `\n${failed.length} gate(s) failing. Inspect the affected geometry or export settings and rerun.` : '\nAll evaluated export checks pass. See the recorded limitations.');
+process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, skipped: qa.skipped, unverified, platform, kind, triangleLimit, triangles, file: bytes ? outFile : null, bytes: bytes?.length ?? 0 }));
 ~~~
 
 ## scripts/export-rigged-glb.ts
@@ -905,28 +953,27 @@ export function glbGates(bytes: Uint8Array, source: Parts): Gate[] {
 ## scripts/mesh-stats.ts
 
 ~~~typescript source-excerpt
-// scripts/mesh-stats.ts: budget report for one asset (references/budget.md). Triangles, GPU vertices, meshes, draw calls, materials, textures, bones, GLB size, against a platform profile.
+// scripts/mesh-stats.ts: mesh measurements and optional deployment budget checks (references/budget.md).
 //   Kernel (no THREE):   npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}'] [--profile web] [--kind prop]
 //   Any asset via tris:  npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
 //   LOD check:           npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods [--open a,b] [--symmetric]    (builds detail 2, 1, 0; the builder must accept `detail`)
-// Options: --profile mobile|web|vr|desktop (default web)  --kind prop|hero|creature|vehicle|building (default prop)  --budget N  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
+// Options: --profile mobile|web|vr|desktop  --kind prop|hero|creature|vehicle|building (default prop)  --budget N  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
 // meta.json (all optional): { "parts": { "body": { "material": "wood", "bone": "root" } }, "textures": [1024, { "name": "atlas", "width": 2048 }], "bones": 12 }
 // What meta does not give is reported as "not checked", never guessed. Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normalizeParts, type Parts } from './qacheck';
-import { assetStats, budgetGates, lodGates, KINDS, PROFILES, type Kind, type Meta, type Platform } from './budget';
+import { assetStats, budgetGates, lodGates, parseBudgetArgs, type Meta } from './budget';
 import { emit } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'mesh-stats', ok: false, error: msg }, 1)); };
-const modFile = opt('module'), trisFile = opt('tris'), platform = (opt('profile') ?? 'web') as Platform, kind = (opt('kind') ?? 'prop') as Kind;
+const modFile = opt('module'), trisFile = opt('tris');
 if (!modFile === !trisFile) fail('usage: tsx scripts/mesh-stats.ts (--module file.ts [--export name] [--params json] [--lods] | --tris tris.json) [--profile mobile|web|vr|desktop] [--kind prop|hero|creature|vehicle|building] [--budget N] [--meta meta.json] [--glb file.glb] [--open a,b|all] [--symmetric]');
-if (!(platform in PROFILES)) fail(`--profile must be one of ${Object.keys(PROFILES).join(', ')}, got "${platform}"`);
-if (!KINDS.includes(kind)) fail(`--kind must be one of ${KINDS.join(', ')}, got "${kind}"`);
-const budgetOpt = opt('budget') !== undefined ? Number(opt('budget')) : undefined;
-if (budgetOpt !== undefined && (!Number.isFinite(budgetOpt) || budgetOpt <= 0)) fail('--budget needs a positive number');
+let target: ReturnType<typeof parseBudgetArgs>;
+try { target = parseBudgetArgs(args); } catch (e) { fail((e as Error).message); }
+const { platform, kind, triangleLimit } = target;
 if (flag('lods') && !modFile) fail('--lods needs --module: a tris.json is one fixed level and cannot be rebuilt at another detail');
 let params: Record<string, unknown> = {}, meta: Meta = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
@@ -947,21 +994,23 @@ try {
   fail(/Cannot find (module|package) ['"]three/.test(m) ? 'the builder imports `three`, which is not installed here. Write tris.json from your driver (groupToTris) and use --tris.' : `cannot build or read the asset: ${m}`);
 }
 
-const stats = assetStats(parts!, meta), { gates, skipped } = budgetGates(stats, { platform, kind, glbBytes }), unverified: string[] = [];
+const stats = { ...assetStats(parts!, meta), glbBytes: glbBytes ?? null };
+const { gates, skipped } = budgetGates(stats, { ...target, glbBytes }), unverified: string[] = [];
 let levels: unknown = null;
-const lodBudget = budgetOpt ?? PROFILES[platform].tris[kind].max;
-if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: lodBudget }); gates.push(...l.gates); levels = l.levels; }
+if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: triangleLimit ?? undefined }); gates.push(...l.gates); levels = l.levels; }
 else if (modFile) skipped.push('L1 to L4 LOD (pass --lods; the builder must accept `detail`)');
 if (!stats.drawCallsExact) unverified.push('draw calls are an upper bound (one per part); pass --meta with a material and bone per part for the real number');
-unverified.push('triangle, vertex and texture numbers are counted from the arrays and sizes given, not measured in a renderer: no frame time, fill rate or real GPU memory');
+unverified.push('gpuVertices counts triangle corners; indexed meshes may share vertices. Frame time, fill rate and GPU memory were not measured in a renderer.');
 
 console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
 console.log(`\nstats: ${JSON.stringify(stats)}`);
 if (skipped.length) console.log(`not checked: ${skipped.join('; ')}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST one, run again.` : '\nWithin budget. Repeat `not checked` and UNVERIFIED in the answer.');
-process.exit(emit({ tool: 'mesh-stats', ok: failed.length === 0, gates, stats, skipped, unverified, platform, kind, levels }));
+if (failed.length) console.log(`\n${failed.length} gate(s) failing. Review the affected limits and recheck the revised asset.`);
+else if (triangleLimit === null) console.log('\nCounts reported. Set --profile or --budget to check a deployment limit.');
+else console.log('\nAll selected budget and LOD checks passed.');
+process.exit(emit({ tool: 'mesh-stats', ok: failed.length === 0, gates, stats, skipped, unverified, platform, kind, triangleLimit, levels }));
 ~~~
 
 ## scripts/pack-studio.ts
@@ -1215,7 +1264,7 @@ export function decodePngRgba(buf: Buffer): { rgba: Uint8Array; width: number; h
 // scripts/qa-asset.ts: QA gates + review image for a generated asset. Run it before you say an asset is done (references/qa-gates.md).
 //   Kernel (no THREE):   npx tsx scripts/qa-asset.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}']
 //   Any asset via tris:  npx tsx scripts/qa-asset.ts --tris tris.json            (tris.json as in references/reference-matching.md §5)
-// Options: --budget 2000  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
+// Options: --profile web --kind prop  --budget N  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
 // Q6 grounding: on for --tris (the final asset). Off for --module (a raw kernel is grounded later by groundAsset) unless --grounded or --footprint.
 // --module rebuilds the asset to check Q8 determinism and Q9 seed 0; --tris reports both as UNVERIFIED.
 // Both accept Tris, { tris }, named parts { name: Tris, ... }, or { parts: { name: Tris, ... } }.
@@ -1225,6 +1274,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writePngRgba } from './png';
 import { normalizeParts, qaGates, determinismGates, type Gate, type Parts, type QAOptions } from './qacheck';
+import { parseBudgetArgs } from './budget';
 import { renderSheet, WRONG_TOL } from './review';
 import { emit } from './result';
 
@@ -1233,10 +1283,13 @@ const fail = (msg: string): never => { console.error(msg); process.exit(emit({ t
 const fmtGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 
 const num = (k: string) => { const v = opt(k); if (v === undefined) return undefined; const n = Number(v); if (!Number.isFinite(n)) fail(`--${k} needs a number, got "${v}"`); return n; };
-const o: QAOptions = { budget: num('budget'), groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 const out = resolve(opt('out') ?? '.'), modFile = opt('module'), trisFile = opt('tris');
+if (!modFile === !trisFile) fail('usage: tsx scripts/qa-asset.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--profile name] [--kind name] [--budget N] [--open a,b|all] [--symmetric] [--footprint] [--grounded] [--ground-y N] [--out dir] [--no-render]');
+let target: ReturnType<typeof parseBudgetArgs>;
+try { target = parseBudgetArgs(args); } catch (e) { fail((e as Error).message); }
+const { platform, kind, triangleLimit } = target;
+const o: QAOptions = { budget: triangleLimit ?? undefined, groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 o.grounding = !modFile || flag('grounded') || flag('footprint');   // Q6 needs the final grounded asset: always for --tris, only on request for a raw kernel
-if (!modFile === !trisFile) fail('usage: tsx scripts/qa-asset.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--budget N] [--open a,b|all] [--symmetric] [--footprint] [--grounded] [--ground-y N] [--out dir] [--no-render]');
 
 let parts: Parts, build: ((p: Record<string, unknown>) => unknown) | undefined, params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
@@ -1275,8 +1328,8 @@ if (skipped.length) console.log(`not checked: ${skipped.join('; ')}`);
 if (legend.length) console.log(`review colours: ${legend.map((l) => `${l.part} ${l.color}`).join(', ')}`);
 if (unverified.length) console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate, rebuild, run again.` : review ? `\nAll gates pass. Now LOOK at ${review} (view tool) before reporting done; list anything listed under UNVERIFIED in the answer.` : '\nAll gates pass, but there is no review image: say so in the answer.');
-process.exit(emit({ tool: 'qa-asset', ok: failed.length === 0, gates, stats, skipped, unverified, review, legend, wrongFacePixels: wrongTotal }));
+console.log(failed.length ? `\n${failed.length} gate(s) failing. Inspect the affected geometry and verify the revised build.` : review ? `\nAll evaluated checks pass. Inspect ${review} for visible geometry issues.` : '\nEvaluated checks passed. No review image was produced.');
+process.exit(emit({ tool: 'qa-asset', ok: failed.length === 0, gates, stats, skipped, unverified, platform, kind, triangleLimit, review, legend, wrongFacePixels: wrongTotal }));
 ~~~
 
 ## scripts/qacheck.ts
@@ -1292,7 +1345,7 @@ export type { Gate };
 export type Tris = number[];
 export type Parts = Record<string, Tris>;
 export type QAOptions = {
-  budget?: number;          // max triangles, default 2000 (a prop; use ~20000 for a composite plot, references/lifecycle.md §9)
+  budget?: number;          // max triangles when a deployment profile or explicit limit is selected
   open?: string[];          // part names that are sheets (no volume); 'all' skips Q3 and Q4 for everything
   symmetric?: boolean;      // Q7: the vertex set must equal its mirror image through x = 0
   grounding?: boolean;      // run Q6, default true. A raw kernel is not grounded (groundAsset does that), so qa-asset turns it off for --module unless --grounded
@@ -1301,7 +1354,7 @@ export type QAOptions = {
   weld?: number;            // vertex weld distance for Q4 and Q7, default 1e-4 (0.1 mm)
   maxDegenerate?: number;   // allowed degenerate triangles, default 0
 };
-export const DEFAULTS = { budget: 2000, weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
+export const DEFAULTS = { weld: 1e-4, degenerate: 1e-9, groundTol: 1e-3, footprintTol: 0.02, symmetryTol: 0.01 };
 
 const num = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number');
 /** Normalize the triangle formats used by the QA, budget, export, and reference tools. */
@@ -1393,7 +1446,7 @@ export function hashTris(t: Tris): number {
 const fmt = (v: number, d = 3) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d);
 const list = (names: string[], max = 4) => names.slice(0, max).join(', ') + (names.length > max ? `, +${names.length - max} more` : '');
 
-/** Q1..Q7 over a built asset. `skipped` names the gates that a flag turned off, so the report can say so. */
+/** Q1..Q7 over a built asset. `skipped` names the unchecked gates and why they were skipped. */
 export function qaGates(parts: Parts, o: QAOptions = {}): { gates: Gate[]; skipped: string[]; stats: Record<string, unknown> } {
   const gates: Gate[] = [], skipped: string[] = [], all = flatten(parts), names = Object.keys(parts);
   const tris = triCount(all), bad = all.findIndex((v) => !Number.isFinite(v));
@@ -1422,8 +1475,8 @@ export function qaGates(parts: Parts, o: QAOptions = {}): { gates: Gate[]; skipp
     gates.push({ gate: 'Q4 closed', value: leaky.length ? leaky.map(([n, r]) => `${n}: ${r.boundary} open edges, ${r.duplicated} duplicated`).join('; ') : `${closed.length} closed part(s), every edge has a partner`, pass: leaky.length === 0, hint: 'open edges: a missing cap or a seam that is not welded (jitter before add(), then weld). duplicated edges: overlapping faces or one triangle with flipped winding' });
   }
 
-  const budget = o.budget ?? DEFAULTS.budget;
-  gates.push({ gate: 'Q5 budget', value: `${tris} of ${budget} triangles`, pass: tris <= budget, hint: 'lower segments/sides first, merge or drop small details; raise --budget only for a composite (about 20000)' });
+  if (o.budget === undefined) skipped.push('Q5 budget (set --profile or --budget)');
+  else gates.push({ gate: 'Q5 budget', value: `${tris} of ${o.budget} triangles`, pass: tris <= o.budget, hint: 'reduce segments or sides, merge parts, or drop small details to fit the selected limit' });
 
   if (o.grounding === false) skipped.push('Q6 grounding (raw kernel: groundAsset does this; check the final asset with --tris, or pass --grounded if this builder grounds itself)');
   else {
@@ -1468,7 +1521,7 @@ export async function determinismGates(build: Build, params: Record<string, unkn
 ## scripts/ref-compare.ts
 
 ~~~typescript source-excerpt
-// scripts/ref-compare.ts: your generator's triangles vs ref.json. Run after EVERY build step.
+// Compare geometry and palette with ref.json when those features change.
 //   1. Write the same triangle formats as qa-asset and mesh-stats. Add hex colors to { tris, colors } or { parts, colors } for G3.
 //   2. npx tsx ref-compare.ts ref.json tris.json        -> prints PASS/FAIL per gate, writes diff-<view>.png (red = reference only, blue = model only)
 import { readFileSync } from 'node:fs';
@@ -1504,7 +1557,7 @@ for (const [view, rgba] of Object.entries(diffs)) {
   console.log('wrote', f);
 }
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate only, then run again.` : '\nAll numeric gates pass. Do the visual checklist (G4) next.');
+console.log(failed.length ? `\n${failed.length} numeric check(s) failed. Inspect the relevant view and compare it with the reference.` : '\nNumeric checks passed. Compare the rendered identifying features with the reference (G4).');
 process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed: failed.length, diffs: written, angles }));
 ~~~
 
@@ -2043,7 +2096,7 @@ console.log(`\nstats: ${JSON.stringify(stats)}`);
 if (skipped.length) console.log(`not checked: ${skipped.join('; ')}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate, re-export metadata, run again.`
+console.log(failed.length ? `\n${failed.length} rig check(s) failed. Inspect the affected tracks or metadata and verify the revised export.`
   : skipped.length ? '\nAll evaluated rig & clip checks pass. See not checked for missing evidence.' : '\nAll rig & clip checks pass.');
 process.exit(emit({ tool: 'rig-check', ok: failed.length === 0, gates, stats, skipped, unverified }));
 ~~~
@@ -2765,8 +2818,13 @@ export async function startStudio(
       return { clip: clip?.name ?? null, duration: clip?.duration ?? 0, time };
     }
 
+    function setEffectsEnabled(enabled: boolean) {
+      effects.checked = info.vfxAvailable && enabled;
+      vfxGroup.visible = effects.checked;
+    }
+
     function draw() {
-      if (vfxGroup.visible && vfx?.update) {
+      if (effects.checked && vfx?.update) {
         root.updateMatrixWorld(true);
         vfx.update(pose());
       }
@@ -2782,6 +2840,11 @@ export async function startStudio(
           .find((key) => gl[key as keyof typeof gl] === code);
         fail('webgl', name ?? `WebGL error 0x${code.toString(16)}`);
       }
+    }
+
+    function checkRenderedFrame() {
+      checkWebGL();
+      if (!diagnostics.length && renderer.info.render.triangles === 0) throw new Error('The asset did not draw any triangles in this frame');
     }
 
     function syncAnimation() {
@@ -2853,15 +2916,13 @@ export async function startStudio(
       fit(frame.view);
       syncAnimation();
 
-      vfxGroup.visible = false;
-      effects.checked = Boolean(frame.vfx && loadVfx);
+      setEffectsEnabled(false);
       draw();
-      checkWebGL();
-      if (!diagnostics.length && renderer.info.render.triangles === 0) throw new Error('The asset did not draw any triangles in this frame');
+      checkRenderedFrame();
       let vfxEvidence: StudioFrameEvidence['vfx'] = frame.vfx ? 'unavailable' : 'off';
-      if (effects.checked) {
+      if (frame.vfx && info.vfxAvailable) {
         const withoutEffects = canvas.toDataURL();
-        vfxGroup.visible = true;
+        setEffectsEnabled(true);
         draw();
         vfxEvidence = canvas.toDataURL() === withoutEffects ? 'no-visible-change' : 'visible';
         checkWebGL();
@@ -2941,6 +3002,7 @@ export async function startStudio(
 
     byId('metrics').textContent = `${stats.tris.toLocaleString('en-US')} triangles · ${stats.meshes} ${stats.meshes === 1 ? 'mesh' : 'meshes'}`;
     for (const [index, clip] of clips.entries()) clipSelect.add(new Option(clip.name || '(unnamed clip)', String(index)));
+    clipSelect.value = String(activeIndex);
     clipSelect.disabled = clips.length === 0;
     byId('effects-label').hidden = !loadVfx;
     for (const button of buttons) button.addEventListener('click', () => {
@@ -2968,12 +3030,14 @@ export async function startStudio(
       syncAnimation();
       draw();
     });
-    effects.addEventListener('change', () => { vfxGroup.visible = effects.checked; draw(); });
+    effects.addEventListener('change', () => { setEffectsEnabled(effects.checked); draw(); });
     controls.addEventListener('start', () => { view = null; syncCamera(); byId('capture-label').textContent = 'Orbit'; });
     controls.addEventListener('change', () => { if (!fitting) draw(); });
 
+    setEffectsEnabled(true);
+    syncAnimation();
     resize();
-    setFrame({ view: '34-front' });
+    checkRenderedFrame();
     api.info = () => structuredClone(info);
     api.setFrame = setFrame;
     if (!diagnostics.length) {

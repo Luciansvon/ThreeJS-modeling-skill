@@ -99,6 +99,21 @@ Follow-up fixes from the logic and implementation audit of `v4.3` on Windows wit
 
 - Post-fix validation: `npm run check:web` verified **84 source chapters** (`stale: []`), `npm run validate -- ../threejs-asset-generator-web` passed (`~2,415` tokens, 0 errors/warnings), and `npm run check:strict` passed **14/14 test files** and **18/18 trigger cases**.
 
-## Limits of this audit
+### v4.3.2 modeling and VFX audit
+
+This revision follows the paired GPT-6.2 Sol xhigh clay dragon review. The artist preferred the surface detail of A and approved B's movement. B's Stomp needed a stronger response from the ground.
+
+| Finding | Change and evidence |
+| --- | --- |
+| Triangle ceilings diverged between tools | Ran QA, mesh stats and geometry-only export on the same 26,636-triangle dragon. All three accepted an unspecified target and the web creature profile (30,000). All three rejected an explicit 2,000 ceiling. The regression suite also checks overrides, invalid limits and LOD. [Budget tests](threejs-asset-generator/scripts/budget.test.ts) |
+| The reference and style guidance restricted iteration | Both entry points now route by the current task. Agents can reopen the reference, inspect facial landmarks and joins even after a silhouette pass, and choose normals and surface detail by style. Trigger coverage includes claymation, voxel and realistic assets. [Reference workflow](threejs-asset-generator/references/reference-matching.md) · [Surface guidance](threejs-asset-generator/references/look.md) |
+| A static mouth could be mistaken for a facial performance | Exported the documented jaw pivot and quaternion keys on a small fixture and sampled the actual GLB through GLTFLoader and AnimationMixer. The lower jaw rotated from 0 to 0.65 radians and closed again at 1.2 seconds. The upper jaw stayed in place. Morphs and texture swaps are alternatives when appropriate. [Jaw example](threejs-asset-generator/references/rigging-biped.md#facial-motion-and-root-isolation) |
+| A supplied effect was initially switched off in the studio | The interactive studio now enables a supplied effect on open. The Chrome test exercises ordinary playback, scrubbing, toggling and capture. Evidence captures can explicitly select an effect-off frame. The guide asks the author to evaluate the response in motion, preserve approved character movement and choose a treatment that fits the shot. [Studio test](threejs-asset-generator/scripts/studio.test.ts) · [VFX guidance](threejs-asset-generator/references/studio-preview.md#optional-vfx-references) |
+
+The two WebGL previews of dragon B used the same model, camera and clips to review an isolated Stomp revision. Chrome played the original and revised effects without console errors. The sampled walking and pre-impact frames matched, and the peak and fade frames changed. This is an authored example. A fresh paired generation run would be needed to measure changes in agent output quality or token use.
+
+The final strict run with Chrome enabled passed 14 test files with zero skipped and routed all 21 trigger prompts as expected. Both manifests passed validation (approximately 4,354 tokens for Harness and 2,382 for Web Full). The five Markdown packs matched all 84 canonical chapters. The shared DEV-INFRA audit examined 98 files and reported zero findings.
+
+## Limits of the v4.3 replay
 
 The v4.3 replay reuses the v4.2 asset source. A fresh blind generation run is still required to measure v4.3 model quality and build time. Target-engine appearance and the workflow in live ChatGPT, Gemini, and Claude accounts remain unverified. Rigged-export gate RG4 checks clip names and counts. The channel checks in this audit exercise baked quaternion and position tracks. Bake rotation channels to quaternions for GLB delivery. [Rigged export route](threejs-asset-generator/references/glb-export.md#threejs-export-route)

@@ -45,15 +45,15 @@ Code: `src/organic.ts`. API:
 
 Example kernel: `src/dragonKernel.ts` (project-specific parameters and wing rim; copy and adapt).
 
-- **Sides and rings:** 5 to 8 sides and about 4 samples per spline segment are enough for low-poly. Keep each bend under about 90°, otherwise the carried frame degenerates; add control points instead.
+- **Sides and rings:** Start with 5–8 sides for a faceted profile. Add rings and radial segments where rounded shapes or close views need them. Break sharp changes in the path into smaller bends so the carried frame stays stable.
 - **Radius:** use a function of `t` (0 at the start, 1 at the end) for body profiles, an array for limbs. Keep end radii above zero, or end the part with a spike.
-- **Limbs:** a three-point chain (hip, knee, foot) with a taper. The angular kink at the knee suits the style; resample with `sampleSpline` only for smooth limbs. Feet, claws and teeth are `spikeTris`.
+- **Limbs:** Start with a tapered hip–knee–foot chain. Use a hard break for a block or armor join. Refine the radius and tangent for a round shoulder or elbow, and check the bent pose. Use `spikeTris` for details that should read as points.
 - **Spikes and horns:** size them from the local body radius and give them their own forked stream. On strongly curved spines use the frame's up direction instead of a fixed `[0, 1, 0]`.
 - **Sheets:** a one-sided membrane has no volume, so `signedVolume` does not apply. Either give it thickness (a second, offset, reversed copy) or put it in its own `PartBuilder` with a `DoubleSide` material. This is the one accepted use of `DoubleSide` (SKILL.md §6).
 - **Poses:** describe joints as points (hip, knee, foot), not as nested rotations. Points stay mirror-safe and testable.
 - **Mirroring** follows SKILL.md §6.1; build the left side and mirror it.
 - **Steep/vertical fins & tail fans:** Pass `upHint` (e.g. `[0, 0, 1]`) to `tubeTris` or use `planarBladeTris(..., [1, 0, 0])` so vertical blades stay razor-thin on `X = 0` instead of twisting 90°.
-- **Multi-limb & radial creatures (spiders, krakens, octopi):** Use `radialArrayTris` for static spokes/suckers/limbs or build one articulated leg/tentacle template and instantiate radially around the thorax/mantle. Use `--kind creature` in `mesh-stats.ts` and `rig-check.ts` (up to 64 pivots), and prefer flat-shaded `SkinnedMesh` for flexible tentacles so draw calls stay low (1–2 per creature) while curves bend smoothly.
+- **Multi-limb & radial creatures (spiders, krakens, octopi):** Use `radialArrayTris` for static spokes, suckers, or limbs, or place one articulated template around the body. Use `--kind creature` in `mesh-stats.ts` and `rig-check.ts` (up to 64 pivots in the rig check). `SkinnedMesh` lets flexible limbs share geometry and bend continuously. Choose their normals and joins using [the requested style](look.md).
 - **Vehicles & mechanical assemblies:** Separate rotating wheels/propellers (`wheelSpin*`), steering knuckles (`wheelSteerFL/FR` parented above `wheelSpinFL/FR`), and bounded door/turret hinges into dedicated child pivots. Use `--kind vehicle` in `mesh-stats.ts` (allows up to 5–6 materials for paint, rubber, metal, transparent glass, and emissive lights).
 
 ## 6.4 Biped / humanoid & tapered box helpers

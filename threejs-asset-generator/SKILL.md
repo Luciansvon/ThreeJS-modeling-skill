@@ -1,9 +1,9 @@
 ---
 name: threejs-asset-generator
-description: Procedural low-poly 3D assets in Three.js r170+ with seeded deterministic builders, parameter schemas, flat-shaded vertex-color meshes, custom geometry with correct winding, mirrored parts, rigged biped, creature, vehicle and building kernels, composites, textures, standalone code export, and reference image matching. Not for loading glTF files.
+description: Generate procedural 3D assets in Three.js from a brief or reference image. Build seeded low-poly, voxel, claymation, stylized or realistic models with custom geometry, textures, rigs, animation and VFX. Supports creatures, vehicles, buildings, deterministic composites, standalone code and GLB export.
 ---
 
-# Three.js Procedural Low-Poly Asset Generator
+# Three.js Procedural Asset Generator
 
 This harness edition assumes a workspace and Node.js. Use the bundled builders and CLI gates to collect evidence from the actual asset.
 
@@ -11,17 +11,17 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 
 **Exploration vs Build Mode:** When the user is still exploring ideas, asking for advice, or leaves major requirements open, **pause in Exploration Mode** and ask **2–4 concise plain-language questions** with recommended defaults—do NOT write full 3D model code until aligned. Go straight to **Build Mode** when the brief is already complete or the user asks to build right away. Ask only what is missing from these **6 core intake items**:
 1. **Reference & style:** existing image, generate a reference image first, or build from text.
-2. **Surface & materials:** flat vertex colors by default; image/procedural textures, transparent glass, or metal only when needed (keep generated image maps as fixed builder inputs).
-3. **Animation & flexibility:** static vs animated; desired clips; rigid pivots (`RigBuilder`) vs flat-shaded `SkinnedMesh` for sinuous bodies/tentacles.
+2. **Surface & materials:** match the requested style and viewing distance. Choose smooth or faceted normals, material colors, vertex colors or fixed texture inputs as appropriate.
+3. **Animation:** choose pivots, a deforming skin or morph targets for the requested actions. Include facial articulation when the performance calls for it.
 4. **Preview mode:** **Fast Preview** (orbit, textures, clip scrub) vs **Full Preview** (live sliders, rig/clip inspection). Do not build a heavy studio before the user chooses (`references/studio-preview.md`).
-5. **Runtime VFX:** choose optional effects to suit the brief. Use the examples in `references/studio-preview.md` for inspiration and keep preview effects outside `.glb` export.
+5. **Runtime VFX:** design effects for the intended action and judge their impact during playback at the delivery camera distance. Preview-only effects live outside the exported model (§13).
 6. **Target & deliverables:** platform (`web`, `mobile`, `roblox`, `desktop`), asset kind (`prop`, `hero`, `creature`, `vehicle`, `building`), and output (`.glb`, standalone code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
 **Code is in `src/`**, not in the docs. Run, do not re-read: `tsx src/<name>.test.ts` (pure tests need no `three`). Reference files list each module's API.
 
-**Reference image given?** Read `references/reference-matching.md` BEFORE writing code and run its loop after every build step (§15).
+**Start with the current task.** For a supplied image, begin with §15 and the intake section of `references/reference-matching.md`. Use the table below to open the section needed for the next decision. Read implementation or test source when adapting a helper or diagnosing a failure.
 
 ## Where to read next
 
@@ -64,9 +64,9 @@ parameter schema (defaults, ranges) → resolveParams() → build…Asset() → 
 
 - Defaults and ranges live in the schema only. `build…Asset(rawParams)` calls `resolveParams` itself. Three competing defaults (`params.seed || 12345`, schema `default: 42`, composite `?? 101`) make preview, presets and exported code disagree.
 - `build…Asset` is pure: same resolved params give identical geometry. No `Math.random`, `Date.now`, DOM access or module-level mutable state.
-- Import `THREE` normally. Do not inject a `THREEInstance`: helpers use the module import, so injection only half-works and hides bugs. The export step supplies the import line (§11).
+- Use the same Three.js version throughout the builder and its helpers. The rigged exporter and studio both support a builder receiving `(params, THREE)`.
 - Give every builder and parameter list a unique name (`buildTreeAsset`, `treeParameters`). A generic `buildAsset` collides as soon as a composite imports two generators.
-- For custom geometry (creatures, hulls, wings), keep shape logic in pure functions over plain triangle arrays and let THREE wrap the result at the end (§6.2). Primitive-only props can stay on `PartBuilder` directly.
+- Choose the geometry representation that preserves the intended surface. Plain triangle kernels suit faceted parts. Indexed `BufferGeometry` can share smooth normals and carry skin weights, UVs, or morph targets. Extract triangles from the resulting mesh for geometry QA.
 
 Types: `src/types.ts` (`ParamDef`, `AssetGeneratorSchema`).
 
@@ -108,9 +108,9 @@ Code: `src/params.ts`. API:
 
 ## 13. Checklist (tick per asset, do not ship pre-ticked)
 
-**Run the gates, then look.** `npx tsx scripts/qa-asset.ts --module ./kernel.ts --export buildXTris --symmetric` for a pure kernel, or `--tris tris.json` for the final grounded asset (usage and gate list: `references/qa-gates.md`). It prints Q1 to Q10, writes `review.png` and ends with an `@@RESULT` line. Fix the first failing gate and rerun.
+Run `qa-asset.ts --tris tris.json` on final grounded geometry, or pass `--module ./kernel.ts --export buildXTris` for a pure kernel. Add `--symmetric` for intended symmetry. Use `review.png` to inspect the geometry and the rendered preview to judge its appearance.
 
-**Done rule.** Never report an asset as done until `qa-asset` passed on the current build (or each failing gate is named with its reason), `review.png` was opened with the view tool and one line per panel says what was seen, and everything listed as `UNVERIFIED` or `not checked` is repeated in the answer. For delivered previews, apply the final visual and animation checks in `references/studio-preview.md`. End with the gate table of the last run.
+On revision, check what changed using the least expensive evidence that can reveal a problem. Run applicable checks on the delivered build. Keep detailed logs with the asset and summarize the observed result and material gaps. If a tool is unavailable, continue independent work and report any unresolved requested check at handoff. See `references/qa-gates.md` and, for previews, `references/studio-preview.md`.
 
 Determinism and parameters
 - [ ] Defaults and ranges exist only in the schema; `build…Asset` calls `resolveParams`
@@ -119,21 +119,21 @@ Determinism and parameters
 - [ ] Derived constraints prevent degenerate shapes; sub-seeds fit the seed range
 
 Reference (only when the user gave an image)
-- [ ] `ref-spec.md` written once, `ref.json` made, mask PNG checked; `ref-compare` run after every build step; gate table (§15) is in the answer
+- [ ] Compare the delivered asset with the reference at a comparable angle and scale. Check the features that carry its identity (§15).
 
 Geometry and look
 - [ ] Axes follow §0; faces described by axis; right = −X when forward = +Z
 - [ ] Custom geometry has positive `signedVolume`, also after mirroring; `DoubleSide` only on zero-thickness sheets
 - [ ] Mirrored parts go through `add()`/`addTris` or `mirrorTris`, never a bare negative-scale `applyMatrix4`
-- [ ] Custom-geometry and creature shapes live in pure triangle kernels with Node tests (determinism, signed volume, stream isolation)
-- [ ] Parts go through `bakeFlat` + `paint`; per-triangle color functions are pure
+- [ ] Check the custom builder for determinism, winding and stream isolation
+- [ ] Normals, color and surface detail reproduce the intended style in the reloaded asset. Use `bakeFlat` and `paint` for deliberately faceted parts.
 - [ ] Jitter is applied before `add()`, seam-welded, with bounding volumes recomputed
 - [ ] Metal parts have an environment map or a lowered `metalness`
 - [ ] Overlays use a constant-distance inset and a small lift against z-fighting
 
 Rigging, humanoids, textures (only when they apply)
-- [ ] Moving parts use `RigBuilder` (rigid/mechanical/arthropods) or flat-shaded `SkinnedMesh` (serpentine/tentacle/organic curves) in rest pose; static parts stay merged; bone count fits category (`≤ 16` hero/prop, `≤ 24` building, `≤ 32` vehicle, `≤ 64` creature)
-- [ ] Left/right bones use `mirrorBone` + mirror matrix; clips use `AnimationMixer` on the rig root with ≥ 24 fps, smooth easing, anticipation→climax→recovery, follow-through, and clean transitions
+- [ ] Choose joint pivots or skinning to suit the motion and preserve the chosen surface normals. Inspect joins under deformation. For an expressive face, play the requested gesture on the reloaded asset (§18).
+- [ ] Play the clips on the rig root with `AnimationMixer`. Choose timing, interpolation and follow-through to suit the performance, including held poses for a stop-motion style. Use the mirror helpers for symmetric bones.
 - [ ] Limb chains go through `twoBoneIK` or fixed point chains; feet and hands have explicit forward/up
 - [ ] Extruded and lofted parts have positive `signedVolume`, also after mirroring
 - [ ] UV is off unless a texture is used; with a texture, `PartBuilder({ uv })` is set for every part of that material and `disposeAsset` frees `map`
@@ -151,14 +151,14 @@ Composite
 - [ ] Skipped items are deterministic; repeated objects are cloned or instanced
 
 QA (every asset)
-- [ ] `scripts/qa-asset.ts` exit 0 on the current build; `review.png` viewed, one finding per panel; UNVERIFIED items listed; gate table in the answer
+- [ ] Record geometry checks and visual observations for the delivered build, including any unresolved requested checks.
 
 Lifecycle and export
 - [ ] Wrapper group grounds the asset at Y = 0; `disposeAsset` is called on every rebuild
-- [ ] Meshes are named; triangle count is inside budget
+- [ ] Meshes are named. Record the triangle count and compare it with any agreed target.
 - [ ] Exporter uses a real TS transpiler, includes helpers once, and has zero imports except `three` (`three/addons` only if `mergeGeometries` is used)
 - [ ] GLB asked for: choose the export path in §16. Report the file, checks performed on its bytes, and any unchecked visual or import stages.
-- [ ] Platform given or `detail` added: `scripts/mesh-stats.ts` (`--lods` for LOD) exit 0, profile and kind named, `not checked` repeated; `detail` default 2 leaves the existing asset unchanged
+- [ ] For a delivery target or LOD request, run `scripts/mesh-stats.ts` with the selected limits and `--lods` when relevant. Verify silhouette and rig continuity at the delivered levels.
 - [ ] Export target (module, import map, classic global) matches where the code will run
 - [ ] Parity test passes: `generate(params)` and the exported module give the same fingerprint
 
@@ -191,13 +191,7 @@ Promote it to the full schema form (§1) as soon as it gets sliders, presets, or
 
 ## 15. Reference matching (when the user gives an image, screenshot or sketch)
 
-Full procedure and scripts: `references/reference-matching.md`. The rules, in order:
-
-1. **Intake once.** View the reference once, write `ref-spec.md` (max 15 lines: facing, measured proportions, parts, palette, 3 signature features, out of scope), run `scripts/ref-intake.ts` (supports `front`, `side`, `top`, `back`, `34`, `34_back`), look at the mask PNG once. After that, never re-read the image: work from the spec and `ref.json`.
-2. **Build coarse to fine, compare after every step.** A blockout (G1 proportions, G2 aspect) → B silhouette (G2 IoU ≥ 0.85 ortho, ≥ 0.70 for `34`/`34_back`) → C colour (G3 palette) → D detail (G4 signature features). Run `scripts/ref-compare.ts` after each step.
-3. **Numbers before pictures.** Fix only the FIRST failing gate per round, change one parameter group, compare again. View an image only for the mask check, a failing IoU diff (`diff-<view>.png`) and the G4 milestones.
-4. **Stop rule.** Max 3 rounds per gate; then keep the best version and report the gap. Never distort a shape to fill a red area. No detail pass (§6.8) while G2 fails.
-5. **Log one line per round** (`step B, round 2: side IoU 0.71 -> 0.83, shortened neck`) and **end the answer with the gate table** of the last compare run. "Matches the reference" without that table is not allowed.
+Keep a short `ref-spec.md` with visible views, proportions, identifying features and material character. Reuse `ref.json` and its checked masks while the input stays the same. Compare blockout proportions and silhouette with `ref-compare.ts`, then compare the actual render with the source image. Reopen or crop the original whenever expression, seams or material need a closer look. Rerun the numeric checks affected by a revision. For the detailed procedure and thresholds see `references/reference-matching.md`.
 
 ## 16. GLB file (when the user wants a `.glb`)
 
@@ -207,7 +201,7 @@ When the GLB must retain vertex colors, materials, UVs, maps, rigging (`RigBuild
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
-Run `npx tsx scripts/mesh-stats.ts --module ./kernel.ts --export buildXTris --profile web --kind prop` (`--kind` supports `prop`, `hero`, `creature`, `vehicle`, `building`; optional `--budget N` overrides the L0 triangle ceiling). It counts triangles, GPU vertices (3 x triangles, flat non-indexed), draw calls, materials, textures, bones and GLB size against the platform table, and says what it could not check. `--lods` builds `detail` 2, 1, 0 and checks about half the triangles per level, the same parts, bounds and pivot, determinism. Add LOD with `detailParam` and `lodRadiusScale` from `src/lod.ts`: default 2 must leave the existing asset unchanged. The numbers are counted, not measured on a GPU: say so. Details: `references/budget.md`.
+Choose a budget from the asset's delivery target. A browser used to inspect a model does not establish its deployment target. With an agreed target, pass the same profile, kind and any explicit triangle ceiling to QA, mesh stats and geometry-only export. With no target, report the measured counts. If optimization is required, protect the silhouette, face and visible material detail and compare the optimized render with the previous one. See `references/budget.md` for CLI examples and LOD checks.
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 

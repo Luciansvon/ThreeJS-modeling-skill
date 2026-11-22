@@ -1,4 +1,4 @@
-// scripts/ref-compare.ts: your generator's triangles vs ref.json. Run after EVERY build step.
+// Compare geometry and palette with ref.json when those features change.
 //   1. Write the same triangle formats as qa-asset and mesh-stats. Add hex colors to { tris, colors } or { parts, colors } for G3.
 //   2. npx tsx ref-compare.ts ref.json tris.json        -> prints PASS/FAIL per gate, writes diff-<view>.png (red = reference only, blue = model only)
 import { readFileSync } from 'node:fs';
@@ -34,5 +34,5 @@ for (const [view, rgba] of Object.entries(diffs)) {
   console.log('wrote', f);
 }
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate only, then run again.` : '\nAll numeric gates pass. Do the visual checklist (G4) next.');
+console.log(failed.length ? `\n${failed.length} numeric check(s) failed. Inspect the relevant view and compare it with the reference.` : '\nNumeric checks passed. Compare the rendered identifying features with the reference (G4).');
 process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed: failed.length, diffs: written, angles }));

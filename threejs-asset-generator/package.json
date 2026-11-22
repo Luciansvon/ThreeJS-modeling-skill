@@ -1,9 +1,9 @@
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.1",
+  "version": "4.3.2",
   "private": true,
   "type": "module",
-  "description": "Procedural low-poly Three.js asset generator skill, QA gates, LOD budgets, reference matching, rig checks and GLB exporter.",
+  "description": "Style-adaptive procedural Three.js assets, reference matching, geometry checks, animation, VFX previews and GLB export.",
   "scripts": {
     "check": "tsx tools/check.ts",
     "check:strict": "tsx tools/check.ts --strict",

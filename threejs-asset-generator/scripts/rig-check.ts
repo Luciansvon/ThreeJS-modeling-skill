@@ -37,6 +37,6 @@ console.log(`\nstats: ${JSON.stringify(stats)}`);
 if (skipped.length) console.log(`not checked: ${skipped.join('; ')}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate, re-export metadata, run again.`
+console.log(failed.length ? `\n${failed.length} rig check(s) failed. Inspect the affected tracks or metadata and verify the revised export.`
   : skipped.length ? '\nAll evaluated rig & clip checks pass. See not checked for missing evidence.' : '\nAll rig & clip checks pass.');
 process.exit(emit({ tool: 'rig-check', ok: failed.length === 0, gates, stats, skipped, unverified }));

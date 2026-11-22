@@ -95,16 +95,56 @@ export function assetStats(parts: Parts, meta: Meta = {}): Stats {
 }
 
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-export type BudgetOptions = { platform?: Platform; kind?: Kind; glbBytes?: number };
+// An omitted platform preserves the library's web default. The CLI passes null when no profile was requested.
+export type BudgetOptions = { platform?: Platform | null; kind?: Kind; budget?: number; glbBytes?: number };
+
+function triangleBudget({ platform = 'web', kind = 'prop', budget }: BudgetOptions): Range | undefined {
+  if (budget !== undefined) {
+    if (!Number.isFinite(budget) || budget <= 0) throw new Error('--budget needs a positive number');
+    return { target: budget, max: budget };
+  }
+  return platform ? PROFILES[platform].tris[kind] : undefined;
+}
+
+/** Read the same target and triangle override in every CLI. */
+export function parseBudgetArgs(args: readonly string[]) {
+  const value = (flag: string) => {
+    const i = args.indexOf(flag);
+    if (i < 0) return undefined;
+    const name = args[i + 1];
+    if (!name || name.startsWith('--')) throw new Error(`${flag} needs a value`);
+    return name;
+  };
+  const platform = (value('--profile') ?? null) as Platform | null;
+  const kind = (value('--kind') ?? 'prop') as Kind;
+  const rawBudget = value('--budget');
+  if (platform && !Object.hasOwn(PROFILES, platform)) throw new Error(`--profile must be one of ${Object.keys(PROFILES).join(', ')}, got "${platform}"`);
+  if (!KINDS.includes(kind)) throw new Error(`--kind must be one of ${KINDS.join(', ')}, got "${kind}"`);
+  const options = { platform, kind, budget: rawBudget === undefined ? undefined : Number(rawBudget) };
+  return { ...options, triangleLimit: triangleBudget(options)?.max ?? null };
+}
 
 /** Budget gates for one asset. `skipped` lists what could not be checked and why. */
 export function budgetGates(s: Stats, o: BudgetOptions = {}): { gates: Gate[]; skipped: string[] } {
-  const platform = o.platform ?? 'web', kind = o.kind ?? 'prop', P = PROFILES[platform], gates: Gate[] = [], skipped: string[] = [];
+  const { platform = 'web', kind = 'prop' } = o;
+  const gates: Gate[] = [], skipped: string[] = [];
   const range = (id: string, label: string, v: number, r: Range, hint: string, unit = '') => {
     const pass = v <= r.max;
-    gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}${id === 'B1 triangles' ? `, ${kind}` : ''}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
+    gates.push({ gate: id, value: `${label} ${fmt(v)}${unit} of max ${fmt(r.max)}${unit} (${platform}, target ${fmt(r.target)})${pass && v > r.target ? ', above the target' : ''}`, pass, hint });
   };
-  range('B1 triangles', `${s.triangles} triangles`, s.triangles, P.tris[kind], 'lower `detail`, fewer segments, drop small details (references/budget.md)');
+  const tri = triangleBudget(o);
+  if (!tri) skipped.push('B1 triangle limit (set --profile or --budget)');
+  else {
+    const pass = s.triangles <= tri.max;
+    const basis = o.budget !== undefined ? '(--budget)' : `(${platform}, ${kind}, target ${tri.target})${pass && s.triangles > tri.target ? ', above the target' : ''}`;
+    gates.push({ gate: 'B1 triangles', value: `${s.triangles} triangles of max ${tri.max} ${basis}`, pass, hint: 'optimize less visible geometry first and compare the revised render at the intended viewing distance (references/budget.md)' });
+  }
+
+  if (!platform) {
+    skipped.push('B2 to B6 platform limits (set --profile)');
+    return { gates, skipped };
+  }
+  const P = PROFILES[platform];
   const matRange = P.materialsByKind?.[kind] ?? P.materials;
   if (s.materials === null) skipped.push('B2 materials (no --meta with a material per part)'); else range('B2 materials', `${s.materials} material(s)`, s.materials, matRange, 'merge parts that share a look into one material');
   if (!s.textures.length) skipped.push('B3 textures (no textures in --meta; an asset with vertex colours only has none)');
@@ -127,7 +167,7 @@ export async function lodGates(build: (p: Record<string, unknown>) => unknown | 
     const parts = normalize(await build({ ...params, detail })), b = boundsOf(flatten(parts));
     built[detail] = parts; levels.push({ detail, triangles: triCount(flatten(parts)), size: b.size.map((v) => +v.toFixed(4)), minY: +b.min[1].toFixed(4) });
     const bad = qaGates(parts, { ...qa, grounding: false }).gates.filter((g) => !g.pass);
-    if (bad.length) gates.push({ gate: `L0 QA at detail ${detail}`, value: bad.map((g) => `${g.gate}: ${g.value}`).join('; '), pass: false, hint: 'every level is a full asset: it must pass Q1 to Q5 (and Q7 if asked) like the top level' });
+    if (bad.length) gates.push({ gate: `L0 QA at detail ${detail}`, value: bad.map((g) => `${g.gate}: ${g.value}`).join('; '), pass: false, hint: 'each level must pass geometry QA and any selected triangle and symmetry checks' });
   }
   const ratios = [1, 2].map((i) => levels[i].triangles / levels[i - 1].triangles);
   gates.push({ gate: 'L1 LOD triangle ratio', value: `${levels.map((l) => `detail ${l.detail}: ${l.triangles}`).join(' -> ')} (ratios ${ratios.map((r) => r.toFixed(2)).join(', ')}, wanted ${LOD_TOL.ratioLo} to ${LOD_TOL.ratioHi} each)`, pass: ratios.every((r) => r >= LOD_TOL.ratioLo && r <= LOD_TOL.ratioHi), hint: ratios.some((r) => r >= 1) ? 'the builder ignores `detail`: wire lodPick into segments and details (src/lod.ts)' : 'about half the triangles per level: adjust segments or the number of small details' });

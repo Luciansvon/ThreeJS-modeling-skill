@@ -49,14 +49,15 @@ Choose controls for the asset and the requested review.
 
 ### Optional VFX references
 
-Use these examples as creative references. Choose or invent the effect, timing, scale, colors, particle counts, layers, and blending that best serve the brief. Adapt, combine, or skip any example. If a particular technique or tool is unavailable, use a suitable alternative and continue the deliverable.
+Use these examples as creative references. Choose or invent the effect, timing, scale, colors, layers, and blending that serve the brief. Adapt, combine, or skip any example. If a technique or tool is unavailable, use a suitable alternative and continue the deliverable.
 
 - **Lightning burst.** One possible rhythm is inward-moving energy, a short flash, an expanding wave, then lingering sparks. Change the stages and their timing to match the action. A continuous aura can use a different rhythm.
 - **Gradient ribbon.** A translucent tinted shell with soft edges and a thin bright core can keep a bolt legible on pale backgrounds. `NormalBlending` is one way to preserve its tint. A short additive flash can give the peak more impact when it suits the lighting. [Three.js material blending](https://threejs.org/docs/pages/Material.html#blending)
+- **Ground contact.** A surface ripple, dust wake, or brief aftermark can give a grounded strike a sense of weight. Use a response that fits the surface and the action.
 
-Review any requested effect in motion against the intended backdrop and focal point. When the preview supports multiple backgrounds, check the ones relevant to delivery. Judge the result by the brief and actual evidence. Attach preview-only effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
+Play the action at the delivery camera distance and backdrop. Where they matter to the brief, check the weight at impact, the direction the effect travels, and how it settles afterward. Refine the effects while preserving the motion that already reads well. Keep preview effects beside the model root and pass only the fresh model root and its animation clips to GLB export.
 
-The packer can load your effect module with `--vfx ./effect.ts`. Export a factory, for example `createStudioVfx({ root, asset, params, group, THREE })`, and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. The factory can return an `update({ clip, time, duration })` callback to sync the effect to playback and captured frames. The preview's effect module stays outside the model builder and GLB command.
+Add `--vfx ./effect.ts` to `pack-studio` to include requested effects in the same self-contained preview. Supplied effects start enabled. Use **Studio VFX** to toggle them while playing or scrubbing. Export a factory such as `createStudioVfx({ root, asset, params, group, THREE })` and add its meshes to the supplied `group`. Select the factory with `--vfx-export` if needed. An optional `update({ clip, time, duration })` callback sets the effect at each pose, including rest (`clip: null`), so action-timed effects appear where authored.
 
 ### Frame the full motion inside the HUD
 
@@ -88,7 +89,7 @@ When a browser tool is available, open the delivered preview for the final model
 1. **3/4 Front.** Check silhouette, materials, and how the model fits around the title and controls.
 2. **3/4 Back.** Check the opposite side, tail, appendages, and texture seams.
 3. **Mid-movement.** Play the main movement clip, then inspect its midpoint for pose, stretch, and ground clearance. Watch the loop transition when the clip loops.
-4. **Action and effects.** Inspect a representative frame of the intended action and any requested effects. Check that the timing and focal point serve the brief in the actual lighting.
+4. **Action and effects.** Play the action and inspect a representative frame in the delivery lighting. Use the [VFX review](#optional-vfx-references) when effects are requested.
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
@@ -98,4 +99,4 @@ For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chro
 npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --motion-view side --action LightningBurst --peak 0.53 --background light
 ```
 
-Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.
+Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. The VFX pixel comparison records whether the effect changed the action frame. Judge the effect's quality in playback at the intended delivery view. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.

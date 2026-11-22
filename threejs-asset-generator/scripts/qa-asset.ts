@@ -1,7 +1,7 @@
 // scripts/qa-asset.ts: QA gates + review image for a generated asset. Run it before you say an asset is done (references/qa-gates.md).
 //   Kernel (no THREE):   npx tsx scripts/qa-asset.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}']
 //   Any asset via tris:  npx tsx scripts/qa-asset.ts --tris tris.json            (tris.json as in references/reference-matching.md §5)
-// Options: --budget 2000  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
+// Options: --profile web --kind prop  --budget N  --open wingL,wingR | all  --symmetric  --footprint  --grounded  --ground-y 0  --out dir (default .)  --no-render
 // Q6 grounding: on for --tris (the final asset). Off for --module (a raw kernel is grounded later by groundAsset) unless --grounded or --footprint.
 // --module rebuilds the asset to check Q8 determinism and Q9 seed 0; --tris reports both as UNVERIFIED.
 // Both accept Tris, { tris }, named parts { name: Tris, ... }, or { parts: { name: Tris, ... } }.
@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writePngRgba } from './png';
 import { normalizeParts, qaGates, determinismGates, type Gate, type Parts, type QAOptions } from './qacheck';
+import { parseBudgetArgs } from './budget';
 import { renderSheet, WRONG_TOL } from './review';
 import { emit } from './result';
 
@@ -19,10 +20,13 @@ const fail = (msg: string): never => { console.error(msg); process.exit(emit({ t
 const fmtGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 
 const num = (k: string) => { const v = opt(k); if (v === undefined) return undefined; const n = Number(v); if (!Number.isFinite(n)) fail(`--${k} needs a number, got "${v}"`); return n; };
-const o: QAOptions = { budget: num('budget'), groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 const out = resolve(opt('out') ?? '.'), modFile = opt('module'), trisFile = opt('tris');
+if (!modFile === !trisFile) fail('usage: tsx scripts/qa-asset.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--profile name] [--kind name] [--budget N] [--open a,b|all] [--symmetric] [--footprint] [--grounded] [--ground-y N] [--out dir] [--no-render]');
+let target: ReturnType<typeof parseBudgetArgs>;
+try { target = parseBudgetArgs(args); } catch (e) { fail((e as Error).message); }
+const { platform, kind, triangleLimit } = target;
+const o: QAOptions = { budget: triangleLimit ?? undefined, groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 o.grounding = !modFile || flag('grounded') || flag('footprint');   // Q6 needs the final grounded asset: always for --tris, only on request for a raw kernel
-if (!modFile === !trisFile) fail('usage: tsx scripts/qa-asset.ts (--module file.ts [--export name] [--params json] | --tris tris.json) [--budget N] [--open a,b|all] [--symmetric] [--footprint] [--grounded] [--ground-y N] [--out dir] [--no-render]');
 
 let parts: Parts, build: ((p: Record<string, unknown>) => unknown) | undefined, params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
@@ -61,5 +65,5 @@ if (skipped.length) console.log(`not checked: ${skipped.join('; ')}`);
 if (legend.length) console.log(`review colours: ${legend.map((l) => `${l.part} ${l.color}`).join(', ')}`);
 if (unverified.length) console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} gate(s) failing. Fix the FIRST failing gate, rebuild, run again.` : review ? `\nAll gates pass. Now LOOK at ${review} (view tool) before reporting done; list anything listed under UNVERIFIED in the answer.` : '\nAll gates pass, but there is no review image: say so in the answer.');
-process.exit(emit({ tool: 'qa-asset', ok: failed.length === 0, gates, stats, skipped, unverified, review, legend, wrongFacePixels: wrongTotal }));
+console.log(failed.length ? `\n${failed.length} gate(s) failing. Inspect the affected geometry and verify the revised build.` : review ? `\nAll evaluated checks pass. Inspect ${review} for visible geometry issues.` : '\nEvaluated checks passed. No review image was produced.');
+process.exit(emit({ tool: 'qa-asset', ok: failed.length === 0, gates, stats, skipped, unverified, platform, kind, triangleLimit, review, legend, wrongFacePixels: wrongTotal }));

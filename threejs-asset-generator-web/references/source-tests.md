@@ -704,11 +704,11 @@ console.log('SKINNED RIG OK (folded weights, YXZ motion, loop wrap, posed QA and
 // scripts/budget.test.ts: the budget gates must pass inside the limits AND fail just outside them; the LOD gates must fail on each defect they exist for. Run: npx tsx scripts/budget.test.ts
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROFILES, textureMiB, assetStats, budgetGates, lodGates, type Stats } from './budget';
+import { PROFILES, textureMiB, assetStats, budgetGates, lodGates, parseBudgetArgs, type Stats } from './budget';
 import { normalizeParts, type Parts } from './qacheck';
 import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
@@ -723,6 +723,13 @@ assert.equal(PROFILES.web.tris.prop.max, 10000); assert.equal(PROFILES.mobile.tr
 for (const [name, p] of Object.entries(PROFILES)) for (const k of ['hero', 'prop'] as const) { assert.ok(p.tris[k].target <= p.tris[k].max, `${name} ${k}`); assert.ok(p.tris.prop.max <= p.tris.hero.max, `${name}: a prop is not bigger than a hero`); }
 assert.ok(Math.abs(textureMiB(1024) - 5.33) < 0.01 && Math.abs(textureMiB(2048) - 21.33) < 0.01 && Math.abs(textureMiB(4096) - 85.33) < 0.01, 'the 5.3 / 21 / 85 MiB of the table');
 assert.equal(textureMiB(1024, 1024, false), 4);
+assert.equal(parseBudgetArgs([]).triangleLimit, null);
+assert.equal(parseBudgetArgs(['--kind', 'creature']).platform, null);
+assert.equal(parseBudgetArgs(['--profile', 'mobile']).triangleLimit, PROFILES.mobile.tris.prop.max);
+assert.throws(() => parseBudgetArgs(['--profile', 'toString']), /--profile must be one of/);
+assert.throws(() => parseBudgetArgs(['--profile']), /--profile needs a value/);
+assert.throws(() => parseBudgetArgs(['--budget', 'Infinity']), /--budget needs a positive number/);
+assert.throws(() => parseBudgetArgs(['--budget']), /--budget needs a value/);
 
 // 1. stats: GPU vertices are 3 x triangles (flat, non-indexed); draw calls group by (bone, material) when meta says so, else one per part (an upper bound)
 {
@@ -787,8 +794,9 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
 
 // 4. the CLI end to end
 {
-  const out = mkdtempSync(join(tmpdir(), 'budget-')), cli = join(here, 'mesh-stats.ts');
-  const run = (...a: string[]) => { const r = spawnTsx(cli, a, { cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
+  const out = mkdtempSync(join(tmpdir(), 'budget-'));
+  const runTool = (name: string, a: string[]) => { const r = spawnTsx(join(here, `${name}.ts`), a, { cwd: out }); return { code: r.status, out: `${r.stdout}${r.stderr}`, res: parseResult(r.stdout) }; };
+  const run = (...a: string[]) => runTool('mesh-stats', a);
   const dragon = join(here, 'fixtures', 'dragon.qa.ts'), crate = join(here, 'fixtures', 'crate.qa.ts');
 
   const lods = run('--module', dragon, '--lods', '--open', 'wingL,wingR', '--symmetric');
@@ -804,9 +812,20 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
 
   const meta = join(out, 'meta.json'); writeFileSync(meta, JSON.stringify({ parts: { blob: { material: 'm', bone: 'root' } }, bones: 120, textures: [4096] }));
   const withMeta = run('--tris', big, '--profile', 'desktop', '--meta', meta); assert.equal(withMeta.code, 0, withMeta.out); assert.equal((withMeta.res?.stats as { materials: number }).materials, 1); assert.equal((withMeta.res?.stats as { drawCallsExact: boolean }).drawCallsExact, true);
-  assert.equal(run('--tris', big, '--meta', meta).code, 2, 'web: the 4096 texture and 120 bones fail');
+  assert.equal(run('--tris', big, '--profile', 'web', '--meta', meta).code, 2, 'web: the 4096 texture and 120 bones fail');
   const glb = join(out, 'a.glb'); writeFileSync(glb, new Uint8Array(6 * 1048576));
-  assert.equal(run('--tris', big, '--kind', 'hero', '--glb', glb).code, 2, 'a 6 MiB hero GLB is over 5');
+  assert.equal(run('--tris', big, '--profile', 'web', '--kind', 'hero', '--glb', glb).code, 2, 'a 6 MiB hero GLB is over 5 on web');
+  const measured = run('--tris', big, '--kind', 'hero', '--meta', meta, '--glb', glb);
+  assert.equal(measured.code, 0, measured.out);
+  assert.equal(measured.res?.platform, null);
+  assert.equal(measured.res?.triangleLimit, null);
+  assert.deepEqual(measured.res?.gates, []);
+  const metrics = measured.res?.stats as Stats & { glbBytes: number };
+  assert.equal(metrics.triangles, 4000);
+  assert.equal(metrics.bones, 120);
+  assert.equal(metrics.textures[0].w, 4096);
+  assert.equal(metrics.glbBytes, 6 * 1048576);
+  assert.doesNotMatch(measured.out, /Within budget/);
 
   assert.equal(run().code, 1); assert.equal(run('--tris', big, '--profile', 'phone').code, 1); assert.equal(run('--tris', big, '--kind', 'boss').code, 1);
   assert.equal(run('--tris', big, '--lods').code, 1, '--lods needs a builder'); assert.equal(run('--tris', big, '--meta', join(out, 'nope.json')).code, 1); assert.equal(run('--tris', big, '--glb', join(out, 'nope.glb')).code, 1);
@@ -823,17 +842,65 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
     import { box } from ${JSON.stringify(join(here, 'fixtures', 'crate.qa.ts'))};
     export function buildHeavy(p: { detail?: number } = {}) {
       const d = p.detail ?? 2;
-      const count = d === 2 ? 240 : d === 1 ? 120 : 60; // 2880 -> 1440 -> 720 tris (>2000 at detail 2)
+      const count = d === 2 ? 256 : d === 1 ? 128 : 64; // 3,084 -> 1,548 -> 780 triangles including the end box
       const tris: number[] = [];
       for (let i = 0; i < count; i++) { const x = i * 2; tris.push(...box(x, 0, 0, x + 1, 1, 1)); }
       // keep identical outer bounds at all LODs by anchoring end box at fixed X
-      const endX = 240 * 2; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
+      const endX = 512; tris.push(...box(endX, 0, 0, endX + 1, 1, 1));
       return { body: tris };
     }
   `);
   const heavyRes = run('--module', heavyMod, '--export', 'buildHeavy', '--profile', 'web', '--kind', 'creature', '--lods');
   assert.equal(heavyRes.code, 0, `>2000-tri creature must pass L0 under web/creature budget:\n${heavyRes.out}`);
   assert.equal(heavyRes.res?.ok, true);
+
+  // One real closed asset exercises the same limit through all three CLIs. Stats also checks every LOD.
+  const full = 3084;
+  const builder = ['--module', heavyMod, '--export', 'buildHeavy'];
+  for (const tool of ['qa-asset', 'mesh-stats', 'export-glb']) {
+    const check = (file: string, ...args: string[]) => {
+      const path = join(out, `${file}.glb`);
+      const extra = tool === 'qa-asset' ? ['--no-render'] : tool === 'mesh-stats' ? ['--lods'] : ['--out', path];
+      return { ...runTool(tool, [...builder, ...extra, ...args]), path };
+    };
+    const untargeted = check('untargeted');
+    assert.equal(untargeted.code, 0, untargeted.out);
+    assert.equal(untargeted.res?.triangleLimit, null);
+    assert.equal(untargeted.res?.triangles ?? (untargeted.res?.stats as Stats).triangles, full);
+    assert.ok((untargeted.res?.skipped as string[]).some((s) => /^(Q5 budget|B1 triangle limit)/.test(s)));
+
+    const profile = check('profile', '--profile', 'mobile', '--kind', 'prop');
+    assert.equal(profile.code, 2, profile.out);
+    assert.equal(profile.res?.triangleLimit, 3000);
+    assert.match(profile.out, /(?:Q5 budget|B1 triangles).*3000/);
+
+    const raised = check('raised', '--profile', 'mobile', '--kind', 'prop', '--budget', String(full));
+    assert.equal(raised.code, 0, raised.out);
+    assert.equal(raised.res?.triangleLimit, full);
+    assert.equal(raised.res?.platform, 'mobile', 'a triangle override leaves the target platform selected');
+
+    const tooLow = check('below-limit', '--budget', String(full - 1));
+    assert.equal(tooLow.code, 2, tooLow.out);
+    assert.equal(tooLow.res?.triangleLimit, full - 1);
+    assert.equal(tooLow.res?.platform, null);
+
+    const invalid = check('invalid', '--budget', '0');
+    assert.equal(invalid.code, 1, invalid.out);
+    assert.match(String(invalid.res?.error), /--budget needs a positive number/);
+
+    if (tool === 'mesh-stats') {
+      assert.deepEqual(untargeted.res?.gates?.map((g) => g.gate.split(' ')[0]), ['L1', 'L2', 'L3', 'L4']);
+      assert.equal(raised.res?.gates?.find((g) => g.gate.startsWith('B1'))?.pass, true);
+      assert.equal(raised.res?.gates?.find((g) => g.gate.startsWith('B5'))?.pass, true);
+      assert.equal(tooLow.res?.gates?.find((g) => g.gate.startsWith('B1'))?.pass, false);
+      assert.match(tooLow.res?.gates?.find((g) => g.gate.startsWith('L0'))?.value ?? '', /Q5 budget: 3084 of 3083/);
+    }
+    if (tool === 'export-glb') {
+      assert.ok(existsSync(untargeted.path) && existsSync(raised.path));
+      assert.equal(tooLow.res?.file, null);
+      assert.ok(!existsSync(profile.path) && !existsSync(tooLow.path) && !existsSync(invalid.path));
+    }
+  }
 }
 console.log('BUDGET OK');
 ~~~
@@ -1084,7 +1151,7 @@ assert.deepEqual(edgeReport(cube), { boundary: 0, duplicated: 0, edges: 36 });
 
 // 1. a good asset passes every gate that applies (symmetric, grounded, closed)
 {
-  const { gates, skipped } = qaGates(buildCrateTris({ seed: 3 }), { symmetric: true });
+  const { gates, skipped } = qaGates(buildCrateTris({ seed: 3 }), { symmetric: true, budget: 2000 });
   assert.equal(gates.length, 7);
   assert.deepEqual(gates.filter((g) => !g.pass), []);
   assert.ok(skipped.some((s) => s.includes('footprint')), 'the report must say that footprint centring was not checked');
@@ -1103,7 +1170,13 @@ assert.equal(qaGates({ a: [0, 0, 0, 1, 0, 0] }).gates[0].pass, false, 'not whole
 { const right = cube.map((v, i) => (i % 3 === 0 ? v + 1 : v)); assert.equal(gateOf({ a: right }, 'Q6').pass, true); assert.equal(gateOf({ a: right }, 'Q6', { footprint: true }).pass, false, 'footprint off-centre'); }
 assert.equal(qaGates({ a: cube.map((v, i) => (i % 3 === 1 ? v + 3 : v)) }, { grounding: false }).gates.some((g) => g.gate.startsWith('Q6')), false, 'grounding: false removes Q6');
 assert.equal(gateOf({ a: cube }, 'Q5', { budget: 10 }).pass, false);
-assert.equal(gateOf({ a: cube }, 'Q5').pass, true);
+assert.equal(gateOf({ a: cube }, 'Q5', { budget: 12 }).pass, true);
+{
+  const counted = qaGates({ a: cube });
+  assert.equal(counted.stats.triangles, 12);
+  assert.ok(counted.skipped.some((s) => s.startsWith('Q5 budget')));
+  assert.ok(counted.gates.every((g) => !g.gate.startsWith('Q5')));
+}
 { const lopsided = { a: cube, b: box(0.7, 0, 0, 0.9, 0.2, 0.2) }; assert.equal(gateOf(lopsided, 'Q7', { symmetric: true }).pass, false); assert.ok(symmetryGap(cube) === 0); }
 
 // 3. sheets: a quad has no volume, so it needs `open`; a closed part next to it is still checked
@@ -1154,7 +1227,7 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
 
   const raw = run('--module', crate, '--export', 'buildCrateTris', '--no-render');
   assert.equal(raw.code, 0, raw.out); assert.ok(!(raw.res?.gates as { gate: string }[]).some((g) => g.gate.startsWith('Q6')), 'module mode does not run Q6 by default'); assert.ok((raw.res?.skipped as string[]).some((s) => s.startsWith('Q6 grounding')), 'and says so');
-  const good = run('--module', crate, '--export', 'buildCrateTris', '--symmetric', '--grounded', '--out', out);
+  const good = run('--module', crate, '--export', 'buildCrateTris', '--symmetric', '--grounded', '--budget', '2000', '--out', out);
   assert.equal(good.code, 0, good.out); assert.equal(good.res?.ok, true); assert.equal((good.res?.gates as unknown[]).length, 10, 'Q1..Q10 with --symmetric');
   if (good.res?.review) assert.ok(existsSync(good.res.review as string), 'review.png written'); else assert.ok((good.res?.unverified as string[]).some((u) => u.startsWith('review.png')), 'no PNG must be reported as UNVERIFIED');
   assert.ok((good.res?.wrongFacePixels as number) <= 4, 'a healthy asset has at most the noise limit of magenta pixels');
@@ -1168,7 +1241,7 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
 
   const trisFile = join(out, 'tris.json'); writeFileSync(trisFile, JSON.stringify({ tris: cube, colors: ['#8a6a45'] }));
   const viaTris = run('--tris', trisFile, '--out', out);
-  assert.equal(viaTris.code, 0, viaTris.out); assert.equal((viaTris.res?.gates as unknown[]).length, 7, 'Q1..Q6 and Q10'); assert.ok((viaTris.res?.unverified as string[]).some((u) => u.includes('Q8')), 'Q8/Q9 cannot run on tris.json');
+  assert.equal(viaTris.code, 0, viaTris.out); assert.equal((viaTris.res?.gates as unknown[]).length, 6, 'Q1..Q4, Q6 and Q10 without a budget'); assert.ok((viaTris.res?.unverified as string[]).some((u) => u.includes('Q8')), 'Q8/Q9 cannot run on tris.json');
 
   const usage = run(); assert.equal(usage.code, 1); assert.equal(usage.res?.ok, false);
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
@@ -1588,8 +1661,78 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseResult, spawnTsx } from './result';
+import type { StudioPose } from './studio/types';
+
+declare global {
+  interface Window {
+    studioVfxProbe: { readbacks: number; pose?: StudioPose };
+  }
+}
+
+async function verifyStudioVfx(browserPath: string, studio: string, withoutVfx: string) {
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({
+    executablePath: browserPath, headless: true, timeout: 15_000,
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.addInitScript(() => {
+      window.studioVfxProbe = { readbacks: 0 };
+      const readback = HTMLCanvasElement.prototype.toDataURL;
+      HTMLCanvasElement.prototype.toDataURL = function (...args) {
+        if (this.id === 'view') window.studioVfxProbe.readbacks++;
+        return readback.apply(this, args);
+      };
+    });
+    const open = async (file: string) => {
+      await page.goto(pathToFileURL(file).href);
+      await page.waitForFunction(() => document.documentElement.dataset.studioState !== 'loading');
+      assert.deepEqual(await page.evaluate(() => window.threejsStudio?.getErrors()), []);
+    };
+    const probe = () => page.evaluate(() => window.studioVfxProbe);
+    const toggle = page.getByLabel('Studio VFX');
+    const scrub = (seconds: number) => page.locator('#scrub').evaluate((element, value) => {
+      const slider = element as HTMLInputElement;
+      slider.value = String(value);
+      slider.dispatchEvent(new Event('input'));
+    }, seconds);
+
+    await open(studio);
+    assert.equal(await toggle.isChecked(), true, 'Bundled VFX must start enabled');
+    assert.equal((await probe()).pose?.clip, null);
+    await page.selectOption('#clip', { label: 'Pulse' });
+    assert.equal((await probe()).pose?.clip, 'Pulse');
+    await scrub(0.5);
+    assert.equal((await probe()).pose?.time, 0.5);
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await page.waitForFunction(() => (window.studioVfxProbe.pose?.time ?? 0) > 0.5);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await toggle.uncheck();
+    const pausedPose = (await probe()).pose;
+    await scrub(0.75);
+    assert.deepEqual((await probe()).pose, pausedPose);
+    await toggle.check();
+    assert.equal((await probe()).pose?.time, 0.75);
+    assert.equal((await probe()).readbacks, 0);
+
+    const capture = (vfx: boolean) => page.evaluate((enabled) => window.threejsStudio!.setFrame!({
+      view: '34-front', clip: 'Pulse', time: 0.5, vfx: enabled,
+    }).vfx, vfx);
+    assert.equal(await capture(true), 'visible');
+    assert.equal(await capture(false), 'off');
+    assert.equal(await toggle.isChecked(), false);
+    assert.equal((await probe()).readbacks, 2);
+
+    await open(withoutVfx);
+    assert.equal(await toggle.isVisible(), false);
+    assert.equal((await probe()).readbacks, 0);
+  } finally {
+    await browser.close();
+  }
+}
 
 const temp = realpathSync(tmpdir());
 const dir = mkdtempSync(join(temp, 'three studio '));
@@ -1649,6 +1792,37 @@ try {
   ], { timeout: 15_000 });
   assert.equal(badBg.status, 1);
   console.log('Studio self-contained bundle and browser-unavailable result verified.');
+
+  const browserPath = process.env.THREE_STUDIO_TEST_BROWSER;
+  if (browserPath) {
+    const animated = join(dir, 'animated.ts');
+    const effects = join(dir, 'effect.ts');
+    const withVfx = join(dir, 'vfx.html');
+    writeFileSync(animated, `
+      export function build(params, THREE) {
+        const root = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({ color: '#9012ac' }));
+        const track = new THREE.VectorKeyframeTrack('.position', [0, 0.5, 1], [0, 0, 0, 0, 0.2, 0, 0, 0, 0]);
+        return { root, animations: [new THREE.AnimationClip('Pulse', 1, [track])] };
+      }
+    `);
+    writeFileSync(effects, `
+      export function createEffect({ group, THREE }) {
+        const pulse = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24), new THREE.MeshBasicMaterial({ color: '#43edff' }));
+        pulse.position.set(0.48, 0.15, 0.4);
+        group.add(pulse);
+        return { update(pose) {
+          window.studioVfxProbe.pose = pose;
+          group.visible = pose.clip === 'Pulse' && pose.time > 0;
+        } };
+      }
+    `);
+    const bundledVfx = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
+      '--module', animated, '--vfx', effects, '--out', withVfx,
+    ], { timeout: 15_000 });
+    assert.equal(bundledVfx.status, 0, bundledVfx.stdout + bundledVfx.stderr);
+    await verifyStudioVfx(browserPath, withVfx, out);
+    console.log('Studio VFX defaults, playback, scrub, toggle, and capture readbacks verified in browser.');
+  }
 } finally {
   assert.equal(dirname(dir), temp);
   rmSync(dir, { recursive: true, force: true });
@@ -1822,6 +1996,9 @@ console.log('TOOLS OK');
     { "prompt": "Build a deterministic procedural low-poly building with custom geometry and recessed windows", "expect": "$self" },
     { "prompt": "Create a procedural Three.js sea serpent with a smooth skinned tail, a looping swim clip, and rigged GLB export", "expect": "$self" },
     { "prompt": "Build a seeded low-poly creature in Three.js and generate a studio preview from the same asset builder as the GLB", "expect": "$self" },
+    { "prompt": "Model a claymation character from a reference image in Three.js with rounded seams and a rigged roar", "expect": "$self" },
+    { "prompt": "Create a seeded voxel shop asset in Three.js with crisp block joins and editable colors", "expect": "$self" },
+    { "prompt": "Generate a realistic procedural wood chair in Three.js with directional grain and GLB export", "expect": "$self" },
     { "prompt": "Load a .glb model with GLTFLoader and play its embedded animation", "expect": "gltf-model-loader" },
     { "prompt": "Open Blender, bake the textures and export a GLB for Three.js", "expect": "threejs-blender-bridge" },
     { "prompt": "Add OrbitControls, bloom postprocessing and soft shadows to my existing scene", "expect": "three-scene-ui" },

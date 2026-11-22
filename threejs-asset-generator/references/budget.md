@@ -13,18 +13,26 @@ Numbers aligned with blender-skills. Each range is *target to hard limit*: the g
 | Platform | Hero / Creature tris | Vehicle tris | Building tris | Prop tris | Materials (default / vehicle & building) | Texture max | Bones | Draw calls |
 |---|---|---|---|---|---|---|---|---|
 | `mobile` | 5k to 15k | 3k to 12k | 2k to 10k | 0.3k to 3k | 1 to 2 / 3 to 5 (`building` 2–4) | 1024 | 75 | 50 |
-| `web` (three.js, default) | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
+| `web` | 10k to 30k | 6k to 25k | 4k to 20k | 1k to 10k | 1 to 2 / 3 to 6 | 2048 | 100 | 100 |
 | `vr` (standalone) | 10k to 40k | 8k to 30k | 5k to 25k | 1k to 10k | 1 to 3 / 3 to 6 | 2048 | 100 | not in the table |
 | `desktop` | 50k to 150k | 30k to 120k | 20k to 100k | 5k to 50k | 2 to 6 / 4 to 8 | 4096 | 150 to 300 | not in the table |
 
 Web delivery: a `hero`, `creature`, or `vehicle` model is at most 2 to 5 MB as GLB (gate B6, mobile and web only); a whole scene at most 10 to 20 MB and 50 to 100 draw calls on mobile web (the scene totals are not checked per asset, see the end).
-`--kind` accepts `prop`, `hero`, `creature`, `vehicle`, or `building`. `--lods` automatically passes the selected `--profile` + `--kind` max triangle limit (or `--budget N`) into L0 QA instead of clamping at 2,000 triangles.
+
+Pass `--profile mobile|web|vr|desktop` when you know the deployment target. `--kind` accepts `prop` (default), `hero`, `creature`, `vehicle`, or `building`. Choose `web` for a web deployment. A browser preview can be used for any target.
+
+`qa-asset`, `mesh-stats`, and geometry `export-glb` use the same triangle limit. The profile and kind select the table maximum. A positive `--budget N` supplies the triangle limit and takes precedence over the table. With a profile selected, its other limits still apply in `mesh-stats`. `--lods` applies the same triangle limit in L0 for every level.
+
+Without `--profile` or `--budget`, the tools report triangle counts and mark the triangle limit as unchecked. `mesh-stats` reports available measurements and checks LOD when requested. It needs a profile to check B2 through B6. The result includes `platform`, `kind` and `triangleLimit`, with `null` for a missing profile or triangle limit.
 
 A limit the table does not give is reported under `not checked`. Do not fill it with a number you remember.
 
 ## Run it
 
 ```
+# Counts for an asset whose deployment target is still open
+npx tsx scripts/mesh-stats.ts --tris tris.json
+
 # A kernel, no THREE (the builder is called with `{...params}`)
 npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris --profile web --kind prop
 
@@ -45,16 +53,17 @@ npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods --open wingL,wingR -
 
 ## What is counted
 
-- **Triangles**: from the arrays. **GPU vertices = 3 x triangles**, because flat shading keeps every triangle non-indexed (a hard edge or a seam duplicates vertices anyway). A smooth, indexed asset would have fewer; this skill does not build one.
+- The triangle arrays provide the triangle count. The reported `gpuVertices` value counts three corners per triangle. Indexed geometry can share vertices. Read the exported position accessor to count stored vertices for an indexed mesh.
 - **Draw calls**: one per group of (bone, material), because parts are merged per bone and material (`PartBuilder.build`). Without `--meta` the number is **an upper bound** (one per part) and is labelled so; with a material for every part it is exact. One asset is only a share of a scene's calls.
 - **Texture memory**: RGBA8 with a full mip chain, uncompressed: 1024 = 5.33 MiB, 2048 = 21.33 MiB, 4096 = 85.33 MiB. Compression (KTX2) lowers memory, not the size limit.
 - **Materials, bones, textures**: only from `--meta`. No meta, no claim: they are listed as `not checked`.
+- **GLB size**: from `--glb`, in bytes as `stats.glbBytes`.
 
 ## The gates
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| B1 triangles | triangles within the limit for the platform and kind (`--kind prop` default, `hero`) | too many segments or details: lower `detail` |
+| B1 triangles | triangles within the selected profile and kind limit or `--budget N` | too many segments or details: lower `detail` |
 | B2 materials | distinct materials within the limit (needs `--meta`) | parts that could share one material |
 | B3 textures | the largest texture within the platform limit; total MiB is reported | an atlas too big for mobile |
 | B4 bones | bone count within the limit (needs `--meta`) | small moving parts with their own bone |
@@ -91,7 +100,7 @@ Thin the middle, keep the ends and extremes: the lowest dragon level keeps the s
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| L0 QA at detail N | only shown when a level fails Q1 to Q5 (and Q7 with `--symmetric`) | a level is a full asset: a hole, an odd side count |
+| L0 QA at detail N | only shown when a level fails geometry QA, the selected triangle limit, or requested symmetry | a hole, an odd side count, too many triangles |
 | L1 LOD triangle ratio | each level is 0.35 to 0.65 of the one above | the builder ignores `detail`, or one level drops far more than half |
 | L2 LOD parts | the same part names at every level | a level dropped a part instead of faces |
 | L3 LOD bounds and pivot | size, lowest Y and footprint centre within 5% of the longest side | thinning removed an extreme (a sampled ring that no longer reaches the maximum radius) |
@@ -99,7 +108,7 @@ Thin the middle, keep the ends and extremes: the lowest dragon level keeps the s
 
 ## The Done report
 
-When you report a budget or a LOD, the answer must contain: the profile and kind used, the gate table of the last `mesh-stats` run, everything under `not checked`, and the `UNVERIFIED` line (the numbers are counted, not measured).
+Report the selected limit and the relevant results of the current `mesh-stats` run. If the target is open, report the counts and any requested LOD results. Note unresolved checks that affect the requested delivery.
 
 ## What it does not cover
 

@@ -16,9 +16,11 @@ npx tsx scripts/export-glb.ts --module ./myKernel.ts --export buildMyTris --para
 npx tsx scripts/export-glb.ts --tris tris.json --out asset.glb
 ```
 
-Options: `--open a,b` or `all` (zero-thickness sheets, as in qa-asset) · `--budget N` · `--color r,g,b` (0 to 1, one base colour) · `--skip-qa` (export although Q1 to Q5 fail; the result lists it under `unverified`).
+Use `--profile` and `--kind` to select the same triangle limit as QA and mesh stats. A positive `--budget N` overrides it. With no selected limit, the exporter reports the triangle count and marks Q5 unchecked. [Budget profiles](budget.md)
 
-Order of work: `qa-asset.ts` first (all of Q1 to Q10 and the review image), `export-glb.ts` second. The exporter reruns Q1 to Q5 on the same parts and refuses to write a file for a non-finite, inside-out or open asset, because a GLB of that is worse than no file. Q6 to Q10 stay in `qa-asset.ts`.
+Other options include `--open a,b` or `all` for zero-thickness sheets and `--color r,g,b` for the base colour (0 to 1). `--skip-qa` permits export after a QA failure and records the overridden failure under `unverified`.
+
+Run `qa-asset.ts` for the current build and review image. Before writing, the exporter checks geometry with Q1 to Q4 and enforces Q5 when a limit is selected. Q6 to Q10 run in `qa-asset.ts`.
 
 ## What the file contains
 
@@ -32,7 +34,7 @@ Order of work: `qa-asset.ts` first (all of Q1 to Q10 and the review image), `exp
 
 | Gate | Passes when | Typical cause of a fail |
 |---|---|---|
-| QA Q1 to Q5 | the parts are finite, non-degenerate, outward-wound, closed (or listed in `--open`) and inside the budget | fix with `qa-asset.ts`; `--skip-qa` only knowingly |
+| QA Q1 to Q4, plus Q5 with a budget | the parts are finite, non-degenerate, outward-wound and closed (or listed in `--open`), and the triangle count fits any selected limit | run `qa-asset.ts` to identify the failing part or limit |
 | E1 container | magic `glTF`, version 2, header length equals file size, JSON chunk first, chunk lengths multiples of 4 | a hand-patched file; rewrite with `partsToGlb` |
 | E2 json | `asset.version` 2.0, scene 0, node names equal the part names in order, buffer length fits the BIN chunk | renamed parts; a JSON chunk that does not parse |
 | E3 accessors | float32 VEC3, inside their bufferView and the BIN chunk, aligned, `POSITION` min/max equal the data bounds | stale `min`/`max` after editing positions (viewers reject it) |
@@ -44,10 +46,7 @@ E1 to E6 are checked on the file **re-read from disk**, not on the buffer in mem
 
 ## The Done report
 
-When you export a GLB, the answer must contain:
-1. The path of the file and its size.
-2. The gate table of the last run (QA Q1 to Q5 and E1 to E6).
-3. Everything under `UNVERIFIED` that remains after any separate loader test. The CLI emits one default material and geometry. Use the Three.js route below for assets that need vertex colours, rich materials, rigging, or animation.
+Give the path and size of the exported file. Link the current export evidence and summarize any unresolved checks that affect the requested use. The Three.js route below supports vertex colours, materials, rigging and animation.
 
 If the user needs to see the result, say how to check it: drag the file into a glTF viewer or Blender, and confirm the part names appear as objects.
 
