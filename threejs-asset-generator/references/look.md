@@ -97,6 +97,7 @@ For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel
 - `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
 - `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
 - `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
-- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts()` / `.buildGeometries(THREE, { vertexT })` / `.buildMeshes(THREE, materials)`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { vertexT, greedy? })` / `.buildMeshes(THREE, materials, { greedy? })`
+- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
 
 For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.

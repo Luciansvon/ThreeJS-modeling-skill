@@ -18,12 +18,12 @@ This harness edition assumes a workspace and Node.js. Use the bundled builders a
 
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
 
-**Before modeling, confirm three things:** Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip choices already answered explicitly in the session, but **always confirm the brief summary** first:
-1. **Brief summary & reference check:** summarize asset, style, requested clips/VFX, and deliverables for confirmation. If a reference uses a static turnaround pose (T-pose/A-pose, upright cobra sit, stiff parallel legs, flat-spread wings), note it sets proportions and bind/rest pose only—animations start from natural creature locomotion posture (`references/rigging-biped.md`). Suggest re-uploading missing or cropped images.
-2. **Work mode:** `1) Quick` (`Fast`), `2) Balance` *(recommended default)*, or `3) Quality`—all modes keep full geometry, `new THREE.Color(hex)` accuracy, anchored VFX, and lively motion; `Fast` runs `G3` palette only (0 `G4` overhead), while `Balance`/`Quality` add `G4` CIEDE2000 regional color QC (`references/work-modes.md`).
-3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). Offer optional two-stage approval (blockout first) for complex assets.
+**Before modeling, confirm three things:** Start directly inside the procedural Three.js workflow (never suggest MagicaVoxel or Blender unless asked). Before writing full 3D model code, send **one concise numbered message** with recommended defaults. Skip answered choices, but **always confirm the brief summary** first:
+1. **Brief summary, style & reference check:** summarize asset, **1 primary style + <=2 modifiers** (read matched headings only in `references/art-styles.md`—helper only, never overrides the reference), clips/VFX, and deliverables. Note static turnarounds (T/A-pose, upright cobra sit, flat wings) set proportions & rest pose only; animations use natural locomotion (`references/rigging-biped.md`). Ask user to re-upload missing/unclear images.
+2. **Work mode:** `1) Quick` (`Fast`), `2) Balance` *(default)*, or `3) Quality`—all keep full geometry, `new THREE.Color(hex)` accuracy, anchored fluid VFX, and lively motion; `Balance`/`Quality` add automatic closed-socket facial rigs from iteration 1 + `G4` CIEDE2000 regional color QC (`Fast` = `G3` only, 0 `G4` overhead; `references/work-modes.md`).
+3. **Preview mode:** `A) Fast Preview` *(default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify, model+VFX code copy)*. Wait before building a heavy studio (`references/studio-preview.md`). Offer blockout-first approval for complex assets.
 
-When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (articulated rig + lively multi-beat choreography & VFX references in `references/rigging-biped.md` and `references/studio-preview.md` as creative inspiration, not hard limits—default to rich layered VFX anchored to live moving bones or `Y≈0` ground contacts; preview-only `_studio_vfx` is exempt from export budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
+When requirements remain open, ask only what is missing in the same message: ref/style (translate style picks into native Three.js modeling/material/render params, then run existing QA), surface detail, animation & **unrestricted VFX creativity** (`references/rigging-biped.md`, `references/studio-preview.md` as inspiration—stacked directional fluid particles on empty anchors, outward `root`-relative projectiles, `Y≈0` impacts; `_studio_vfx` exempt from export budgets), and platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -35,7 +35,8 @@ When requirements remain open, ask only what is missing in the same message: ref
 
 | You are doing | Read | Code |
 |---|---|---|
-| Choosing `Quick`/`Fast`/`Balance`/`Quality`, `G4` color QC policy, shape vs detail review | `references/work-modes.md` | |
+| Choosing `Quick`/`Fast`/`Balance`/`Quality`, facial rig & `G4` policy | `references/work-modes.md` | |
+| 3D art styles & GLB compatibility (1 primary + <=2 modifiers, matched heading only) | `references/art-styles.md` | |
 | Reference matching, Semantic ROI cache, `G1–G5` (`G4` CIEDE2000 ΔE00) | `references/reference-matching.md` | `scripts/color-qc.ts`, `scripts/ref-intake.ts`, `scripts/ref-compare.ts` |
 | Materials, flat shading, `VoxelGrid`, procedural/image textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/voxel.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
@@ -835,7 +836,8 @@ For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel
 - `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
 - `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
 - `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
-- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts()` / `.buildGeometries(THREE, { vertexT })` / `.buildMeshes(THREE, materials)`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { vertexT, greedy? })` / `.buildMeshes(THREE, materials, { greedy? })`
+- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
 
 For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.
 ~~~
@@ -893,7 +895,8 @@ Treat these patterns as creative inspiration to spark character-appropriate moti
 
 - **Living `Idle` multi-beat arcs (~4.5–6 s):** Go beyond simple up-down static breathing. Layer calm base breathing with a brief in-character mid-clip fidget (`~45%–80%` — e.g., curious head look-around + ear/tentacle flick, ghost mischief chuckle/shiver, predatory wing stretch, or mechanical scan) paired with subtle synchronized idle VFX, then ease cleanly back to rest for a seamless loop.
 - **Dynamic locomotion variations (stay facing forward `+Z`):** Avoid stiff repetitive pistons when a showcase clip suits flair. Depending on the archetype, locomotion can blend forward propulsion with characteristic maneuvers—such as an agile swimmer/flyer performing a smooth mid-glide `360°` axial **barrel roll** (rolling sideways along its body axis while continuing forward, tentacles/tail trailing in a spiral), a flyer banking into a turn, or a sneaky brawler adding a low-gravity hop stride—before settling cleanly into the loop. Keep separate plain loops (`Walk` vs `WalkFidget`, `Swim` vs `SwimRoll`) whenever the user explicitly asks for strict game-controller cycles.
-- **Four-beat action arcs:** Author dramatic actions with **anticipation** (coil/draw back + gathered charge VFX) → **climax impact** → **follow-through recoil** → **grounded settle**, keeping facial landmarks and silhouette readable throughout.
+- **Four-beat action arcs:** Author dramatic actions with **anticipation** (coil/draw back + gathered charge VFX) → **climax impact** → **follow-through recoil** → **grounded settle**, keeping facial landmarks and silhouette readable throughout. Add an optional **2–3 frame micro hit-stop** at release/impact peak plus a brief **post-action recovery breath** before loop wrap so combat clips carry tactile weight.
+- **Fluid & energy parts belong on empty anchors:** Do **not** build mouth flames, tail fire, fire manes, smoke, or lightning as solid hinged sub-meshes swaying back and forth (they read like flapping wings). Expose named empty anchor groups (`mouthFlameAnchorL/R`, `tailFlameAnchor`) attached to head/limb/tail pivots and drive them with directional stacked VFX particles (`references/studio-preview.md`).
 - **Continuous `360°` axial roll technical safeguard:** `THREE.QuaternionKeyframeTrack` takes shortest-path SLERP between consecutive keys; jumping `0° → 360°` yields zero motion and `0° → 180°` can flip backward. Whenever authoring a full `360°` spin or barrel roll, author `>= 4–5` sequential keys (`0° → 90° → 180° → 270° → 360°`, plus `±60°` steps when sampled at 30 fps) and keep adjacent quaternion dot products `>= 0` so rotation completes smoothly in one direction.
 
 - Put wheels and propellers on spin pivots, steering on a parent pivot, and doors on bounded hinges. Check clearances across the intended range.
@@ -953,6 +956,8 @@ const mixer = new THREE.AnimationMixer(root); mixer.clipAction(walk).play();   /
 Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x = 0.2` directly. For a static pose baked into the asset, apply it once after `build` and keep it deterministic (a pure function of the params).
 
 ### Facial motion and root isolation
+
+On expressive creatures or humanoids, isolate facial pivots **from iteration 1** inside solid, gap-free recessed sockets (`eyeL/R`, `eyelidL/R`, `browL/R`, and `lowerJawPivot` in **`Balance` and `Quality`** with natural `Idle` blinks/glances and combat shifts; keep at least lightweight `lowerJawPivot` + simple blink in **`Quick`** when the face is prominent). Never fuse eyes rigidly into the head mesh when animating in `Balance` or `Quality`.
 
 Use the treatment that reads in the reference and delivery framing. A jaw hinge suits an opening mouth. Use weights on a skinned jaw or morph targets for soft cheeks, lips, or eyelids when they need to deform. Use a face texture change for artwork-driven expressions.
 
@@ -1109,6 +1114,7 @@ Contents: Mode comparison · Quick (Fast) mode · Balance mode · Quality mode �
 |---|---|---|---|
 | **Reference inspection** | Once at intake (`ref-spec.md` + cache `regions` if provided) | Intake + `ref-compare` + **1 side-by-side reopen** with studio capture | Intake + `ref-compare` + **reopen side-by-side on every polish round** |
 | **Build & detail** | Full model, accurate proportions, bright emissive eyes/accents (`new THREE.Color(hex)`) | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
+| **Facial rig (iteration 1)** | Lightweight jaw + simple blink when face is prominent | **Automatic full facial rig from iteration 1** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` in closed sockets + `Idle` blinks & combat shifts) | Same full facial rig + nuanced gaze saccades & close-up `Face` preset polish inspect |
 | **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual & geometry polish pass after first render | **>= 2** visual polish passes until reference & pose read cleanly |
 | **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (with `--lods` when relevant) |
 | **Color QC (`G3` & `G4`)** | **`G3` palette only** (`0` `G4` overhead; `--mode fast`) | `G3` + **`G4` Regional Color once** after materials (max 1 fix round) | `G3` + **`G4` Regional Color** + verify once after fix (no infinite loop) |
@@ -1130,14 +1136,14 @@ Never deliberately degrade visuals into a crude blockout or weak dot VFX. **Quic
 Use **Balance** for normal production deliverables:
 1. Inspect the source reference once at intake (`references/reference-matching.md`), record `ref-spec.md`, note static turnaround poses, and extract/cache `ref.json` (including optional Semantic Color Mapping regions — never re-analyze unchanged references).
 2. Run geometry QA (`scripts/qa-asset.ts --module`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; fix only failing regions once).
-3. Author natural creature locomotion postures (`references/rigging-biped.md`) and anchored layered VFX matching the asset's visual style (`references/studio-preview.md`).
+3. Author natural creature locomotion postures and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX matching the asset's visual style (`references/studio-preview.md`).
 4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG8`) when `.glb` is requested.
 5. Capture rendered studio views (`scripts/capture-studio.ts --vfx --motion-vfx --extras ...`), **reopen the source reference image side-by-side** with the sheet, execute 1 visual polish pass fixing any landmark, seam, posture, or VFX anchoring mismatch, and re-run affected gates.
 
 ## Quality mode
 
 Use **Quality** when maximum visual fidelity, expressive animation, and verified multi-backdrop contrast matter most:
-1. Execute every step of **Balance**, plus **>= 2 deliberate visual polish rounds** reopening the original reference side-by-side on every round.
+1. Execute every step of **Balance** (including the automatic full facial rig from iteration 1), plus **>= 2 deliberate visual polish rounds** reopening the original reference side-by-side on every round (inspecting close-up `Face` preset alongside `3/4` and `Side` views).
 2. Run `G4` regional color checks (`--mode quality`) after final materials and verify once after any correction (capped at one automatic correction pass per check — never loop indefinitely).
 3. Inspect **side view** and **3/4 views** across locomotion and action clips, verifying natural creature posture (`references/rigging-biped.md`), VFX anchoring (`references/studio-preview.md`), and contrast across both `--background dark` and `--background light` `capture-studio.ts` sheets.
 

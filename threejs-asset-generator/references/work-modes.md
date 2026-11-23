@@ -10,6 +10,7 @@ Contents: Mode comparison · Quick (Fast) mode · Balance mode · Quality mode �
 |---|---|---|---|
 | **Reference inspection** | Once at intake (`ref-spec.md` + cache `regions` if provided) | Intake + `ref-compare` + **1 side-by-side reopen** with studio capture | Intake + `ref-compare` + **reopen side-by-side on every polish round** |
 | **Build & detail** | Full model, accurate proportions, bright emissive eyes/accents (`new THREE.Color(hex)`) | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
+| **Facial rig (iteration 1)** | Lightweight jaw + simple blink when face is prominent | **Automatic full facial rig from iteration 1** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` in closed sockets + `Idle` blinks & combat shifts) | Same full facial rig + nuanced gaze saccades & close-up `Face` preset polish inspect |
 | **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual & geometry polish pass after first render | **>= 2** visual polish passes until reference & pose read cleanly |
 | **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (with `--lods` when relevant) |
 | **Color QC (`G3` & `G4`)** | **`G3` palette only** (`0` `G4` overhead; `--mode fast`) | `G3` + **`G4` Regional Color once** after materials (max 1 fix round) | `G3` + **`G4` Regional Color** + verify once after fix (no infinite loop) |
@@ -31,14 +32,14 @@ Never deliberately degrade visuals into a crude blockout or weak dot VFX. **Quic
 Use **Balance** for normal production deliverables:
 1. Inspect the source reference once at intake (`references/reference-matching.md`), record `ref-spec.md`, note static turnaround poses, and extract/cache `ref.json` (including optional Semantic Color Mapping regions — never re-analyze unchanged references).
 2. Run geometry QA (`scripts/qa-asset.ts --module`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; fix only failing regions once).
-3. Author natural creature locomotion postures (`references/rigging-biped.md`) and anchored layered VFX matching the asset's visual style (`references/studio-preview.md`).
+3. Author natural creature locomotion postures and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX matching the asset's visual style (`references/studio-preview.md`).
 4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG8`) when `.glb` is requested.
 5. Capture rendered studio views (`scripts/capture-studio.ts --vfx --motion-vfx --extras ...`), **reopen the source reference image side-by-side** with the sheet, execute 1 visual polish pass fixing any landmark, seam, posture, or VFX anchoring mismatch, and re-run affected gates.
 
 ## Quality mode
 
 Use **Quality** when maximum visual fidelity, expressive animation, and verified multi-backdrop contrast matter most:
-1. Execute every step of **Balance**, plus **>= 2 deliberate visual polish rounds** reopening the original reference side-by-side on every round.
+1. Execute every step of **Balance** (including the automatic full facial rig from iteration 1), plus **>= 2 deliberate visual polish rounds** reopening the original reference side-by-side on every round (inspecting close-up `Face` preset alongside `3/4` and `Side` views).
 2. Run `G4` regional color checks (`--mode quality`) after final materials and verify once after any correction (capped at one automatic correction pass per check — never loop indefinitely).
 3. Inspect **side view** and **3/4 views** across locomotion and action clips, verifying natural creature posture (`references/rigging-biped.md`), VFX anchoring (`references/studio-preview.md`), and contrast across both `--background dark` and `--background light` `capture-studio.ts` sheets.
 

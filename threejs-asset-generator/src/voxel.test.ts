@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { VoxelGrid, createVoxelMaterials } from './voxel';
-import { qaGates } from '../scripts/qacheck';
+import { boundsOf, qaGates, signedVolume, triCount } from '../scripts/qacheck';
 
 // 1. Multi-material voxel inlay + deliberate diagonal pinch + exact X-mirroring ('even' axis)
 {
@@ -51,6 +51,31 @@ import { qaGates } from '../scripts/qacheck';
   odd.ground(0);
   const res = qaGates(odd.buildParts(), { symmetric: true, grounding: true });
   assert.deepEqual(res.gates.filter((g) => !g.pass), [], JSON.stringify(res.gates));
+}
+
+// 3. Opt-in greedy meshing preserves bounds, outward winding, positive volume & palette while cutting flat triangles >= 40%
+{
+  const block = new VoxelGrid({ voxelSize: 0.1, symAxis: 'even' });
+  block.fillBox(0, 0, -2, 2, 4, 2, '#1c2434', 'body');
+  block.fillBox(0, 1, 2, 0, 3, 2, '#62c4ff', 'body'); // inlaid lighter belly strip breaks uniform face cleanly
+  block.set(1, 3, 2, '#36b8ff', 'glow');
+  block.mirrorX();
+  block.ground(0);
+
+  const stdParts = block.buildParts('material');
+  const greedyParts = block.buildParts('material', { greedy: true });
+  const stdTris = triCount(stdParts.body);
+  const greedyTris = triCount(greedyParts.body);
+  const savings = (stdTris - greedyTris) / stdTris;
+  assert.ok(savings >= 0.4, `expected greedy meshing to reduce body triangles >= 40%, got ${(savings * 100).toFixed(1)}% (${stdTris} -> ${greedyTris})`);
+  assert.deepEqual(boundsOf(greedyParts.body), boundsOf(stdParts.body), 'greedy bounds must match exact voxel envelope');
+  assert.ok(Math.abs(signedVolume(greedyParts.body) - signedVolume(stdParts.body)) < 1e-6, 'greedy volume must stay identical and outward CCW');
+
+  const mats = createVoxelMaterials(THREE);
+  const stdBuilt = block.buildMeshes(THREE, mats);
+  const greedyBuilt = block.buildMeshes(THREE, mats, { greedy: true });
+  assert.deepEqual(greedyBuilt.colors, stdBuilt.colors);
+  assert.equal(greedyBuilt.meshes.body.geometry.getIndex()!.count / 3, greedyTris);
 }
 
 console.log('voxel.test.ts PASS');

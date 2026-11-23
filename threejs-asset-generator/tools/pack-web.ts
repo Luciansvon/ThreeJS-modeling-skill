@@ -16,6 +16,9 @@ const verificationGuides = new Set([
   'references/rig-check.md',
   'references/studio-preview.md',
 ]);
+const standaloneGuides = new Set([
+  'references/art-styles.md',
+]);
 const languages: Record<string, string> = {
   '.md': 'markdown',
   '.ts': 'typescript',
@@ -67,23 +70,35 @@ function packWeb(check: boolean): number {
   }
 
   const guides = filesIn('references').filter((path) => path.endsWith('.md'));
+  const packedGuides = guides.filter((path) => !standaloneGuides.has(path));
   const builders = filesIn('src').filter((path) => path.endsWith('.ts'));
   const tooling = ['package.json', ...filesIn('scripts'), ...filesIn('tools'), ...filesIn('assets')]
     .filter((path) => path !== 'tools/pack-web.ts' && /\.(ts|json|html)$/.test(path));
   const testFiles = [...builders, ...tooling].filter((path) => path.endsWith('.test.ts'));
   const isProductionFile = (path: string) => !path.endsWith('.test.ts') && path !== 'tools/trigger-cases.json';
   const packs = [
-    ['modeling-guide.md', 'Harness modeling guide', ['SKILL.md', ...guides.filter((path) => !verificationGuides.has(path))]],
-    ['verification-guide.md', 'Harness verification and delivery guide', guides.filter((path) => verificationGuides.has(path))],
+    ['modeling-guide.md', 'Harness modeling guide', ['SKILL.md', ...packedGuides.filter((path) => !verificationGuides.has(path))]],
+    ['verification-guide.md', 'Harness verification and delivery guide', packedGuides.filter((path) => verificationGuides.has(path))],
     ['source-builders.md', 'Builder and geometry source', builders.filter(isProductionFile)],
     ['source-tools.md', 'Tool and fixture source', tooling.filter(isProductionFile)],
     ['source-tests.md', 'Test source and third-party notices', [...testFiles, 'tools/trigger-cases.json', 'THIRD_PARTY_NOTICES.md']],
   ] as const;
-  const outputs = packs.map(([name, title, sources]) => ({
-    name,
-    text: renderPack(title, sources),
-    chapters: sources.length,
-  }));
+  const standaloneOutputs = [...standaloneGuides].filter((path) => existsSync(join(harness, path))).map((path) => {
+    const raw = readFileSync(join(harness, path), 'utf8').replace(/\r\n/g, '\n');
+    return {
+      name: path.replace(/^references\//, ''),
+      text: raw.endsWith('\n') ? raw : raw + '\n',
+      chapters: 1,
+    };
+  });
+  const outputs = [
+    ...packs.map(([name, title, sources]) => ({
+      name,
+      text: renderPack(title, sources),
+      chapters: sources.length,
+    })),
+    ...standaloneOutputs,
+  ];
   const stale: string[] = [];
   if (!check) mkdirSync(destination, { recursive: true });
   for (const { name, text } of outputs) {

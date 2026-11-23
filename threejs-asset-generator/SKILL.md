@@ -9,12 +9,12 @@ This harness edition assumes a workspace and Node.js. Use the bundled builders a
 
 Build every asset (single or composite) as a **pure, seeded function**. The live preview and the standalone code export call that same function, so what the user sees is what they export.
 
-**Before modeling, confirm three things:** Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip choices already answered explicitly in the session, but **always confirm the brief summary** first:
-1. **Brief summary & reference check:** summarize asset, style, requested clips/VFX, and deliverables for confirmation. If a reference uses a static turnaround pose (T-pose/A-pose, upright cobra sit, stiff parallel legs, flat-spread wings), note it sets proportions and bind/rest pose only—animations start from natural creature locomotion posture (`references/rigging-biped.md`). Suggest re-uploading missing or cropped images.
-2. **Work mode:** `1) Quick` (`Fast`), `2) Balance` *(recommended default)*, or `3) Quality`—all modes keep full geometry, `new THREE.Color(hex)` accuracy, anchored VFX, and lively motion; `Fast` runs `G3` palette only (0 `G4` overhead), while `Balance`/`Quality` add `G4` CIEDE2000 regional color QC (`references/work-modes.md`).
-3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). Offer optional two-stage approval (blockout first) for complex assets.
+**Before modeling, confirm three things:** Start directly inside the procedural Three.js workflow (never suggest MagicaVoxel or Blender unless asked). Before writing full 3D model code, send **one concise numbered message** with recommended defaults. Skip answered choices, but **always confirm the brief summary** first:
+1. **Brief summary, style & reference check:** summarize asset, **1 primary style + <=2 modifiers** (read matched headings only in `references/art-styles.md`—helper only, never overrides the reference), clips/VFX, and deliverables. Note static turnarounds (T/A-pose, upright cobra sit, flat wings) set proportions & rest pose only; animations use natural locomotion (`references/rigging-biped.md`). Ask user to re-upload missing/unclear images.
+2. **Work mode:** `1) Quick` (`Fast`), `2) Balance` *(default)*, or `3) Quality`—all keep full geometry, `new THREE.Color(hex)` accuracy, anchored fluid VFX, and lively motion; `Balance`/`Quality` add automatic closed-socket facial rigs from iteration 1 + `G4` CIEDE2000 regional color QC (`Fast` = `G3` only, 0 `G4` overhead; `references/work-modes.md`).
+3. **Preview mode:** `A) Fast Preview` *(default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify, model+VFX code copy)*. Wait before building a heavy studio (`references/studio-preview.md`). Offer blockout-first approval for complex assets.
 
-When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (articulated rig + lively multi-beat choreography & VFX references in `references/rigging-biped.md` and `references/studio-preview.md` as creative inspiration, not hard limits—default to rich layered VFX anchored to live moving bones or `Y≈0` ground contacts; preview-only `_studio_vfx` is exempt from export budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
+When requirements remain open, ask only what is missing in the same message: ref/style (translate style picks into native Three.js modeling/material/render params, then run existing QA), surface detail, animation & **unrestricted VFX creativity** (`references/rigging-biped.md`, `references/studio-preview.md` as inspiration—stacked directional fluid particles on empty anchors, outward `root`-relative projectiles, `Y≈0` impacts; `_studio_vfx` exempt from export budgets), and platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -26,7 +26,8 @@ When requirements remain open, ask only what is missing in the same message: ref
 
 | You are doing | Read | Code |
 |---|---|---|
-| Choosing `Quick`/`Fast`/`Balance`/`Quality`, `G4` color QC policy, shape vs detail review | `references/work-modes.md` | |
+| Choosing `Quick`/`Fast`/`Balance`/`Quality`, facial rig & `G4` policy | `references/work-modes.md` | |
+| 3D art styles & GLB compatibility (1 primary + <=2 modifiers, matched heading only) | `references/art-styles.md` | |
 | Reference matching, Semantic ROI cache, `G1–G5` (`G4` CIEDE2000 ΔE00) | `references/reference-matching.md` | `scripts/color-qc.ts`, `scripts/ref-intake.ts`, `scripts/ref-compare.ts` |
 | Materials, flat shading, `VoxelGrid`, procedural/image textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/voxel.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
