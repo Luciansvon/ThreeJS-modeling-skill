@@ -17,7 +17,7 @@ Mix these treatments where the brief calls for it. `PartBuilder` bakes flat norm
 
 **Materials.** Match the reference palette and response under delivery lighting. Set roughness by finish. Use metallic response for exposed metal and an environment when it needs reflections. Give transparent glass its own material and check opacity and sorting from the relevant views. Use `emissive` for visible glow and add actual lighting when the brief calls for a light source.
 
-**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly.
+**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly. **Never shift lightness directly in Three.js linear HSL (`col.offsetHSL`)** on dark tones (`l < 0.1`): linear shifts blow dark shades up to pastel/lavender—use `shadeHexSRGB(hex, delta, satScale)` from `src/voxel.ts` instead.
 
 ### Choose the texture path
 
@@ -94,10 +94,12 @@ The pinned base is measured from the geometry's own bounding box (primitives are
 
 For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel.ts`) so interior faces are culled **only within the same material** (preventing open-edge holes where emissive eyes or markings meet the body), duplicate diagonal 2x2 pinches are bridged symmetrically, and vertices convert hex colors safely via `new THREE.Color(hex)` (never `/ 255`):
 
-- `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
+- `createVoxelMaterials(THREE, { roughness?, metalness?, glowToneMapped? })` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls), plus `createHdrGlowMaterial(THREE, hex, emissiveIntensity)` for multi-tier HDR bloom accents (`emissiveIntensity > 1` with Studio **Bloom**).
+- `shadeHexSRGB(hex, lightnessDelta, satScale?)` shifts shades in perceptual sRGB HSL so deep dark armor never turns pastel/lavender under `offsetHSL`.
 - `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
-- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
-- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { vertexT, greedy? })` / `.buildMeshes(THREE, materials, { greedy? })`
-- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
+- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.fillSuperEllipsoid(..., { power })` / `.fillTube(p0, p1, r0, r1, ...)` / `.fillCubicBezier(p0, p1, p2, p3, r0, r1, ...)` / `.mirrorX()`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { worldVertexT, ao?, aoLevels?, dirShade?, glowBoost?, greedy? })` / `.buildMeshes(THREE, materials, { ao?, glowBoost?, greedy? })`
+- **Automatic Corner Voxel AO + directional shading (`ao: true` default):** `buildGeometries` and `buildMeshes` automatically bake 3-neighbor corner AO (`[1.0, 0.89, 0.78, 0.66]`) and subtle directional face shading (`0.85..1.00`) onto non-glow buckets at **0 extra triangles** (auto-disabled for `glow`/`emissive` buckets and `greedy: true`). Pass `{ ao: false }` only if exact unshaded linear colors are needed, and `glowBoost: 1.6` when driving selective Studio Bloom on vertex-colored `glow` parts.
+- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ worldVertexT }` / `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
 
-For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.
+For skinned voxel tails or necks, emit **one** continuous `SkinnedMesh` per material in a straight `-Z` bind pose and bind via `worldVertexT` (never per-`cell` weights!) or `attachWorldSkinWeights(THREE, geo, boneOrder, sampler)` (`src/voxel.ts`) so coincident corners share bit-identical skin weights and pass `RG9 posed skin integrity` with zero tearing under extreme rotation.

@@ -198,5 +198,31 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
       assert.ok(!existsSync(profile.path) && !existsSync(tooLow.path) && !existsSync(invalid.path));
     }
   }
+
+  // 6. v4.6 direct --module support on (params, THREE) builders auto-extracts materials, bones, and exact draw calls
+  const threeAsset = join(out, 'threeAsset.ts');
+  writeFileSync(threeAsset, `
+    export function buildCreatureAsset(_p: unknown, THREE: any) {
+      const root = new THREE.Group();
+      const bRoot = new THREE.Bone(); bRoot.name = 'rootBone';
+      const bHead = new THREE.Bone(); bHead.name = 'headBone'; bRoot.add(bHead);
+      const bWing = new THREE.Bone(); bWing.name = 'wingBone'; bRoot.add(bWing);
+      const bTail = new THREE.Bone(); bTail.name = 'tailBone'; bRoot.add(bTail);
+      const bodyMat = new THREE.MeshStandardMaterial({ name: 'body' });
+      const glowMat = new THREE.MeshBasicMaterial({ name: 'glow' });
+      const m1 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), bodyMat); m1.name = 'torso';
+      const m2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), glowMat); m2.name = 'eyes';
+      bRoot.add(m1, m2);
+      root.add(bRoot);
+      return { root, animations: [] };
+    }
+  `);
+  const modStats = run('--module', threeAsset, '--profile', 'web', '--kind', 'creature');
+  assert.equal(modStats.code, 0, modStats.out);
+  const modS = modStats.res?.stats as Stats;
+  assert.equal(modS.drawCallsExact, true);
+  assert.equal(modS.materials, 2);
+  assert.equal(modS.bones, 4);
+  assert.equal(modS.drawCalls, 2);
 }
 console.log('BUDGET OK');

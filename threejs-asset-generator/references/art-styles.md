@@ -37,9 +37,9 @@ Contents: Selection & combination workflow · GLB vs preview matrix · Geometry 
 
 ### Voxel
 - **Visual traits:** Stepped 3D cubic lattice (`1:1:1` unit blocks), sharp `90°` corners, pixel-crisp surface mosaic, tactile miniature scale.
-- **Geometry rules:** Build on one integer grid with shared `voxelSize`; mirror symmetrically (`even` or `odd` axis), resolve 2×2 diagonal pinches, and ground cleanly at `Y = 0`. Separate animated rigid limbs or smooth-skinned curves rather than merging across joint boundaries.
-- **Materials & palette:** Matte body (`roughness ~0.84`, `metalness ~0.04`) paired with unlit emissive eyes/flames (`MeshBasicMaterial({ vertexColors: true, toneMapped: false })`) capped at 2 draw calls total.
-- **Three.js implementation:** Use `VoxelGrid` + `createVoxelMaterials` with default watertight culling for strict closed-edge QA, or opt-in `{ greedy: true }` on static blocks to cut planar triangles by ~40–60%.
+- **Geometry rules:** Build on one integer grid with shared `voxelSize`; mirror symmetrically (`even` or `odd` axis), resolve 2×2 diagonal pinches, and sculpt curved horns/tails/snouts smoothly (`fillTube`, `fillCubicBezier`, `fillSuperEllipsoid`) instead of 40+ loose rigid boxes. Separate animated rigid limbs with `>= 2`-voxel joint overlaps or bind flexible parts cleanly in a single mesh per material via world-corner weights.
+- **Materials & palette:** Matte body (`roughness ~0.84`, `metalness ~0.04`) with automatic Corner Voxel AO (`ao: true` default) paired with unlit/HDR emissive eyes/flames (`createVoxelMaterials` / `createHdrGlowMaterial` + `glowBoost` for optional Studio Bloom) capped at minimal draw calls. Shift dark tones safely with `shadeHexSRGB` (never linear `offsetHSL`).
+- **Three.js implementation:** Use `VoxelGrid` + `createVoxelMaterials` with default Corner AO and watertight culling for strict closed-edge QA, or opt-in `{ greedy: true }` on static blocks to cut planar triangles by ~40–60%.
 - **Visual inspiration:** [Minecraft voxel craft](https://www.minecraft.net/) · [Crossy Road isometric voxels](https://en.wikipedia.org/wiki/Crossy_Road) · [3D Dot Game Heroes](https://en.wikipedia.org/wiki/3D_Dot_Game_Heroes)
 - **Technical limits:** High voxel resolution scales triangle count quadratically (`O(n^2)` exposed faces); `greedy` merging can introduce T-junctions rejected by strict weld edge checks, so keep `greedy: false` when strict manifold edge QA runs.
 

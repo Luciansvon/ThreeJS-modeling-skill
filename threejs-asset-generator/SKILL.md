@@ -110,7 +110,7 @@ Code: `src/params.ts`. API:
 
 ## 13. Checklist (tick per asset, do not ship pre-ticked)
 
-Run `qa-asset.ts --module ./asset.ts --grounded` directly on pure kernels OR `(params, THREE)` builders (`tris.json` optional). Add `--symmetric` for intended symmetry. Never run inline `npx tsx -e` in Windows PowerShell (write a `.ts` script instead to prevent shell hangs). Inspect `review.png` for geometry and colored `capture-studio.ts` renders for appearance.
+Run `qa-asset.ts --module ./asset.ts --grounded`, `mesh-stats.ts --module`, and `rig-check.ts --module` directly on pure kernels OR `(params, THREE)` builders (`tris.json` optional). Add `--symmetric` for intended symmetry. Never run inline `npx tsx -e` in Windows PowerShell (write a `.ts` script instead to prevent shell hangs). Inspect `review.png` for geometry and colored `capture-studio.ts` renders for appearance.
 
 On revision, check what changed using the least expensive evidence that can reveal a problem. Run applicable checks on the delivered build. Keep detailed logs with the asset and summarize the observed result and material gaps. If a tool is unavailable, continue independent work and report any unresolved requested check at handoff. See `references/qa-gates.md` and, for previews, `references/studio-preview.md`.
 
@@ -127,7 +127,7 @@ Geometry and look
 - [ ] Axes follow §0; faces described by axis; right = −X when forward = +Z
 - [ ] Custom geometry has positive `signedVolume`, also after mirroring; `DoubleSide` only on zero-thickness sheets
 - [ ] Mirrored parts go through `add()`/`addTris`, `mirrorTris`, or `VoxelGrid.mirrorX()` (`src/voxel.ts`), never a bare negative-scale `applyMatrix4`
-- [ ] Normals and linear vertex colors (`new THREE.Color(hex)`, never `/ 255`) preserve contrast in the reloaded asset; use `bakeFlat` and `paint` for faceted parts.
+- [ ] Normals, default Corner Voxel AO (`src/voxel.ts`), and sRGB colors (`new THREE.Color(hex)`, `shadeHexSRGB`, never `/ 255` or linear `offsetHSL` on dark shades) preserve contrast; use `bakeFlat` and `paint` for faceted parts.
 - [ ] Jitter is applied before `add()`, seam-welded, with bounding volumes recomputed
 - [ ] Metal parts have an environment map or a lowered `metalness`
 - [ ] Overlays use a constant-distance inset and a small lift against z-fighting
@@ -196,7 +196,7 @@ Write `ref-spec.md`, cache `ref.json` (`--grid auto` handles uneven turnarounds,
 
 ## 16. GLB file (when the user wants a `.glb`)
 
-For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`) to verify Q1–Q5 and E1–E6. When retaining vertex colors, materials, UVs, skins, or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--open a,b] [--static-clips a,b]` to verify `RG1–RG8` (including reloaded GLB Q1–Q4 topology and per-clip motion parity, `references/glb-export.md`).
+For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`) to verify Q1–Q5 and E1–E6. When retaining vertex colors, materials, UVs, skins, or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--open a,b] [--static-clips a,b]` to verify `RG1–RG9` (JSON bloat guard, reloaded GLB Q1–Q4, per-clip motion, and posed skin integrity, `references/glb-export.md`).
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
@@ -204,4 +204,4 @@ Choose a budget from the asset's delivery target. A browser used to inspect a mo
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 
-Run `npx tsx scripts/rig-check.ts --meta char_metadata.json --kind creature --motion free [--static-clips a,b]` (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping/lunging sway) to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & drift (rejects Euler `.rotation`) · R5 static expression mapping · R6 slide & floor (`qa.clipMinY`) clearance · R7 clip motion. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.
+Run `npx tsx scripts/rig-check.ts --module ./asset.ts --kind creature --motion free [--static-clips a,b]` (or `--meta char_metadata.json`) (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping sway) to verify R1–R7 (hierarchy, rest, clips, tracks/drift, expressions, clearance, per-clip motion). Use Fast/Full Preview (`--bloom` when emissive) for visual playback (`references/rig-check.md`, `references/studio-preview.md`).

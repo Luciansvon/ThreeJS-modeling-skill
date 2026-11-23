@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.5.0",
+  "version": "4.6.0",
   "private": true,
   "type": "module",
   "description": "Style-adaptive procedural Three.js assets, reference matching, geometry checks, animation, VFX previews and GLB export.",
@@ -47,6 +47,8 @@ Generated from the canonical harness files. Search by original file path and use
 
 ~~~typescript source-excerpt
 import type * as THREE from 'three';
+import type { Meta } from './budget';
+import type { RigMeta } from './rigcheck';
 
 export function selectBuilder(
   moduleExports: Record<string, unknown>,
@@ -128,6 +130,283 @@ export function extractObjectParts(
 
   if (!Object.keys(parts).length) throw new Error('asset contains no visible mesh triangles');
   return parts;
+}
+
+const RUNTIME_USERDATA_KEYS = new Set(['bones', 'animations', 'anchors', 'mixer', 'rig', 'skeleton']);
+
+function isThreeRuntimeObject(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return Boolean(
+    v.isObject3D || v.isBone || v.isAnimationClip || v.isSkeleton || v.isMaterial
+    || v.isBufferGeometry || v.isTexture || v.isBufferAttribute || v.isVector3
+    || v.isQuaternion || v.isMatrix4 || v.isEuler || v.isColor,
+  );
+}
+
+function isJsonSafeUserDataValue(value: unknown, depth: number, seen: Set<object>): boolean {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || depth > 5) return false;
+  if (isThreeRuntimeObject(value) || seen.has(value)) return false;
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return false;
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (value.length > 256) return false;
+      return value.every((item) => isJsonSafeUserDataValue(item, depth + 1, seen));
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== null && proto !== Object.prototype) return false;
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 64) return false;
+    return entries.every(([, v]) => isJsonSafeUserDataValue(v, depth + 1, seen));
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/**
+ * Temporarily strips live Three.js objects, circular graphs, and bloated blobs from every node's
+ * `userData` prior to `GLTFExporter`, returning a restore callback to put the originals back afterward.
+ */
+export function sanitizeUserDataForGltf(root: THREE.Object3D): () => void {
+  const saved: Array<{ object: THREE.Object3D; userData: Record<string, unknown> }> = [];
+  root.traverse((object) => {
+    const raw = object.userData;
+    if (!raw || typeof raw !== 'object') return;
+    const keys = Object.keys(raw);
+    if (!keys.length) return;
+    saved.push({ object, userData: raw });
+    const clean: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (RUNTIME_USERDATA_KEYS.has(key)) continue;
+      const val = raw[key];
+      if (!isJsonSafeUserDataValue(val, 0, new Set())) continue;
+      try {
+        const encoded = JSON.stringify(val);
+        if (encoded !== undefined && encoded.length <= 4096) clean[key] = val;
+      } catch {
+        // Ignore unserializable userData values cleanly.
+      }
+    }
+    object.userData = clean;
+  });
+  return () => {
+    for (const { object, userData } of saved) object.userData = userData;
+  };
+}
+
+/** Parses glTF 2.0 binary (GLB) chunk header sizes without loading assets into Three.js. */
+export function parseGlbHeader(bytes: ArrayBuffer | Uint8Array): { totalBytes: number; jsonBytes: number; binBytes: number } {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (u8.byteLength < 20) return { totalBytes: u8.byteLength, jsonBytes: 0, binBytes: 0 };
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('Invalid GLB header magic');
+  const totalBytes = dv.getUint32(8, true);
+  const firstLen = dv.getUint32(12, true);
+  const firstType = dv.getUint32(16, true);
+  const jsonBytes = firstType === 0x4e4f534a ? firstLen : 0;
+  let binBytes = 0;
+  const binOff = 20 + firstLen;
+  if (binOff + 8 <= u8.byteLength && dv.getUint32(binOff + 4, true) === 0x004e4942) {
+    binBytes = dv.getUint32(binOff, true);
+  }
+  return { totalBytes, jsonBytes, binBytes };
+}
+
+function closedClipTrack(track: THREE.KeyframeTrack): boolean {
+  const width = track.getValueSize();
+  if (!width || track.values.length < width) return false;
+  const first = track.values.slice(0, width);
+  const last = track.values.slice(-width);
+  return first.every((v, i) => v === last[i])
+    || (track.ValueTypeName === 'quaternion' && first.every((v, i) => -v === last[i]));
+}
+
+/** Extracts `parts`, `meshMeta`, and `rigMetadata` directly from a `(params, THREE)` builder return value. */
+export function extractModuleMeta(
+  built: unknown,
+  three: typeof THREE,
+  motionMode?: 'in-place' | 'free',
+): { parts: Record<string, number[]>; meshMeta: Meta; rigMetadata: RigMeta } {
+  const { root, animations } = unpackAsset(built);
+  root.updateMatrixWorld(true);
+  const parts = extractObjectParts(root, three);
+
+  const rawPivots = new Set<THREE.Object3D>();
+  root.traverse((obj) => {
+    if ((obj as THREE.Bone).isBone) rawPivots.add(obj);
+  });
+  for (const clip of animations) {
+    for (const track of clip.tracks) {
+      const parsed = three.PropertyBinding.parseTrackName(track.name);
+      const target = parsed.nodeName ? three.PropertyBinding.findNode(root, parsed.nodeName) : root;
+      if (target) rawPivots.add(target);
+    }
+  }
+  if (!rawPivots.size) rawPivots.add(root);
+
+  const parentRoots = [...rawPivots].filter((node) => !node.parent || !rawPivots.has(node.parent));
+  if (parentRoots.length > 1) {
+    for (const node of [...rawPivots]) {
+      let cur = node.parent;
+      while (cur) {
+        rawPivots.add(cur);
+        if (cur === root) break;
+        cur = cur.parent;
+      }
+    }
+  }
+
+  const orderedNodes: THREE.Object3D[] = [];
+  root.traverse((obj) => { if (rawPivots.has(obj)) orderedNodes.push(obj); });
+  const nodeToName = new Map<THREE.Object3D, string>();
+  const usedPivotNames = new Set<string>();
+  for (let i = 0; i < orderedNodes.length; i++) {
+    const node = orderedNodes[i];
+    const base = node.name || (node === root ? 'root' : `pivot_${i + 1}`);
+    let name = base;
+    for (let suffix = 2; usedPivotNames.has(name); suffix++) name = `${base}_${suffix}`;
+    usedPivotNames.add(name);
+    nodeToName.set(node, name);
+  }
+
+  const pivotNames = orderedNodes.map((n) => nodeToName.get(n)!);
+  const hierarchy: { parent: string; child: string }[] = [];
+  const restLocalPositions: Record<string, number[]> = {};
+  for (const node of orderedNodes) {
+    const name = nodeToName.get(node)!;
+    restLocalPositions[name] = [node.position.x, node.position.y, node.position.z];
+    let p = node.parent;
+    while (p && !nodeToName.has(p)) p = p.parent;
+    if (p) hierarchy.push({ parent: nodeToName.get(p)!, child: name });
+  }
+
+  const materials = new Map<THREE.Material, string>();
+  const textures = new Map<THREE.Texture, { name: string; width: number; height: number; mips: boolean }>();
+  const partMeta: NonNullable<Meta['parts']> = {};
+  const usedMeshNames = new Set<string>();
+  let meshIdx = 0;
+  root.traverseVisible((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry?.attributes?.position) return;
+    meshIdx++;
+    const base = mesh.name || `mesh_${meshIdx}`;
+    let meshName = base;
+    for (let suffix = 2; usedMeshNames.has(meshName); suffix++) meshName = `${base}_${suffix}`;
+    usedMeshNames.add(meshName);
+    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    if (mat && !materials.has(mat)) {
+      materials.set(mat, `${materials.size + 1}:${mat.name || mat.type}`);
+      for (const prop of Object.values(mat)) {
+        const tex = prop as THREE.Texture | undefined;
+        if (!tex?.isTexture || textures.has(tex)) continue;
+        const img = tex.image as { videoWidth?: number; naturalWidth?: number; width?: number; videoHeight?: number; naturalHeight?: number; height?: number } | undefined;
+        const width = img?.videoWidth || img?.naturalWidth || img?.width;
+        const height = img?.videoHeight || img?.naturalHeight || img?.height;
+        if (width && height && Number.isFinite(width) && Number.isFinite(height)) {
+          textures.set(tex, {
+            name: tex.name || `texture_${textures.size + 1}`,
+            width, height,
+            mips: tex.generateMipmaps || (tex.mipmaps?.length ?? 0) > 1,
+          });
+        }
+      }
+    }
+    let owner: THREE.Object3D | null = mesh;
+    while (owner && !nodeToName.has(owner)) owner = owner.parent;
+    const bone = owner ? nodeToName.get(owner)
+      : (mesh as THREE.SkinnedMesh).isSkinnedMesh
+        ? (mesh as THREE.SkinnedMesh).skeleton?.bones?.map((b) => nodeToName.get(b)).find(Boolean)
+        : undefined;
+    partMeta[meshName] = { material: mat ? materials.get(mat)! : 'default', ...(bone ? { bone } : {}) };
+  });
+
+  const savedTransforms: Array<{ node: THREE.Object3D; pos: THREE.Vector3; quat: THREE.Quaternion; scale: THREE.Vector3 }> = [];
+  root.traverse((node) => savedTransforms.push({
+    node, pos: node.position.clone(), quat: node.quaternion.clone(), scale: node.scale.clone(),
+  }));
+
+  let clipMinY = Infinity;
+  const visibleMeshes: THREE.Mesh[] = [];
+  root.traverseVisible((obj) => { if ((obj as THREE.Mesh).isMesh && (obj as THREE.Mesh).geometry?.attributes?.position) visibleMeshes.push(obj as THREE.Mesh); });
+  const vTmp = new three.Vector3();
+  const sampleFrameY = () => {
+    root.updateMatrixWorld(true);
+    for (const mesh of visibleMeshes) {
+      const pos = mesh.geometry.getAttribute('position');
+      const idx = mesh.geometry.index;
+      const count = idx ? idx.count : pos.count;
+      const isSkinned = (mesh as THREE.SkinnedMesh).isSkinnedMesh === true;
+      for (let i = 0; i < count; i++) {
+        const vi = idx ? idx.getX(i) : i;
+        if (isSkinned) (mesh as THREE.SkinnedMesh).getVertexPosition(vi, vTmp).applyMatrix4(mesh.matrixWorld);
+        else vTmp.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+        if (vTmp.y < clipMinY) clipMinY = vTmp.y;
+      }
+    }
+  };
+
+  try {
+    if (animations.length) {
+      const mixer = new three.AnimationMixer(root);
+      for (const clip of animations) {
+        const dur = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+        const times = new Set<number>([0, dur]);
+        const steps = Math.min(30, Math.max(4, Math.ceil(dur * 30)));
+        for (let i = 1; i < steps; i++) times.add((dur * i) / steps);
+        for (const tr of clip.tracks) {
+          for (let i = 0; i < tr.times.length; i++) if (tr.times[i] > 0 && tr.times[i] < dur) times.add(tr.times[i]);
+        }
+        const action = mixer.clipAction(clip).setLoop(three.LoopOnce, 1);
+        action.clampWhenFinished = true;
+        action.play();
+        for (const t of [...times].sort((a, b) => a - b)) {
+          mixer.setTime(t);
+          sampleFrameY();
+        }
+        action.stop();
+        for (const s of savedTransforms) {
+          s.node.position.copy(s.pos);
+          s.node.quaternion.copy(s.quat);
+          s.node.scale.copy(s.scale);
+        }
+      }
+    }
+  } finally {
+    for (const s of savedTransforms) {
+      s.node.position.copy(s.pos);
+      s.node.quaternion.copy(s.quat);
+      s.node.scale.copy(s.scale);
+    }
+    root.updateMatrixWorld(true);
+  }
+
+  const rootPivotName = nodeToName.get(orderedNodes.find((n) => !n.parent || !rawPivots.has(n.parent)) ?? orderedNodes[0])!;
+  const rigMetadata: RigMeta = {
+    rig: { rootNode: root.name || undefined, pivotNames, hierarchy, restLocalPositions },
+    animations: animations.map((clip) => ({
+      name: clip.name,
+      durationSeconds: clip.duration,
+      loop: clip.tracks.every(closedClipTrack),
+      tracks: clip.tracks.map((track) => {
+        const parsed = three.PropertyBinding.parseTrackName(track.name);
+        const normName = parsed.nodeName === '' ? `${rootPivotName}${track.name.startsWith('.') ? track.name : `.${track.name}`}` : track.name;
+        return { name: normName, times: Array.from(track.times), values: Array.from(track.values) };
+      }),
+    })),
+    qa: {
+      ...(motionMode ? { motionMode } : {}),
+      ...(Number.isFinite(clipMinY) ? { clipMinY } : {}),
+    },
+  };
+
+  return {
+    parts,
+    meshMeta: { parts: partMeta, bones: pivotNames.length, textures: [...textures.values()] },
+    rigMetadata,
+  };
 }
 ~~~
 
@@ -423,11 +702,23 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
     : `No unique, positive-duration animated clip named “${name}”.`;
   const withBg = (frame: StudioFrame): StudioFrame => (background ? { ...frame, background } : frame);
   let midway: PlannedTile;
+  let midwayVfx: PlannedTile | undefined;
   if (walk) {
-    midway = {
-      label: 'Mid locomotion',
-      frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, ...(motionVfx ? { vfx: true } : {}) }),
-    };
+    if (motionVfx) {
+      midway = {
+        label: 'Mid locomotion (clean)',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, vfx: false }),
+      };
+      midwayVfx = {
+        label: 'Mid locomotion (VFX)',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, vfx: true }),
+      };
+    } else {
+      midway = {
+        label: 'Mid locomotion',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2 }),
+      };
+    }
   } else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
   else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
   let actionTile: PlannedTile;
@@ -439,7 +730,7 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
   const base: PlannedTile[] = [
     { label: '3/4 front', frame: withBg({ view: '34-front' }) },
     { label: '3/4 back', frame: withBg({ view: '34-back' }) },
-    midway, actionTile,
+    midway, ...(midwayVfx ? [midwayVfx] : []), actionTile,
   ];
   for (const spec of extraSpecs) base.push(parseExtraTile(spec, info, vfx, background));
   return base;
@@ -1751,7 +2042,7 @@ process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, skipped:
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { countScene, extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
+import { countScene, extractObjectParts, parseGlbHeader, sanitizeUserDataForGltf, selectBuilder, unpackAsset } from './asset-builder';
 import { clipMotion, type ClipMotion, type NodeMotion } from './clip-motion';
 import { qaGates } from './qacheck';
 import { emit, registerThreeHook, type Gate } from './result';
@@ -1781,10 +2072,12 @@ const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && 
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
 
 const modFile = opt('module'), outFile = opt('out');
-if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] --out asset.glb');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] [--max-json-kb N] --out asset.glb');
 const staticClipsList = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const staticClips = new Set(staticClipsList);
 const openList = opt('open')?.split(',').map((s) => s.trim()).filter(Boolean);
+const maxJsonKb = opt('max-json-kb') !== undefined ? Number(opt('max-json-kb')) : 512;
+if (!Number.isFinite(maxJsonKb) || maxJsonKb <= 0) fail('--max-json-kb needs a positive number');
 let params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
@@ -1817,7 +2110,13 @@ const before = countScene(root);
 const outPath = resolve(outFile);
 let diskBytes: Buffer, reloaded: any;
 try {
-  const buf: ArrayBuffer = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  const restoreUserData = sanitizeUserDataForGltf(root);
+  let buf: ArrayBuffer;
+  try {
+    buf = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  } finally {
+    restoreUserData();
+  }
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, Buffer.from(buf));
   diskBytes = readFileSync(outPath);
@@ -1827,11 +2126,20 @@ try {
   fail(`cannot write or re-open ${outPath}: ${(e as Error).message}`);
 }
 const after = countScene(reloaded.scene);
+const header = parseGlbHeader(diskBytes);
+const jsonLimitBytes = maxJsonKb * 1024;
 const inClips = animations.map((c: any) => c.name);
 const outClips = (reloaded.animations ?? []).map((c: any) => c.name);
 
 const gates: Gate[] = [
-  { gate: 'RG1 written', value: `${diskBytes.byteLength} bytes (${(diskBytes.byteLength / 1024).toFixed(1)} KB)`, pass: diskBytes.byteLength > 12, hint: 'GLTFExporter produced an empty buffer' },
+  {
+    gate: 'RG1 written',
+    value: `${diskBytes.byteLength} bytes (${(diskBytes.byteLength / 1024).toFixed(1)} KB; JSON ${(header.jsonBytes / 1024).toFixed(1)} KB)`,
+    pass: diskBytes.byteLength > 12 && header.jsonBytes > 0 && header.jsonBytes <= jsonLimitBytes,
+    hint: header.jsonBytes > jsonLimitBytes
+      ? `glTF JSON chunk ${(header.jsonBytes / 1024).toFixed(1)} KB exceeds ${maxJsonKb} KB (keep Three.js objects/bones out of userData)`
+      : 'GLTFExporter produced an empty or malformed buffer',
+  },
   { gate: 'RG2 triangles', value: `${before.tris} in -> ${after.tris} out`, pass: before.tris > 0 && before.tris === after.tris, hint: 'triangle count changed across GLTFExporter -> GLTFLoader round-trip' },
   { gate: 'RG3 meshes', value: `${before.meshes} in -> ${after.meshes} out (${after.vertexColorMeshes} vertex-colored)`, pass: before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes, hint: 'mesh or vertex color attributes lost on export' },
   { gate: 'RG4 clips', value: `${inClips.length} in -> ${outClips.length} out [${outClips.join(', ')}]`, pass: inClips.length === outClips.length && inClips.every((n: string, i: number) => outClips[i] === n), hint: 'animation clips missing or renamed during export' },
@@ -1936,6 +2244,120 @@ try {
   });
 }
 
+const reloadedSkinned: any[] = [];
+reloaded.scene.traverseVisible((obj: any) => {
+  if (obj.isSkinnedMesh && obj.geometry?.attributes?.position && obj.geometry?.attributes?.skinIndex && obj.geometry?.attributes?.skinWeight) {
+    reloadedSkinned.push(obj);
+  }
+});
+if (reloadedSkinned.length > 0 && (reloaded.animations?.length ?? 0) > 0) {
+  reloaded.scene.updateMatrixWorld(true);
+  const restDiag = Math.max(0.001, new THREE.Box3().setFromObject(reloaded.scene, true).getSize(new THREE.Vector3()).length());
+  const maxTearTol = Math.max(0.015, restDiag * 0.012);
+  const rootBones = new Set<string>();
+  reloaded.scene.traverse((obj: any) => {
+    if (obj.isBone && !obj.parent?.isBone && obj.name) rootBones.add(obj.name);
+  });
+
+  type SeamRep = { meshIdx: number; vi: number; sigKey: string; nonRootBones: string[] };
+  const buckets = new Map<string, SeamRep[]>();
+  const bucketSeen = new Map<string, Set<string>>();
+  const tmpV = new THREE.Vector3();
+  for (let meshIdx = 0; meshIdx < reloadedSkinned.length; meshIdx++) {
+    const mesh = reloadedSkinned[meshIdx];
+    const pos = mesh.geometry.getAttribute('position');
+    const si = mesh.geometry.getAttribute('skinIndex');
+    const sw = mesh.geometry.getAttribute('skinWeight');
+    const skelBones: any[] = mesh.skeleton?.bones ?? [];
+    for (let vi = 0; vi < pos.count; vi++) {
+      const merged = new Map<string, number>();
+      const bIdx = [si.getX(vi), si.getY(vi), si.getZ(vi), si.getW(vi)];
+      const bWt = [sw.getX(vi), sw.getY(vi), sw.getZ(vi), sw.getW(vi)];
+      for (let k = 0; k < 4; k++) {
+        const w = Math.round(bWt[k] * 1000);
+        if (w <= 0) continue;
+        const bName = skelBones[bIdx[k]]?.name ?? `#${bIdx[k]}`;
+        merged.set(bName, (merged.get(bName) ?? 0) + w);
+      }
+      const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const sigKey = sorted.map(([b, w]) => `${b}:${w}`).join(',');
+      tmpV.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+      const rk = `${Math.round(tmpV.x * 1000)},${Math.round(tmpV.y * 1000)},${Math.round(tmpV.z * 1000)}`;
+      let seen = bucketSeen.get(rk);
+      if (!seen) bucketSeen.set(rk, (seen = new Set()));
+      const dedupKey = `${meshIdx}|${sigKey}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      let list = buckets.get(rk);
+      if (!list) buckets.set(rk, (list = []));
+      list.push({ meshIdx, vi, sigKey, nonRootBones: sorted.map(([b]) => b).filter((b) => !rootBones.has(b)) });
+    }
+  }
+
+  const seamPairs: Array<{ a: SeamRep; b: SeamRep }> = [];
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        if (a.meshIdx === b.meshIdx) {
+          if (a.sigKey !== b.sigKey) seamPairs.push({ a, b });
+        } else if (a.nonRootBones.some((bn) => b.nonRootBones.includes(bn))) {
+          seamPairs.push({ a, b });
+        }
+      }
+    }
+  }
+
+  let worstDist = 0;
+  let worstInfo = '';
+  if (seamPairs.length > 0) {
+    const mixer = new THREE.AnimationMixer(reloaded.scene);
+    const vA = new THREE.Vector3(), vB = new THREE.Vector3();
+    for (const clip of reloaded.animations) {
+      const dur = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+      const times = new Set<number>([0, dur * 0.25, dur * 0.5, dur * 0.75, dur]);
+      let extraKeys = 0;
+      for (const tr of clip.tracks) {
+        if (extraKeys >= 3) break;
+        for (let i = 0; i < tr.times.length && extraKeys < 3; i++) {
+          const t = tr.times[i];
+          if (t > 0 && t < dur) { times.add(t); extraKeys++; }
+        }
+      }
+      const action = mixer.clipAction(clip).setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+      for (const t of [...times].sort((a, b) => a - b)) {
+        mixer.setTime(t);
+        reloaded.scene.updateMatrixWorld(true);
+        for (const { a, b } of seamPairs) {
+          const meshA = reloadedSkinned[a.meshIdx], meshB = reloadedSkinned[b.meshIdx];
+          meshA.getVertexPosition(a.vi, vA).applyMatrix4(meshA.matrixWorld);
+          meshB.getVertexPosition(b.vi, vB).applyMatrix4(meshB.matrixWorld);
+          const d = vA.distanceTo(vB);
+          if (d > worstDist) {
+            worstDist = d;
+            worstInfo = `${clip.name}@${t.toFixed(2)}s (${meshA.name || 'skin'}/${meshB.name || 'skin'})`;
+          }
+        }
+      }
+      action.stop();
+    }
+  }
+  const rg9Pass = worstDist <= maxTearTol;
+  gates.push({
+    gate: 'RG9 posed skin integrity',
+    value: seamPairs.length === 0
+      ? `0 conflicting seam weights across ${reloadedSkinned.length} SkinnedMesh(es)`
+      : rg9Pass
+        ? `max seam gap ${worstDist.toFixed(4)}m <= ${maxTearTol.toFixed(4)}m across ${seamPairs.length} pair(s)`
+        : `skin tear ${worstDist.toFixed(4)}m > ${maxTearTol.toFixed(4)}m at ${worstInfo}`,
+    pass: rg9Pass,
+    hint: 'use shared world-corner skin weights (worldVertexT or attachWorldSkinWeights) and unify multi-part skinned geometry per material so posed bends never tear apart',
+  });
+}
+
 const unverified = ['Visual appearance, lighting, and target-engine import (e.g. Blender / Roblox Studio) are not tested by headless GLTFLoader parse'];
 console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
 for (const [label, list] of [['source', sourceMotion], ['reloaded', reloadedMotion]] as const) {
@@ -1954,7 +2376,7 @@ console.log(`wrote ${outPath}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const ok = gates.every((g) => g.pass);
 process.exit(emit({
-  tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, before, after, clips: outClips,
+  tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, jsonBytes: header.jsonBytes, before, after, clips: outClips,
   staticClips: staticClipsList,
   ...(animations.length ? { motion: { source: sourceMotion, reloaded: reloadedMotion } } : {}),
   gates, unverified,
@@ -2152,18 +2574,20 @@ export function glbGates(bytes: Uint8Array, source: Parts): Gate[] {
 
 ~~~typescript source-excerpt
 // scripts/mesh-stats.ts: mesh measurements and optional deployment budget checks (references/budget.md).
-//   Kernel (no THREE):   npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris [--params '{"seed":3}'] [--profile web] [--kind prop]
-//   Any asset via tris:  npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
-//   LOD check:           npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods [--open a,b] [--symmetric]    (builds detail 2, 1, 0; the builder must accept `detail`)
+//   Kernel or THREE builder:  npx tsx scripts/mesh-stats.ts --module ./asset.ts --export buildAsset [--params '{"seed":3}'] [--profile web] [--kind creature]
+//   Any asset via tris:       npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
+//   LOD check:                npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --lods [--open a,b] [--symmetric]    (builds detail 2, 1, 0; the builder must accept `detail`)
 // Options: --profile mobile|web|vr|desktop  --kind prop|hero|creature|vehicle|building (default prop)  --budget N  --meta meta.json  --glb file.glb  --open a,b|all  --symmetric  --lods
 // meta.json (all optional): { "parts": { "body": { "material": "wood", "bone": "root" } }, "textures": [1024, { "name": "atlas", "width": 2048 }], "bones": 12 }
-// What meta does not give is reported as "not checked", never guessed. Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
+// When --module returns a THREE.Object3D or { root }, materials, bones, textures, and exact draw calls are inferred automatically (merged under any --meta override).
+// Last stdout line is the @@RESULT JSON. Exit 0 = ok, 2 = a gate failed, 1 = usage or load error.
 import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { extractModuleMeta, selectBuilder } from './asset-builder';
 import { normalizeParts, type Parts } from './qacheck';
 import { assetStats, budgetGates, lodGates, parseBudgetArgs, type Meta } from './budget';
-import { emit } from './result';
+import { emit, registerThreeHook } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'mesh-stats', ok: false, error: msg }, 1)); };
@@ -2179,23 +2603,52 @@ try { if (opt('meta')) meta = JSON.parse(readFileSync(resolve(opt('meta')!), 'ut
 let glbBytes: number | undefined; try { if (opt('glb')) glbBytes = statSync(resolve(opt('glb')!)).size; } catch (e) { fail(`--glb cannot be read: ${(e as Error).message}`); }
 const open = opt('open')?.split(',').map((s) => s.trim()).filter(Boolean);
 
-let parts: Parts, build: ((p: Record<string, unknown>) => unknown) | undefined;
+let threeMod: typeof import('three') | undefined;
+try { threeMod = await import('three'); } catch { threeMod = undefined; }
+const unpackPartsAndMeta = (built: unknown): { parts: Parts; autoMeta?: Meta } => {
+  if ((built as { isBufferGeometry?: boolean } | null)?.isBufferGeometry) {
+    throw new Error('builder returned a THREE.BufferGeometry; wrap it in a THREE.Mesh/Object3D (or return { root, animations }) or pass triangle arrays via --tris');
+  }
+  const b = built as { isObject3D?: boolean; root?: { isObject3D?: boolean } } | null;
+  if (b?.isObject3D || b?.root?.isObject3D) {
+    if (!threeMod) throw new Error('the builder returns a THREE.Object3D, which requires `three`. Install three or write tris.json and use --tris.');
+    const extracted = extractModuleMeta(built, threeMod);
+    return { parts: extracted.parts, autoMeta: extracted.meshMeta };
+  }
+  return { parts: normalizeParts(built) };
+};
+
+let parts: Parts, buildParts: ((p: Record<string, unknown>) => Promise<Parts>) | undefined;
 try {
   if (modFile) {
-    const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>, fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
-    const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
-    if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
-    build = mod[name!] as (p: Record<string, unknown>) => unknown; parts = normalizeParts(await build({ ...params }));
+    const hooks = registerThreeHook();
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
+    } finally {
+      hooks?.deregister();
+    }
+    const { build: rawBuild } = selectBuilder(mod, opt('export'), modFile);
+    const first = unpackPartsAndMeta(await rawBuild({ ...params }, threeMod as typeof import('three')));
+    parts = first.parts;
+    if (first.autoMeta) {
+      meta = {
+        ...first.autoMeta,
+        ...meta,
+        parts: meta.parts ? { ...first.autoMeta.parts, ...meta.parts } : first.autoMeta.parts,
+      };
+    }
+    buildParts = async (p: Record<string, unknown>) => unpackPartsAndMeta(await rawBuild(p, threeMod as typeof import('three'))).parts;
   } else parts = normalizeParts(JSON.parse(readFileSync(resolve(trisFile!), 'utf8')));
 } catch (e) {
   const m = (e as Error).message;
-  fail(/Cannot find (module|package) ['"]three/.test(m) ? 'the builder imports `three`, which is not installed here. Write tris.json from your driver (groupToTris) and use --tris.' : `cannot build or read the asset: ${m}`);
+  fail(/Cannot find (module|package) ['"]three/.test(m) ? `the builder imports \`three\`, which is not installed here (${m.split('\n')[0]}). Install three, or write tris.json from your driver and use --tris.` : `cannot build or read the asset: ${m}`);
 }
 
 const stats = { ...assetStats(parts!, meta), glbBytes: glbBytes ?? null };
 const { gates, skipped } = budgetGates(stats, { ...target, glbBytes }), unverified: string[] = [];
 let levels: unknown = null;
-if (flag('lods')) { const l = await lodGates(build!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: triangleLimit ?? undefined }); gates.push(...l.gates); levels = l.levels; }
+if (flag('lods')) { const l = await lodGates(buildParts!, normalizeParts, params, { open, symmetric: flag('symmetric'), budget: triangleLimit ?? undefined }); gates.push(...l.gates); levels = l.levels; }
 else if (modFile) skipped.push('L1 to L4 LOD (pass --lods; the builder must accept `detail`)');
 if (!stats.drawCallsExact) unverified.push('draw calls are an upper bound (one per part); pass --meta with a material and bone per part for the real number');
 unverified.push('gpuVertices counts triangle corners; indexed meshes may share vertices. Frame time, fill rate and GPU memory were not measured in a renderer.');
@@ -2222,7 +2675,7 @@ import { parseArgs } from 'node:util';
 import { emit } from './result';
 import type { StudioBackground, StudioConfig } from './studio/types';
 
-const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] [--initial-clip Clip] [--autoplay] --out index.html';
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] [--initial-clip Clip] [--autoplay] [--bloom] --out index.html';
 const harness = fileURLToPath(new URL('../', import.meta.url));
 const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
 
@@ -2231,7 +2684,7 @@ async function main() {
     module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
     out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
     margin: { type: 'string' }, 'front-side': { type: 'string' }, background: { type: 'string' },
-    'initial-clip': { type: 'string' }, autoplay: { type: 'boolean' },
+    'initial-clip': { type: 'string' }, autoplay: { type: 'boolean' }, bloom: { type: 'boolean' },
   } });
   if (!values.module || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
@@ -2258,6 +2711,7 @@ async function main() {
     module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide, background,
     ...(values['initial-clip'] ? { initialClip: values['initial-clip'] } : {}),
     ...(values.autoplay ? { autoplay: true } : {}),
+    ...(values.bloom ? { bloom: true } : {}),
   };
   const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
   const configJson = JSON.stringify(config);
@@ -2311,7 +2765,7 @@ async function main() {
   return emit({
     tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
     builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide, background,
-    initialClip: config.initialClip ?? null, autoplay: Boolean(config.autoplay),
+    initialClip: config.initialClip ?? null, autoplay: Boolean(config.autoplay), bloom: Boolean(config.bloom),
     unverified,
   });
 }
@@ -3505,13 +3959,15 @@ export function renderSheet(parts: Parts, o: { open?: string[]; panel?: number }
 ## scripts/rig-check.ts
 
 ~~~typescript source-excerpt
-// scripts/rig-check.ts: CLI validator for rigged character/creature/vehicle metadata, clip contracts, track sanity, expression mappings, clearance & motion (R1 to R7).
-//   npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
+// scripts/rig-check.ts: CLI validator for rigged character/creature/vehicle metadata or direct (params, THREE) asset modules (R1 to R7).
+//   npx tsx scripts/rig-check.ts (--meta char_metadata.json | --module ./asset.ts [--export name] [--params json]) [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
 // Prints gate table; last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = gate failed, 1 = usage/load error.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { extractModuleMeta, selectBuilder } from './asset-builder';
 import { DEFAULT_MAX_PIVOTS, rigGates, type RigKind, type RigMeta } from './rigcheck';
-import { emit, type Gate } from './result';
+import { emit, registerThreeHook, type Gate } from './result';
 
 const args = process.argv.slice(2);
 const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; };
@@ -3519,8 +3975,11 @@ const flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'rig-check', ok: false, error: msg }, 1)); };
 const fmtGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAIL'}  ${x.gate}: ${x.value}${x.pass ? '' : '  -> ' + x.hint}`).join('\n');
 
-const metaFile = opt('meta') ?? args.find((a) => !a.startsWith('--'));
-if (!metaFile) fail('usage: tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]');
+const modFile = opt('module');
+const metaFile = modFile ? undefined : (opt('meta') ?? args.find((a, idx) => !a.startsWith('--') && !(idx > 0 && args[idx - 1]?.startsWith('--'))));
+if (!modFile === !metaFile || (modFile && opt('meta'))) {
+  fail('usage: tsx scripts/rig-check.ts (--meta char_metadata.json | --module ./asset.ts [--export name] [--params json]) [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]');
+}
 const kind = (opt('kind') ?? 'hero') as RigKind;
 if (!(kind in DEFAULT_MAX_PIVOTS)) fail(`--kind must be one of ${Object.keys(DEFAULT_MAX_PIVOTS).join(', ')}, got "${kind}"`);
 const motionMode = opt('motion') as 'in-place' | 'free' | undefined;
@@ -3528,9 +3987,31 @@ if (motionMode !== undefined && motionMode !== 'in-place' && motionMode !== 'fre
 const maxPivots = opt('max-pivots') !== undefined ? Number(opt('max-pivots')) : undefined;
 if (maxPivots !== undefined && (!Number.isFinite(maxPivots) || maxPivots <= 0)) fail('--max-pivots needs a positive number');
 const staticClips = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+let params: Record<string, unknown> = {};
+try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
 let meta: RigMeta;
-try { meta = JSON.parse(readFileSync(resolve(metaFile), 'utf8')); } catch (e) { fail(`cannot read ${metaFile}: ${(e as Error).message}`); }
+if (modFile) {
+  let threeMod: typeof import('three');
+  try {
+    threeMod = await import('three');
+  } catch (e) {
+    fail(`--module requires \`three\`: ${(e as Error).message}`);
+  }
+  const hooks = registerThreeHook();
+  try {
+    const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
+    const { build } = selectBuilder(mod, opt('export'), modFile);
+    const built = await build({ ...params }, threeMod!);
+    meta = extractModuleMeta(built, threeMod!, motionMode).rigMetadata;
+  } catch (e) {
+    fail(`cannot build or inspect ${modFile}: ${(e as Error).message}`);
+  } finally {
+    hooks?.deregister();
+  }
+} else {
+  try { meta = JSON.parse(readFileSync(resolve(metaFile!), 'utf8')); } catch (e) { fail(`cannot read ${metaFile}: ${(e as Error).message}`); }
+}
 
 const { gates, skipped, stats } = rigGates(meta!, {
   kind,
@@ -4113,6 +4594,7 @@ export function frameCamera(
         </div>
         <div class="utility-controls">
           <label id="effects-label" hidden><input id="effects" type="checkbox"> Studio VFX</label>
+          <button id="bloom-toggle" type="button" aria-pressed="false">Bloom</button>
           <button id="bg-toggle" type="button" aria-pressed="false">Light bg</button>
           <button id="export-glb" type="button">Export .glb</button>
           <button id="verify-glb" type="button">Verify GLB</button>
@@ -4137,8 +4619,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { assetFingerprint } from '../../src/fingerprint';
-import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
+import { countScene, parseGlbHeader, sanitizeUserDataForGltf, selectBuilder, unpackAsset } from '../asset-builder';
 import { clipMotion } from '../clip-motion';
 import { boundsRecord, collectPoseVertices, frameCamera, poseBounds, samplesPerClip } from './framing';
 import type {
@@ -4281,7 +4767,7 @@ export async function startStudio(
     key.position.set(center.x - span * 0.9, span * 1.8, center.z + span * 1.2);
     key.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.mapSize.set(2048, 2048);
     key.shadow.bias = -0.0005;
     key.shadow.camera.left = -span;
     key.shadow.camera.right = span;
@@ -4318,7 +4804,7 @@ export async function startStudio(
       ...config, builder, stats, fingerprint: assetFingerprint(root),
       clips: clips.map((clip) => ({ name: clip.name, duration: clip.duration, tracks: clip.tracks.length })),
       bounds: { rest: boundsRecord(rest), sampled: boundsRecord(sampled), samplesPerClip },
-      vfxAvailable: Boolean(loadVfx), threeRevision: THREE.REVISION,
+      vfxAvailable: Boolean(loadVfx), bloomAvailable: true, threeRevision: THREE.REVISION,
     };
 
     const stage = byId('stage');
@@ -4326,6 +4812,7 @@ export async function startStudio(
     const play = byId<HTMLButtonElement>('play');
     const scrub = byId<HTMLInputElement>('scrub');
     const effects = byId<HTMLInputElement>('effects');
+    const bloomToggle = byId<HTMLButtonElement>('bloom-toggle');
     const bgToggle = byId<HTMLButtonElement>('bg-toggle');
     const exportGlbBtn = byId<HTMLButtonElement>('export-glb');
     const verifyGlbBtn = byId<HTMLButtonElement>('verify-glb');
@@ -4336,7 +4823,27 @@ export async function startStudio(
     const gl = renderer.getContext();
     let view: StudioView | null = '34-front';
     let currentBackground: StudioBackground = config.background === 'light' ? 'light' : 'dark';
+    let bloomEnabled = Boolean(config.bloom);
+    let composer: EffectComposer | undefined;
     let ticking = 0, lastTick = 0, fitting = false;
+
+    function ensureComposer() {
+      if (!composer) {
+        const w = Math.max(1, stage.clientWidth), h = Math.max(1, stage.clientHeight);
+        composer = new EffectComposer(renderer);
+        composer.setPixelRatio(renderer.getPixelRatio());
+        composer.setSize(w, h);
+        composer.addPass(new RenderPass(scene, camera));
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.28, 0.92));
+        composer.addPass(new OutputPass());
+      }
+      return composer;
+    }
+
+    function applyBloom(enabled: boolean) {
+      bloomEnabled = enabled;
+      bloomToggle.setAttribute('aria-pressed', String(enabled));
+    }
 
     function applyBackground(mode: StudioBackground) {
       currentBackground = mode;
@@ -4348,6 +4855,7 @@ export async function startStudio(
       bgToggle.setAttribute('aria-pressed', String(mode === 'light'));
     }
     applyBackground(currentBackground);
+    applyBloom(bloomEnabled);
 
     function pose(): StudioPose {
       const clip = clips[activeIndex];
@@ -4364,7 +4872,8 @@ export async function startStudio(
         root.updateMatrixWorld(true);
         vfx.update(pose());
       }
-      renderer.render(scene, camera);
+      if (bloomEnabled) ensureComposer().render();
+      else renderer.render(scene, camera);
     }
 
     function checkWebGL() {
@@ -4425,6 +4934,10 @@ export async function startStudio(
     function resize() {
       const width = Math.max(1, stage.clientWidth), height = Math.max(1, stage.clientHeight);
       renderer.setSize(width, height, false);
+      if (composer) {
+        composer.setPixelRatio(renderer.getPixelRatio());
+        composer.setSize(width, height);
+      }
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       if (view) fit(view);
@@ -4444,6 +4957,7 @@ export async function startStudio(
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > duration) throw new Error(`Frame time must be between 0 and ${duration} seconds`);
 
       if (frame.background !== undefined) applyBackground(frame.background);
+      if (frame.bloom !== undefined) applyBloom(frame.bloom);
       pause();
       selectClip(index);
       applyPose(seconds);
@@ -4470,17 +4984,29 @@ export async function startStudio(
       const { build: freshBuild } = selectBuilder(await loadModule(), config.builder, config.module);
       const fresh = unpackAsset(await freshBuild(structuredClone(config.params), THREE));
       try {
-        const buffer = await new GLTFExporter().parseAsync(fresh.root, {
-          binary: true, animations: fresh.animations, onlyVisible: true,
-        }) as ArrayBuffer;
+        const restoreUserData = sanitizeUserDataForGltf(fresh.root);
+        let buffer: ArrayBuffer;
+        try {
+          buffer = await new GLTFExporter().parseAsync(fresh.root, {
+            binary: true, animations: fresh.animations, onlyVisible: true,
+          }) as ArrayBuffer;
+        } finally {
+          restoreUserData();
+        }
+        const header = parseGlbHeader(buffer);
         const before = countScene(fresh.root);
         const clipNames = fresh.animations.map((clip) => clip.name);
         const sourceMotion = fresh.animations.length ? clipMotion(THREE, fresh.root, fresh.animations) : [];
-        return { buffer, before, clipNames, sourceMotion };
+        return { buffer, header, before, clipNames, sourceMotion };
       } finally {
         disposeObjectTree(fresh.root);
       }
     }
+
+    bloomToggle.addEventListener('click', () => {
+      applyBloom(!bloomEnabled);
+      draw();
+    });
 
     bgToggle.addEventListener('click', () => {
       applyBackground(currentBackground === 'dark' ? 'light' : 'dark');
@@ -4514,7 +5040,7 @@ export async function startStudio(
       verifyGlbBtn.disabled = true;
       glbStatus.textContent = 'Verifying GLB…';
       try {
-        const { buffer, before, clipNames, sourceMotion } = await exportFreshGlb();
+        const { buffer, header, before, clipNames, sourceMotion } = await exportFreshGlb();
         const reloaded = await new GLTFLoader().parseAsync(buffer, '');
         try {
           const after = countScene(reloaded.scene);
@@ -4543,7 +5069,8 @@ export async function startStudio(
               }
             }
           }
-          const ok = before.tris > 0 && before.tris === after.tris
+          const jsonOk = header.jsonBytes > 0 && header.jsonBytes <= 512 * 1024;
+          const ok = jsonOk && before.tris > 0 && before.tris === after.tris
             && before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes
             && before.skins === after.skins && before.bones === after.bones
             && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name)
@@ -4552,8 +5079,8 @@ export async function startStudio(
             ? ` · moving clips ${movingCount}/${reloadedMotion.length}${staticNames.length ? ` · static: ${staticNames.join(', ')}` : ''}`
             : '';
           glbStatus.textContent = ok
-            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
-            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
+            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB (JSON ${(header.jsonBytes / 1024).toFixed(1)} KB) · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
+            : `GLB FAIL · JSON ${(header.jsonBytes / 1024).toFixed(1)} KB · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
         } finally {
           disposeObjectTree(reloaded.scene);
         }
@@ -4649,6 +5176,7 @@ export type StudioConfig = {
   background: StudioBackground;
   initialClip?: string;
   autoplay?: boolean;
+  bloom?: boolean;
 };
 
 export type StudioVfxContext = {
@@ -4668,6 +5196,7 @@ export type StudioFrame = {
   time?: number;
   vfx?: boolean;
   background?: StudioBackground;
+  bloom?: boolean;
   label?: string;
 };
 export type StudioFrameEvidence = StudioPose & {
@@ -4684,6 +5213,7 @@ export type StudioInfo = Omit<StudioConfig, 'builder'> & {
   fingerprint: ReturnType<typeof assetFingerprint>;
   bounds: { rest: Bounds; sampled: Bounds; samplesPerClip: number };
   vfxAvailable: boolean;
+  bloomAvailable: boolean;
   threeRevision: string;
 };
 export type StudioDiagnostic = { kind: 'javascript' | 'webgl'; message: string };

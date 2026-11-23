@@ -11,30 +11,30 @@ Contents: Mode comparison · Quick (Fast) mode · Balance mode · Quality mode �
 | **Reference inspection** | Once at intake (`ref-spec.md` + cache `regions` if provided) | Intake + `ref-compare` + **1 side-by-side reopen** with studio capture | Intake + `ref-compare` + **reopen side-by-side on every polish round** |
 | **Build & detail** | Full model, accurate proportions, bright emissive eyes/accents (`new THREE.Color(hex)`) | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
 | **Facial rig (iteration 1)** | Lightweight jaw + simple blink when face is prominent | **Automatic full facial rig from iteration 1** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` in closed sockets + `Idle` blinks & combat shifts) | Same full facial rig + nuanced gaze saccades & close-up `Face` preset polish inspect |
-| **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual & geometry polish pass after first render | **>= 2** visual polish passes until reference & pose read cleanly |
-| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (with `--lods` when relevant) |
+| **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual polish pass after first render (**cap `G2` IoU tuning at 1–2 checks**, accept soft `>= 0.65` on perspective refs when `G1`/`G4` pass) | **>= 2** visual polish passes until reference & pose read cleanly |
+| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts --module` | `Q1–Q10` + `mesh-stats.ts --module` (with `--lods` when relevant) |
 | **Color QC (`G3` & `G4`)** | **`G3` palette only** (`0` `G4` overhead; `--mode fast`) | `G3` + **`G4` Regional Color once** after materials (max 1 fix round) | `G3` + **`G4` Regional Color** + verify once after fix (no infinite loop) |
-| **Rig & GLB motion gates** | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) when GLB asked | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) | Full `R1–R7` + `RG1–RG8` evidence pre & post export |
-| **Locomotion posture check** | Side-view sanity check (`capture-studio.ts --motion-view side`) | Side-view + `--motion-vfx` / `--extras` across active clips | Dual dark+light multi-view checks for all 6 archetypes |
+| **Rig & GLB motion gates** | `rig-check.ts --module` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG9`) when GLB asked | `rig-check.ts --module` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG9`) | Full `R1–R7` + `RG1–RG9` evidence pre & post export |
+| **Locomotion posture check** | Side-view sanity check (`capture-studio.ts --motion-view side`) | Side-view + `--motion-vfx` (`clean` + `VFX` tiles) on dark bg | Dual `--background dark` + `light` multi-view checks |
 | **Runtime VFX & choreography** | Style-matched layered VFX & lively clips (no deliberate throttling) | Rich layered VFX, anchored positions, lively idle & movement | Full multi-layered VFX, nuanced secondary follow-through & contrast |
-| **Preview & captures** | `Fast` or `Full Preview` + **1** colored `capture-studio.ts` check | `studio_preview.html` + `capture-studio.ts` (`--vfx --motion-vfx`) | `studio_preview.html` + **both dark and light** `capture-studio.ts` sheets |
+| **Preview & captures** | `Fast` or `Full Preview` + **1** colored `capture-studio.ts` check | `studio_preview.html` + **1 dark** `capture-studio.ts` (`--vfx --motion-vfx`) | `studio_preview.html` + **both dark and light** `capture-studio.ts` sheets |
 
 ## Quick (Fast) mode
 
 Never deliberately degrade visuals into a crude blockout or weak dot VFX. **Quick** speeds up delivery by skipping multi-round polish loops and skipping `G4` regional color checks (`G3` only, zero `G4` overhead):
-1. Build the grounded, outward-wound asset with deterministic seed (`??`), clean manifold topology (`src/voxel.ts` for voxel builds), accurate `new THREE.Color(hex)` vertex/material colors, and natural creature locomotion posture (`references/rigging-biped.md`).
+1. Build the grounded, outward-wound asset with deterministic seed (`??`), clean manifold topology (`src/voxel.ts` with default Corner AO for voxel builds), accurate `new THREE.Color(hex)` / `shadeHexSRGB` colors, and natural creature locomotion posture (`references/rigging-biped.md`).
 2. Run `scripts/qa-asset.ts --module` (`Q1–Q4`, `Q6`, `review.png`) and fix any winding, open/duplicated edge, or grounding error.
-3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`) and run `scripts/rig-check.ts` + `scripts/export-rigged-glb.ts` (checks `RG1–RG8` including reloaded GLB topology).
-4. Pack the preview (`scripts/pack-studio.ts`) and run **1** colored `scripts/capture-studio.ts` check (never rely on `review.png` to judge real colors or VFX). Pass `--mode fast` if invoking `ref-compare.ts` so `G4` adds zero overhead.
+3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`), keep `{ root, animations }` free of `userData` bone/clip bloat, and run `scripts/rig-check.ts --module` + `scripts/export-rigged-glb.ts` (`RG1–RG9` including JSON bloat & posed skin integrity).
+4. Pack the preview (`scripts/pack-studio.ts --bloom` when emissive accents glow) and run **1** colored `scripts/capture-studio.ts` check (never rely on `review.png` to judge real colors or VFX). Pass `--mode fast` if invoking `ref-compare.ts` so `G4` adds zero overhead.
 
 ## Balance mode (recommended default)
 
-Use **Balance** for normal production deliverables:
+Use **Balance** for normal production deliverables (faster than `Quality` — target fewer passes and dark-only studio captures):
 1. Inspect the source reference once at intake (`references/reference-matching.md`), record `ref-spec.md`, note static turnaround poses, and extract/cache `ref.json` (including optional Semantic Color Mapping regions — never re-analyze unchanged references).
-2. Run geometry QA (`scripts/qa-asset.ts --module`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; fix only failing regions once).
-3. Author natural creature locomotion postures and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX matching the asset's visual style (`references/studio-preview.md`).
-4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG8`) when `.glb` is requested.
-5. Capture rendered studio views (`scripts/capture-studio.ts --vfx --motion-vfx --extras ...`), **reopen the source reference image side-by-side** with the sheet, execute 1 visual polish pass fixing any landmark, seam, posture, or VFX anchoring mismatch, and re-run affected gates.
+2. Run `scripts/qa-asset.ts --module`, `scripts/mesh-stats.ts --module`, and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; **cap `G2` IoU refinement at max 1–2 loops**, moving on cleanly when perspective sheets reach `>= 0.65` soft IoU alongside passing `G1`/`G2` aspect/`G4`).
+3. Author natural creature locomotion postures (`>= 2`-voxel joint overlap, unified `-Z` skinned tail, spread wings) and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX (`references/studio-preview.md`).
+4. Run `scripts/rig-check.ts --module` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG9`) directly without writing glue metadata scripts.
+5. Capture rendered studio views (`scripts/capture-studio.ts --background dark --vfx --motion-vfx --extras ...`, which verifies both clean and VFX locomotion frames), **reopen the source reference image side-by-side** with the sheet, execute **1** targeted visual polish pass, and re-run only affected gates (skip redundant `--background light` sheets reserved for `Quality`).
 
 ## Quality mode
 

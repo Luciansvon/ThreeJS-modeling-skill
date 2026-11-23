@@ -3,8 +3,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { assetFingerprint } from '../../src/fingerprint';
-import { countScene, selectBuilder, unpackAsset } from '../asset-builder';
+import { countScene, parseGlbHeader, sanitizeUserDataForGltf, selectBuilder, unpackAsset } from '../asset-builder';
 import { clipMotion } from '../clip-motion';
 import { boundsRecord, collectPoseVertices, frameCamera, poseBounds, samplesPerClip } from './framing';
 import type {
@@ -147,7 +151,7 @@ export async function startStudio(
     key.position.set(center.x - span * 0.9, span * 1.8, center.z + span * 1.2);
     key.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
     key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.mapSize.set(2048, 2048);
     key.shadow.bias = -0.0005;
     key.shadow.camera.left = -span;
     key.shadow.camera.right = span;
@@ -184,7 +188,7 @@ export async function startStudio(
       ...config, builder, stats, fingerprint: assetFingerprint(root),
       clips: clips.map((clip) => ({ name: clip.name, duration: clip.duration, tracks: clip.tracks.length })),
       bounds: { rest: boundsRecord(rest), sampled: boundsRecord(sampled), samplesPerClip },
-      vfxAvailable: Boolean(loadVfx), threeRevision: THREE.REVISION,
+      vfxAvailable: Boolean(loadVfx), bloomAvailable: true, threeRevision: THREE.REVISION,
     };
 
     const stage = byId('stage');
@@ -192,6 +196,7 @@ export async function startStudio(
     const play = byId<HTMLButtonElement>('play');
     const scrub = byId<HTMLInputElement>('scrub');
     const effects = byId<HTMLInputElement>('effects');
+    const bloomToggle = byId<HTMLButtonElement>('bloom-toggle');
     const bgToggle = byId<HTMLButtonElement>('bg-toggle');
     const exportGlbBtn = byId<HTMLButtonElement>('export-glb');
     const verifyGlbBtn = byId<HTMLButtonElement>('verify-glb');
@@ -202,7 +207,27 @@ export async function startStudio(
     const gl = renderer.getContext();
     let view: StudioView | null = '34-front';
     let currentBackground: StudioBackground = config.background === 'light' ? 'light' : 'dark';
+    let bloomEnabled = Boolean(config.bloom);
+    let composer: EffectComposer | undefined;
     let ticking = 0, lastTick = 0, fitting = false;
+
+    function ensureComposer() {
+      if (!composer) {
+        const w = Math.max(1, stage.clientWidth), h = Math.max(1, stage.clientHeight);
+        composer = new EffectComposer(renderer);
+        composer.setPixelRatio(renderer.getPixelRatio());
+        composer.setSize(w, h);
+        composer.addPass(new RenderPass(scene, camera));
+        composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.28, 0.92));
+        composer.addPass(new OutputPass());
+      }
+      return composer;
+    }
+
+    function applyBloom(enabled: boolean) {
+      bloomEnabled = enabled;
+      bloomToggle.setAttribute('aria-pressed', String(enabled));
+    }
 
     function applyBackground(mode: StudioBackground) {
       currentBackground = mode;
@@ -214,6 +239,7 @@ export async function startStudio(
       bgToggle.setAttribute('aria-pressed', String(mode === 'light'));
     }
     applyBackground(currentBackground);
+    applyBloom(bloomEnabled);
 
     function pose(): StudioPose {
       const clip = clips[activeIndex];
@@ -230,7 +256,8 @@ export async function startStudio(
         root.updateMatrixWorld(true);
         vfx.update(pose());
       }
-      renderer.render(scene, camera);
+      if (bloomEnabled) ensureComposer().render();
+      else renderer.render(scene, camera);
     }
 
     function checkWebGL() {
@@ -291,6 +318,10 @@ export async function startStudio(
     function resize() {
       const width = Math.max(1, stage.clientWidth), height = Math.max(1, stage.clientHeight);
       renderer.setSize(width, height, false);
+      if (composer) {
+        composer.setPixelRatio(renderer.getPixelRatio());
+        composer.setSize(width, height);
+      }
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       if (view) fit(view);
@@ -310,6 +341,7 @@ export async function startStudio(
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > duration) throw new Error(`Frame time must be between 0 and ${duration} seconds`);
 
       if (frame.background !== undefined) applyBackground(frame.background);
+      if (frame.bloom !== undefined) applyBloom(frame.bloom);
       pause();
       selectClip(index);
       applyPose(seconds);
@@ -336,17 +368,29 @@ export async function startStudio(
       const { build: freshBuild } = selectBuilder(await loadModule(), config.builder, config.module);
       const fresh = unpackAsset(await freshBuild(structuredClone(config.params), THREE));
       try {
-        const buffer = await new GLTFExporter().parseAsync(fresh.root, {
-          binary: true, animations: fresh.animations, onlyVisible: true,
-        }) as ArrayBuffer;
+        const restoreUserData = sanitizeUserDataForGltf(fresh.root);
+        let buffer: ArrayBuffer;
+        try {
+          buffer = await new GLTFExporter().parseAsync(fresh.root, {
+            binary: true, animations: fresh.animations, onlyVisible: true,
+          }) as ArrayBuffer;
+        } finally {
+          restoreUserData();
+        }
+        const header = parseGlbHeader(buffer);
         const before = countScene(fresh.root);
         const clipNames = fresh.animations.map((clip) => clip.name);
         const sourceMotion = fresh.animations.length ? clipMotion(THREE, fresh.root, fresh.animations) : [];
-        return { buffer, before, clipNames, sourceMotion };
+        return { buffer, header, before, clipNames, sourceMotion };
       } finally {
         disposeObjectTree(fresh.root);
       }
     }
+
+    bloomToggle.addEventListener('click', () => {
+      applyBloom(!bloomEnabled);
+      draw();
+    });
 
     bgToggle.addEventListener('click', () => {
       applyBackground(currentBackground === 'dark' ? 'light' : 'dark');
@@ -380,7 +424,7 @@ export async function startStudio(
       verifyGlbBtn.disabled = true;
       glbStatus.textContent = 'Verifying GLB…';
       try {
-        const { buffer, before, clipNames, sourceMotion } = await exportFreshGlb();
+        const { buffer, header, before, clipNames, sourceMotion } = await exportFreshGlb();
         const reloaded = await new GLTFLoader().parseAsync(buffer, '');
         try {
           const after = countScene(reloaded.scene);
@@ -409,7 +453,8 @@ export async function startStudio(
               }
             }
           }
-          const ok = before.tris > 0 && before.tris === after.tris
+          const jsonOk = header.jsonBytes > 0 && header.jsonBytes <= 512 * 1024;
+          const ok = jsonOk && before.tris > 0 && before.tris === after.tris
             && before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes
             && before.skins === after.skins && before.bones === after.bones
             && clipNames.length === outClips.length && clipNames.every((name, idx) => outClips[idx] === name)
@@ -418,8 +463,8 @@ export async function startStudio(
             ? ` · moving clips ${movingCount}/${reloadedMotion.length}${staticNames.length ? ` · static: ${staticNames.join(', ')}` : ''}`
             : '';
           glbStatus.textContent = ok
-            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
-            : `GLB FAIL · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
+            ? `GLB OK · ${(buffer.byteLength / 1024).toFixed(1)} KB (JSON ${(header.jsonBytes / 1024).toFixed(1)} KB) · ${after.tris} tris · ${after.meshes} meshes · ${after.bones} bones · ${outClips.length} clips${motionNote}`
+            : `GLB FAIL · JSON ${(header.jsonBytes / 1024).toFixed(1)} KB · tris ${before.tris}->${after.tris}, meshes ${before.meshes}->${after.meshes}, bones ${before.bones}->${after.bones}, clips ${clipNames.length}->${outClips.length}, binding=${bindingOk ? 'ok' : 'fail'}, motion=${motionPreserved ? 'ok' : 'lost'}${motionNote}`;
         } finally {
           disposeObjectTree(reloaded.scene);
         }

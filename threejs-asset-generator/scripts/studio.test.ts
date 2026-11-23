@@ -105,6 +105,7 @@ try {
   for (const view of ['34-front', '34-back', 'front', 'side', 'back', 'top']) {
     assert.match(html, new RegExp(`data-view="${view}"`));
   }
+  assert.match(html, /id="bloom-toggle"/);
   assert.match(html, /id="bg-toggle"/);
   assert.match(html, /id="export-glb"/);
   assert.match(html, /id="verify-glb"/);
@@ -143,7 +144,9 @@ try {
     writeFileSync(animated, `
       export function build(params, THREE) {
         const root = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({ color: '#9012ac' }));
-        const track = new THREE.VectorKeyframeTrack('.position', [0, 0.5, 1], [0, 0, 0, 0, 0.2, 0, 0, 0, 0]);
+        root.name = 'pulseBox';
+        root.userData = { bones: { pulseBox: root }, animations: [] };
+        const track = new THREE.VectorKeyframeTrack('pulseBox.position', [0, 0.5, 1], [0, 0, 0, 0, 0.2, 0, 0, 0, 0]);
         return { root, animations: [new THREE.AnimationClip('Pulse', 1, [track])] };
       }
     `);
@@ -165,15 +168,16 @@ try {
     await verifyStudioVfx(browserPath, withVfx, out);
     console.log('Studio VFX defaults, playback, scrub, toggle, and capture readbacks verified in browser.');
 
-    // Verify --initial-clip + --autoplay AND capture-studio --motion-vfx + --extras multi-row contact sheet
+    // Verify --initial-clip + --autoplay + --bloom AND capture-studio --motion-vfx (clean + VFX tiles) + --extras
     const autoHtml = join(dir, 'autoplay.html');
     const autoPack = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
-      '--module', animated, '--vfx', effects, '--initial-clip', 'Pulse', '--autoplay', '--out', autoHtml,
+      '--module', animated, '--vfx', effects, '--initial-clip', 'Pulse', '--autoplay', '--bloom', '--out', autoHtml,
     ], { timeout: 15_000 });
     assert.equal(autoPack.status, 0, autoPack.stdout + autoPack.stderr);
     const autoRes = parseResult(autoPack.stdout)!;
     assert.equal(autoRes.initialClip, 'Pulse');
     assert.equal(autoRes.autoplay, true);
+    assert.equal(autoRes.bloom, true);
 
     const multiPng = join(dir, 'multi-sheet.png');
     const multiCap = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
@@ -184,11 +188,42 @@ try {
     assert.equal(multiCap.status, 0, multiCap.stdout + multiCap.stderr);
     const multiRes = parseResult(multiCap.stdout)!;
     assert.equal(multiRes.status, 'PASS');
-    assert.equal((multiRes.tiles as unknown[]).length, 6);
+    assert.equal((multiRes.tiles as unknown[]).length, 7);
+    const tileLabels = (multiRes.tiles as { label: string; evidence: { vfx: string } | null }[]);
+    assert.equal(tileLabels.find((t) => t.label === 'Mid locomotion (clean)')?.evidence?.vfx, 'off');
+    assert.equal(tileLabels.find((t) => t.label === 'Mid locomotion (VFX)')?.evidence?.vfx, 'visible');
     const sheetPng = decodePngRgba(readFileSync(multiPng))!;
     assert.equal(sheetPng.width, 1920);
-    assert.equal(sheetPng.height, 1800);
-    console.log('Studio autoplay, shadows, --motion-vfx, and 6-tile --extras capture verified in browser.');
+    assert.equal(sheetPng.height, 2400);
+
+    // Verify Bloom toggle and Verify GLB in live browser
+    const { chromium } = await import('playwright-core');
+    const browser = await chromium.launch({
+      executablePath: browserPath, headless: true, timeout: 15_000,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.goto(pathToFileURL(autoHtml).href);
+      await page.waitForFunction(() => document.documentElement.dataset.studioState !== 'loading');
+      const bloomInfo = await page.evaluate(() => window.threejsStudio!.info!());
+      assert.equal(bloomInfo.bloomAvailable, true);
+      assert.equal(bloomInfo.bloom, true);
+      const bloomBtn = page.locator('#bloom-toggle');
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'true');
+      await bloomBtn.click();
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'false');
+      await bloomBtn.click();
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'true');
+      await page.locator('#verify-glb').click();
+      await page.waitForFunction(() => /^(GLB OK|GLB FAIL|Verify failed)/.test(document.getElementById('glb-status')?.textContent ?? ''));
+      const verifyText = await page.locator('#glb-status').textContent();
+      assert.match(verifyText ?? '', /^GLB OK .*JSON \d+\.\d+ KB/);
+      assert.deepEqual(await page.evaluate(() => window.threejsStudio?.getErrors()), []);
+    } finally {
+      await browser.close();
+    }
+    console.log('Studio autoplay, --bloom toggle, Verify GLB, shadows, --motion-vfx clean+VFX, and 7-tile capture verified in browser.');
   }
 } finally {
   assert.equal(dirname(dir), temp);

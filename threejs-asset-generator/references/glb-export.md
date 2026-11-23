@@ -59,13 +59,13 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates RG1–RG7):
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter` after stripping live runtime `userData`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates `RG1–RG9`):
 
 ```
-npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b]
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b] [--max-json-kb 512]
 ```
 
-The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
+The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return `{ root, animations, bones? }` (or a `THREE.Object3D`). **Never attach live `bones`, `anchors`, or `animations` object trees onto `root.userData`**: `GLTFExporter` serializes nested `Object3D` subtrees quadratically into 10+ MB `extras`. The exporter strips runtime `userData` before serialization and restores it afterward, and `RG1 written` rejects glTF JSON chunks exceeding `--max-json-kb` (default `512` KB). When SkinnedMeshes and animations are present, `RG9 posed skin integrity` also verifies across sampled clip frames that rest-coincident skinned vertices never split apart ("kropos") during rotation. Build a fresh rest-pose instance with only the objects intended for export.
 
 Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
 

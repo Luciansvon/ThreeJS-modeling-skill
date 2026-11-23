@@ -19,7 +19,10 @@ Rules:
 - Mirror with `mirrorBone` for the pivot and a mirror matrix for the parts. The mirror matrix is applied before the pivot shift inside `RigBuilder`, and `PartBuilder` restores the winding (SKILL.md §6.1).
 - Ground in rest pose, using `groundAsset(rig)` for a rigid build. Keep skinned ground offsets on the asset wrapper. Author foot IK, hovering elevation, or hip bob in the clips.
 - **Exported rotation tracks:** Always author exported rotations with `QuaternionKeyframeTrack` targeting `<nodeName>.quaternion` (`makeClip` and `bakeClip30fps` do this automatically). `GLTFExporter` only exports `position`, `quaternion`, `scale`, and `morphTargetInfluences`; `.rotation` or `.rotation[x]` scalar Euler tracks animate in preview but are dropped during GLB export while the clip name remains, leaving the model frozen in its rest pose. Give every animated pivot a unique name satisfying `THREE.PropertyBinding.sanitizeNodeName(name) === name` that resolves uniquely from the root via `THREE.PropertyBinding.findNode`.
-- **Hinged voxel parts:** For rigged or hinged voxel builds, merge blocks and cull hidden interior faces **only within the same rigid part on the same pivot**. Keep exterior faces where adjacent parts belong to different pivots so bending joints never open hollow gaps, and inspect seams at peak clip rotation.
+- **Hinged & skinned voxel parts (anti-gap & anti-shred rules):**
+  - Keep **>= 2 voxels of interior socket overlap** across rigid voxel joints (neck-to-torso, jaw-to-head, shoulder, hip, wing root) so pitching or head nodding never exposes a hollow gap. Merge/cull hidden interior faces only within each rigid pivot+material bucket.
+  - For skinned voxel tails, necks, or capes: author **one unified `SkinnedMesh` per material** in an uncurled/neutral bind pose (`-Z`), NEVER split into multiple loose sub-meshes curled tight and then forced straight `~170°` in `Fly`, and assign weights via `worldVertexT` or `attachWorldSkinWeights` (`src/voxel.ts`) keyed strictly by world vertex coordinates `(wx, wy, wz)` — never per-cell indices — so vertices never rip apart ("kropos") during playback (`RG9 posed skin integrity`).
+  - **Wing spread sign check (`+Z` forward, `+Y` up, `+X` left wing):** In `Fly` clips, rotate wing roots **outward** into the screen (`-Y` yaw + raised upward roll `|z| >= 0.9 rad` on `+X` wing, mirrored cleanly on `-X`) rather than positive yaw that folds membranes inward behind `-Z` like hanging curtains. Verify wing spread & uncurled trailing tail visually from `3/4` and `Side` studio captures.
 
 ### Reference pose vs natural locomotion posture (all creature archetypes)
 
@@ -106,7 +109,7 @@ const walk = makeClip('walk', 1, {
 const mixer = new THREE.AnimationMixer(root); mixer.clipAction(walk).play();   // in the render loop: mixer.update(dt)
 ```
 
-Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x = 0.2` directly. For a static pose baked into the asset, apply it once after `build` and keep it deterministic (a pure function of the params).
+Pose without a clip (nod, wave, idle): keep live bone references in the builder's JS return (`const { root, animations, bones } = buildAsset(...)`) and set `bones.head.rotation.x = 0.2` directly — **do not store live `bones`, `anchors`, or `AnimationClip` graphs on `root.userData`** (that leaks quadratic MBs of glTF `extras` bloat; `export-rigged-glb.ts` strips runtime `userData` and `RG1` fails oversized JSON chunks). For a static pose baked into the asset, apply it once after `build` and keep it deterministic.
 
 ### Facial motion and root isolation
 
@@ -141,7 +144,7 @@ For a dragon, snake, fish, or tentacle, author the bind pose with a tail extendi
 - `buildBoneHierarchy(specs)` returns `rootBone`, `bones` by name, and `boneOrder` in input order. Each spec has `name`, optional `parent`, and `worldPos` in asset space. List a single root and put each parent before its children. Use `boneOrder` to construct the `THREE.Skeleton`.
 - `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings (for pure kernel tubes built with `tubeTrisWithT` in `src/organic.ts`, use its returned `{ tris, vertexT }` directly instead of guessing nearest bones in Euclidean space). Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
 - `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder, loop })` defaults to 30 fps, `YXZ`, and `loop = true`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` (and `u = 1` when `loop: false` for one-shot or chained clips) and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. Looping clips reuse the first pose at the last key; pass `loop: false` so `evalPose(1)` authors the final key. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
-- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata`. Clips can also come from `root.userData.animations` or `root.animations`. Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
+- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata` directly (or run `npx tsx scripts/rig-check.ts --module ./asset.ts` and `scripts/mesh-stats.ts --module ./asset.ts` without writing temporary extraction scripts). Return `{ root, animations }` directly (`animations` alongside `root`, not bloated inside `root.userData`). Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
 
 Build, bind, ground, and extract a simple tail. This tube uses `getPointAt()` so its ring indices give the authored arc-length parameters. Save the example alongside `src/skinnedRig.ts` to run it.
 
@@ -175,17 +178,16 @@ const swim = bakeClip30fps('Swim', 1.2, bones, (u) => ({
   rotations: { tailBase: [0, 0.28 * Math.sin(2 * Math.PI * u), 0], tailMid: [0, 0.44 * Math.sin(2 * Math.PI * u - 0.55), 0] },
   rootOffset: [0, 0, 0],
 }));
-root.userData.animations = [swim];
-const artifacts = extractQaArtifacts({ root, bones });
+const artifacts = extractQaArtifacts({ root, bones, animations: [swim] });
 for (const [name, data] of Object.entries(artifacts)) writeFileSync(`${name}.json`, JSON.stringify(data));
 ```
 
-Run the checks from the skill folder. The example tube has open ends, so pass `--open tail` only for that part.
+Run the checks directly against your `(params, THREE)` module (no manual `JSON` extraction needed) or from extracted artifacts:
 
 ```bash
-npx tsx scripts/qa-asset.ts --tris tris.json --open tail
-npx tsx scripts/mesh-stats.ts --tris tris.json --meta meshMeta.json --profile web --kind creature
-npx tsx scripts/rig-check.ts --meta rigMetadata.json --kind creature
+npx tsx scripts/qa-asset.ts --module ./asset.ts --open tail
+npx tsx scripts/mesh-stats.ts --module ./asset.ts --profile web --kind creature
+npx tsx scripts/rig-check.ts --module ./asset.ts --kind creature --motion free
 ```
 
 QA samples a detached copy in export space. Keep the asset's ground offset on its wrapper. Helper-built bones use their authored local positions with identity rest rotations and scales. Supply manually built bones in their rest pose. Extraction uses visible `Mesh` and `SkinnedMesh` triangles, including indexed geometry and material groups. Keep all skeleton bones under `root` and address their position, quaternion, or scale by unique bone name. Instanced or batched meshes and tracks on non-bone objects require separate QA. Mesh metadata uses the stats CLI's bone/material grouping and dimensions of loaded material textures. Floor clearance is the lowest transformed vertex from both rigid and skinned parts at 30 fps and at every clip key, including the endpoints. View deformations between samples in preview.

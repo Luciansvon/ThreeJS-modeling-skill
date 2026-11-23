@@ -35,7 +35,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 |---|---|---|---|
 | **G1 proportions** | `w/h` and `d/h` ratios against `--w`, `--d` | within 10% (aim <= 5% for stylized/voxel) | adjust part spans |
 | **G2 aspect** | tight silhouette width/height per view | within 8% ortho, 14% angled | compare facing & major volumes |
-| **G2 IoU** | silhouette overlap (64×64 grid) | `>= 0.85` realistic/smooth ortho (`>= 0.78` stylized/voxel before studio polish), `>= 0.70` angled (`34`, `34_back`) | check `diff-<view>.png` (red = missing, blue = extra) |
+| **G2 IoU** | silhouette overlap (64×64 grid) | `>= 0.85` realistic/smooth ortho (`>= 0.78` stylized/voxel ortho, `>= 0.65` angled/perspective sheets) | check `diff-<view>.png` (red = missing, blue = extra); cap `Balance` tuning at 1–2 loops once `G1`/`G4` pass |
 | **G3 palette** | global reference colors (`>= 5%` share) within RGB dist 60 | all covered (retained across **all** modes) | retune global palette swatch |
 | **G4 regional color** | **Semantic ROI CIEDE2000 (ΔE00)** (`scripts/color-qc.ts`) matching region-to-region colors (`Balance` & `Quality` only; **0 overhead SKIPPED in `Fast`/`Quick`**) | evaluated regions `ΔE00 <= 12.0` (`<= 7.0` target); lighting-only render shifts flagged, not false-failed | fix swapped or off-hue region material/vertex/texture color (max **1** fix pass) |
 | **G5 landmarks** | signature features from `ref-spec.md` | readable in rendered dark/light studio views | refine geometry, eyes, markings, or pose |
@@ -51,12 +51,12 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 1. Run comparison:
    - From triangles JSON: `npx tsx scripts/ref-compare.ts ref.json tris.json --mode balance`
    - Directly from Three.js builder (zero render needed for `G4`): `npx tsx scripts/ref-compare.ts ref.json --module ./asset.ts --mode balance`
-2. For stylized/voxel assets, once `G1 <= 5%` and `G2 IoU >= 0.78` hold cleanly, move straight to `capture-studio.ts` visual polish rather than burning iterations chasing `0.85` orthographic mask overlap.
+2. For stylized/voxel assets (or perspective turnaround sheets in `Balance`), once `G1 <= 6%`, `G2 aspect <= 10%`, and `G2 IoU >= 0.78` ortho (`>= 0.65` when perspective tilt shrinks mask overlap) hold cleanly after 1–2 checks, move straight to `capture-studio.ts` visual polish rather than burning iterations chasing `0.85` orthographic mask overlap.
 3. **Reopen the source reference side-by-side** alongside rendered `studio-contact-sheet.png` views per `references/work-modes.md`, fixing visual mismatches before finishing.
 
 ## 5 Getting triangles out
 
-- For a rigid/skinned builder returning `(params, THREE)`, `scripts/qa-asset.ts --module`, `scripts/export-rigged-glb.ts`, and `scripts/ref-compare.ts --module` automatically extract named triangles via `extractObjectParts` (`src/voxel.ts`, `src/skinnedRig.ts`, `src/lowpoly.ts`).
+- For a rigid/skinned builder returning `(params, THREE)`, `scripts/qa-asset.ts --module`, `scripts/mesh-stats.ts --module`, `scripts/rig-check.ts --module`, `scripts/export-rigged-glb.ts`, and `scripts/ref-compare.ts --module` all support direct inspection without temporary extraction scripts (`src/voxel.ts`, `src/skinnedRig.ts`, `src/lowpoly.ts`).
 - When writing `tris.json` manually from an external script, pose in rest pose, include `colors: [...]` for `G3` and optional `regionColors: { body: "#...", ... }` for `G4`.
 
 ## 6 Final report

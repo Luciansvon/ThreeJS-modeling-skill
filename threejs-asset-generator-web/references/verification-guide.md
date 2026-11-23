@@ -42,8 +42,8 @@ A limit the table does not give is reported under `not checked`. Do not fill it 
 # Counts for an asset whose deployment target is still open
 npx tsx scripts/mesh-stats.ts --tris tris.json
 
-# A kernel, no THREE (the builder is called with `{...params}`)
-npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris --profile web --kind prop
+# Kernel or (params, THREE) builder (extracts tris, materials, bones, textures, and exact draw calls automatically):
+npx tsx scripts/mesh-stats.ts --module ./myAsset.ts --export buildAsset --profile web --kind creature
 
 # The final asset as tris.json, with what the arrays cannot say, and the GLB you exported
 npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
@@ -260,13 +260,13 @@ If the user needs to see the result, say how to check it: drag the file into a g
 
 ## Three.js export route
 
-For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates RG1–RG7):
+For assets that need vertex colours, materials, skins, or clips, use the bundled CLI `scripts/export-rigged-glb.ts` (which includes a Node `FileReader` polyfill, runs `GLTFExporter` after stripping live runtime `userData`, saves to disk, re-parses the exact disk bytes with `GLTFLoader`, and samples per-clip playback via `scripts/clip-motion.ts` to emit `@@RESULT` gates `RG1–RG9`):
 
 ```
-npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b]
+npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--static-clips a,b] [--max-json-kb 512]
 ```
 
-The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return a `THREE.Object3D` with optional `root.userData.animations` or return `{ root, animations }`. Build a fresh rest-pose instance with only the objects intended for export.
+The CLI calls the builder as `buildAsset(params, THREE)`. Pass `--params` with JSON or use the default empty object. Return `{ root, animations, bones? }` (or a `THREE.Object3D`). **Never attach live `bones`, `anchors`, or `animations` object trees onto `root.userData`**: `GLTFExporter` serializes nested `Object3D` subtrees quadratically into 10+ MB `extras`. The exporter strips runtime `userData` before serialization and restores it afterward, and `RG1 written` rejects glTF JSON chunks exceeding `--max-json-kb` (default `512` KB). When SkinnedMeshes and animations are present, `RG9 posed skin integrity` also verifies across sampled clip frames that rest-coincident skinned vertices never split apart ("kropos") during rotation. Build a fresh rest-pose instance with only the objects intended for export.
 
 Run the skill's exporter with an absolute path to a TS or JS builder in another folder. The injected `THREE` works without an asset-side Three.js install. On Node 22.15+ or Node 24+, bare `three` imports fall back to the skill's installation when the builder's normal resolution fails. Relative imports resolve from the original builder file. [Node.js module customization hooks](https://nodejs.org/api/module.html#customization-hooks)
 
@@ -380,7 +380,7 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 |---|---|---|---|
 | **G1 proportions** | `w/h` and `d/h` ratios against `--w`, `--d` | within 10% (aim <= 5% for stylized/voxel) | adjust part spans |
 | **G2 aspect** | tight silhouette width/height per view | within 8% ortho, 14% angled | compare facing & major volumes |
-| **G2 IoU** | silhouette overlap (64×64 grid) | `>= 0.85` realistic/smooth ortho (`>= 0.78` stylized/voxel before studio polish), `>= 0.70` angled (`34`, `34_back`) | check `diff-<view>.png` (red = missing, blue = extra) |
+| **G2 IoU** | silhouette overlap (64×64 grid) | `>= 0.85` realistic/smooth ortho (`>= 0.78` stylized/voxel ortho, `>= 0.65` angled/perspective sheets) | check `diff-<view>.png` (red = missing, blue = extra); cap `Balance` tuning at 1–2 loops once `G1`/`G4` pass |
 | **G3 palette** | global reference colors (`>= 5%` share) within RGB dist 60 | all covered (retained across **all** modes) | retune global palette swatch |
 | **G4 regional color** | **Semantic ROI CIEDE2000 (ΔE00)** (`scripts/color-qc.ts`) matching region-to-region colors (`Balance` & `Quality` only; **0 overhead SKIPPED in `Fast`/`Quick`**) | evaluated regions `ΔE00 <= 12.0` (`<= 7.0` target); lighting-only render shifts flagged, not false-failed | fix swapped or off-hue region material/vertex/texture color (max **1** fix pass) |
 | **G5 landmarks** | signature features from `ref-spec.md` | readable in rendered dark/light studio views | refine geometry, eyes, markings, or pose |
@@ -396,12 +396,12 @@ Scripts (run them, do not read them): `scripts/ref-intake.ts`, `scripts/ref-comp
 1. Run comparison:
    - From triangles JSON: `npx tsx scripts/ref-compare.ts ref.json tris.json --mode balance`
    - Directly from Three.js builder (zero render needed for `G4`): `npx tsx scripts/ref-compare.ts ref.json --module ./asset.ts --mode balance`
-2. For stylized/voxel assets, once `G1 <= 5%` and `G2 IoU >= 0.78` hold cleanly, move straight to `capture-studio.ts` visual polish rather than burning iterations chasing `0.85` orthographic mask overlap.
+2. For stylized/voxel assets (or perspective turnaround sheets in `Balance`), once `G1 <= 6%`, `G2 aspect <= 10%`, and `G2 IoU >= 0.78` ortho (`>= 0.65` when perspective tilt shrinks mask overlap) hold cleanly after 1–2 checks, move straight to `capture-studio.ts` visual polish rather than burning iterations chasing `0.85` orthographic mask overlap.
 3. **Reopen the source reference side-by-side** alongside rendered `studio-contact-sheet.png` views per `references/work-modes.md`, fixing visual mismatches before finishing.
 
 ## 5 Getting triangles out
 
-- For a rigid/skinned builder returning `(params, THREE)`, `scripts/qa-asset.ts --module`, `scripts/export-rigged-glb.ts`, and `scripts/ref-compare.ts --module` automatically extract named triangles via `extractObjectParts` (`src/voxel.ts`, `src/skinnedRig.ts`, `src/lowpoly.ts`).
+- For a rigid/skinned builder returning `(params, THREE)`, `scripts/qa-asset.ts --module`, `scripts/mesh-stats.ts --module`, `scripts/rig-check.ts --module`, `scripts/export-rigged-glb.ts`, and `scripts/ref-compare.ts --module` all support direct inspection without temporary extraction scripts (`src/voxel.ts`, `src/skinnedRig.ts`, `src/lowpoly.ts`).
 - When writing `tris.json` manually from an external script, pose in rest pose, include `colors: [...]` for `G3` and optional `regionColors: { body: "#...", ... }` for `G4`.
 
 ## 6 Final report
@@ -427,6 +427,10 @@ Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/r
 ## §18. Run rig-check
 
 ```
+# Directly on a (params, THREE) builder module (extracts hierarchy, tracks, and clipMinY automatically):
+npx tsx scripts/rig-check.ts --module ./myAsset.ts [--export buildAsset] [--params '{"seed":1}'] [--kind hero|creature|vehicle|building|prop] [--motion in-place|free] [--static-clips a,b]
+
+# Or from standalone JSON metadata:
 npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
 ```
 
@@ -515,10 +519,10 @@ When the model is still being built or the interactive viewer is unavailable, sh
 
 ### Package one asset builder
 
-Use `pack-studio` to open a TS or JS builder in a self-contained HTML preview with all six turnaround presets (`34-front`, `34-back`, `front`, `side`, `back`, `top`), orbit and pan, clip selection, playback, scrubbing, dark/light backdrop toggle, and built-in rest-pose `.glb` export + in-RAM round-trip verification (`GLTFExporter` -> `GLTFLoader`). Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
+Use `pack-studio` to open a TS or JS builder in a self-contained HTML preview with all six turnaround presets (`34-front`, `34-back`, `front`, `side`, `back`, `top`), orbit and pan, clip selection, playback, scrubbing, optional selective **Bloom** (`--bloom` / `#bloom-toggle` via `UnrealBloomPass` + `OutputPass`), `2048×2048` shadow maps, dark/light backdrop toggle, and built-in anti-bloat `.glb` export + in-RAM round-trip verification (`GLTFExporter` with runtime `userData` stripping -> `GLTFLoader`, checking `jsonBytes <= 512 KB`). Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
 
 ```bash
-npm run pack-studio -- --module ./asset.ts --export buildAsset --background dark --initial-clip IdleFloat --autoplay --out ./index.html
+npm run pack-studio -- --module ./asset.ts --export buildAsset --background dark --bloom --initial-clip IdleFloat --autoplay --out ./index.html
 npm run export-rigged-glb -- --module ./asset.ts --export buildAsset --out ./asset.glb
 ```
 
@@ -608,7 +612,7 @@ When a browser tool is available, open the delivered preview for the final model
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
-For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--motion-view side` (or `top`, `back`, `front`, `34-back`) to inspect profile motion, `--motion-vfx` when locomotion clips (`Swim`, `Fly`, `Run`) also emit runtime VFX (without failing if a plain walk has none), `--action-view <view>` for action silhouettes, `--extra Clip@time[:view][:vfx]` or `--extras Clip1@t1:view:vfx,Clip2@t2` to inspect additional clips in an expanded multi-row sheet, `--background light` when verifying light-backdrop contrast, and `--vfx` when the action frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--motion-view side` (or `top`, `back`, `front`, `34-back`) to inspect profile motion, `--motion-vfx` when locomotion clips (`Swim`, `Fly`, `Run`) also emit runtime VFX (automatically capturing both `Mid locomotion (clean)` without particles and `Mid locomotion (VFX)` so smoke/flames never mask tail or joint defects), `--action-view <view>` for action silhouettes, `--extra Clip@time[:view][:vfx]` or `--extras Clip1@t1:view:vfx,Clip2@t2` to inspect additional clips in an expanded multi-row sheet, `--background light` when verifying light-backdrop contrast, and `--vfx` when the action frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
 
 ```bash
 npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion Swim --motion-view side --motion-vfx --action TentacleSlam --peak 1.0 --vfx --extras "InkMaelstrom@1.5:34-front:vfx,IdleFloat@2.2:34-front:vfx" --background dark

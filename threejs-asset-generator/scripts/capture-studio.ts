@@ -101,11 +101,23 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
     : `No unique, positive-duration animated clip named “${name}”.`;
   const withBg = (frame: StudioFrame): StudioFrame => (background ? { ...frame, background } : frame);
   let midway: PlannedTile;
+  let midwayVfx: PlannedTile | undefined;
   if (walk) {
-    midway = {
-      label: 'Mid locomotion',
-      frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, ...(motionVfx ? { vfx: true } : {}) }),
-    };
+    if (motionVfx) {
+      midway = {
+        label: 'Mid locomotion (clean)',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, vfx: false }),
+      };
+      midwayVfx = {
+        label: 'Mid locomotion (VFX)',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, vfx: true }),
+      };
+    } else {
+      midway = {
+        label: 'Mid locomotion',
+        frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2 }),
+      };
+    }
   } else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
   else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
   let actionTile: PlannedTile;
@@ -117,7 +129,7 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
   const base: PlannedTile[] = [
     { label: '3/4 front', frame: withBg({ view: '34-front' }) },
     { label: '3/4 back', frame: withBg({ view: '34-back' }) },
-    midway, actionTile,
+    midway, ...(midwayVfx ? [midwayVfx] : []), actionTile,
   ];
   for (const spec of extraSpecs) base.push(parseExtraTile(spec, info, vfx, background));
   return base;

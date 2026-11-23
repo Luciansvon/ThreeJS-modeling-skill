@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { partsToGlb, readGlb, glbGates, faceNormal, type Parts } from './glb';
+import { parseGlbHeader } from './asset-builder';
 import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
 
@@ -265,7 +266,110 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
     assert.equal(parseResult(rg8Fail.stdout)?.gates?.find((g) => g.gate === 'RG8 topology')?.pass, false);
     const rg8OpenOk = runRigged(openSheet, 'sheet-open-ok.glb', '--open', 'flag_sheet');
     assert.equal(rg8OpenOk.gates?.find((g) => g.gate === 'RG8 topology')?.pass, true);
-    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS, RG8 topology');
+
+    // 8. v4.6 userData bloat prevention + RG1 JSON guard + RG9 posed skin integrity
+    const bloatMod = 'bloatRig.ts';
+    writeFileSync(join(out, bloatMod), `
+      export function buildBloat(_p: unknown, THREE: any) {
+        const root = new THREE.Group();
+        const rootBone = new THREE.Bone(); rootBone.name = 'hips';
+        const child = new THREE.Bone(); child.name = 'head'; child.position.set(0, 1, 0);
+        rootBone.add(child);
+        const geo = new THREE.BoxGeometry(0.4, 0.8, 0.4);
+        const count = geo.attributes.position.count;
+        const si = new Uint16Array(count * 4), sw = new Float32Array(count * 4);
+        for (let i = 0; i < count; i++) sw[i * 4] = 1;
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+        mesh.name = 'body';
+        mesh.add(rootBone);
+        mesh.bind(new THREE.Skeleton([rootBone, child]));
+        root.add(mesh);
+        const clip = new THREE.AnimationClip('Nod', 1, [
+          new THREE.QuaternionKeyframeTrack('head.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.25, 0, 0, 0.968, 0, 0, 0, 1]),
+        ]);
+        // Simulate common leak: attaching live bones & animations onto userData
+        root.userData = { bones: { hips: rootBone, head: child }, animations: [clip], tag: 'clean-note' };
+        return { root, animations: [clip] };
+      }
+    `);
+    const antiBloat = runRigged(bloatMod, 'anti-bloat.glb');
+    const diskBloat = readFileSync(join(out, 'anti-bloat.glb'));
+    const bloatHeader = parseGlbHeader(diskBloat);
+    assert.ok(bloatHeader.jsonBytes < 16 * 1024, `expected stripped JSON chunk < 16 KB, got ${bloatHeader.jsonBytes}`);
+    assert.equal(antiBloat.gates?.find((g) => g.gate === 'RG1 written')?.pass, true);
+    const reloadedBloat = await new GLTFLoader().parseAsync(diskBloat.buffer.slice(diskBloat.byteOffset, diskBloat.byteOffset + diskBloat.byteLength), '');
+    const bloatRawJson = diskBloat.toString('utf8', 20, 20 + bloatHeader.jsonBytes);
+    assert.match(bloatRawJson, /"clean-note"/);
+    assert.doesNotMatch(bloatRawJson, /"bones":\{/);
+    assert.equal(reloadedBloat.scene.userData.bones, undefined);
+
+    // RG9 fails on cell-split skinned vertices that rip apart under rotation, passes on shared world weights
+    const tearMod = 'tearTail.ts';
+    writeFileSync(join(out, tearMod), `
+      import * as THREE from 'three';
+      export function buildTear(p: { broken?: boolean }) {
+        const root = new THREE.Group();
+        const b0 = new THREE.Bone(); b0.name = 'tail0'; b0.position.set(0, 0.5, 0);
+        const b1 = new THREE.Bone(); b1.name = 'tail1'; b1.position.set(0, 0, -0.5);
+        b0.add(b1);
+        // Two closed boxes meeting seamlessly at z = -0.5
+        const mkBox = (z0: number, z1: number) => new THREE.BoxGeometry(0.2, 0.2, z1 - z0).translate(0, 0.5, (z0 + z1) / 2);
+        const gA = mkBox(-0.5, 0), gB = mkBox(-1.0, -0.5);
+        const merge = (a: any, b: any) => {
+          const pA = a.attributes.position.array, pB = b.attributes.position.array;
+          const nA = a.attributes.normal.array, nB = b.attributes.normal.array;
+          const pos = new Float32Array(pA.length + pB.length); pos.set(pA, 0); pos.set(pB, pA.length);
+          const nor = new Float32Array(nA.length + nB.length); nor.set(nA, 0); nor.set(nB, nA.length);
+          const nonIdx = new THREE.BufferGeometry();
+          const ia = a.index.array, ib = b.index.array;
+          const uPos = [], uNor = [];
+          for (let i = 0; i < ia.length; i++) { const k = ia[i] * 3; uPos.push(pA[k], pA[k+1], pA[k+2]); uNor.push(nA[k], nA[k+1], nA[k+2]); }
+          for (let i = 0; i < ib.length; i++) { const k = ib[i] * 3; uPos.push(pB[k], pB[k+1], pB[k+2]); uNor.push(nB[k], nB[k+1], nB[k+2]); }
+          nonIdx.setAttribute('position', new THREE.Float32BufferAttribute(uPos, 3));
+          nonIdx.setAttribute('normal', new THREE.Float32BufferAttribute(uNor, 3));
+          return nonIdx;
+        };
+        const geo = merge(gA, gB);
+        const pos = geo.attributes.position;
+        const si = new Uint16Array(pos.count * 4), sw = new Float32Array(pos.count * 4);
+        const splitIdx = gA.index.count;
+        for (let i = 0; i < pos.count; i++) {
+          const wz = pos.getZ(i);
+          if (p.broken) {
+            // Broken per-segment weighting: gA corners at z=-0.5 get 100% b0 while gB corners at z=-0.5 get 100% b1!
+            si[i * 4] = i < splitIdx ? 0 : 1;
+            sw[i * 4] = 1;
+          } else {
+            const w1 = wz < -0.55 ? 1 : wz > -0.45 ? 0 : (-0.45 - wz) / 0.1;
+            si[i * 4] = 0; si[i * 4 + 1] = 1;
+            sw[i * 4] = 1 - w1; sw[i * 4 + 1] = w1;
+          }
+        }
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        const skin = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+        skin.name = 'tail';
+        skin.add(b0);
+        skin.bind(new THREE.Skeleton([b0, b1]));
+        root.add(skin);
+        const fly = new THREE.AnimationClip('Fly', 1, [
+          new THREE.QuaternionKeyframeTrack('tail1.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.866, 0, 0, 0.5, 0, 0, 0, 1]),
+        ]);
+        return { root, animations: [fly] };
+      }
+    `);
+    const tearFail = spawnTsx(rigCli, ['--module', tearMod, '--params', '{"broken":true}', '--open', 'tail', '--out', 'tear-fail.glb'], { cwd: out, env });
+    assert.equal(tearFail.status, 2, tearFail.stdout + tearFail.stderr);
+    const tearJson = parseResult(tearFail.stdout)!;
+    const rg9Fail = tearJson.gates?.find((g) => g.gate === 'RG9 posed skin integrity');
+    assert.equal(rg9Fail?.pass, false, `expected RG9 failure on torn tail seam, got: ${JSON.stringify(tearJson.gates)}`);
+    assert.match(String(rg9Fail?.value), /Fly@/);
+
+    const tearOk = runRigged(tearMod, 'tear-ok.glb', '--params', '{"broken":false}', '--open', 'tail');
+    assert.equal(tearOk.gates?.find((g) => g.gate === 'RG9 posed skin integrity')?.pass, true);
+    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS, RG8 topology, RG1 bloat guard, RG9 posed skin integrity');
   } else {
     console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
   }

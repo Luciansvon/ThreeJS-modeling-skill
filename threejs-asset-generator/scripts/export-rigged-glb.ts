@@ -5,7 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { countScene, extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
+import { countScene, extractObjectParts, parseGlbHeader, sanitizeUserDataForGltf, selectBuilder, unpackAsset } from './asset-builder';
 import { clipMotion, type ClipMotion, type NodeMotion } from './clip-motion';
 import { qaGates } from './qacheck';
 import { emit, registerThreeHook, type Gate } from './result';
@@ -35,10 +35,12 @@ const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && 
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
 
 const modFile = opt('module'), outFile = opt('out');
-if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] --out asset.glb');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] [--max-json-kb N] --out asset.glb');
 const staticClipsList = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const staticClips = new Set(staticClipsList);
 const openList = opt('open')?.split(',').map((s) => s.trim()).filter(Boolean);
+const maxJsonKb = opt('max-json-kb') !== undefined ? Number(opt('max-json-kb')) : 512;
+if (!Number.isFinite(maxJsonKb) || maxJsonKb <= 0) fail('--max-json-kb needs a positive number');
 let params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
@@ -71,7 +73,13 @@ const before = countScene(root);
 const outPath = resolve(outFile);
 let diskBytes: Buffer, reloaded: any;
 try {
-  const buf: ArrayBuffer = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  const restoreUserData = sanitizeUserDataForGltf(root);
+  let buf: ArrayBuffer;
+  try {
+    buf = await new GLTFExporter().parseAsync(root, { binary: true, animations, onlyVisible: true });
+  } finally {
+    restoreUserData();
+  }
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, Buffer.from(buf));
   diskBytes = readFileSync(outPath);
@@ -81,11 +89,20 @@ try {
   fail(`cannot write or re-open ${outPath}: ${(e as Error).message}`);
 }
 const after = countScene(reloaded.scene);
+const header = parseGlbHeader(diskBytes);
+const jsonLimitBytes = maxJsonKb * 1024;
 const inClips = animations.map((c: any) => c.name);
 const outClips = (reloaded.animations ?? []).map((c: any) => c.name);
 
 const gates: Gate[] = [
-  { gate: 'RG1 written', value: `${diskBytes.byteLength} bytes (${(diskBytes.byteLength / 1024).toFixed(1)} KB)`, pass: diskBytes.byteLength > 12, hint: 'GLTFExporter produced an empty buffer' },
+  {
+    gate: 'RG1 written',
+    value: `${diskBytes.byteLength} bytes (${(diskBytes.byteLength / 1024).toFixed(1)} KB; JSON ${(header.jsonBytes / 1024).toFixed(1)} KB)`,
+    pass: diskBytes.byteLength > 12 && header.jsonBytes > 0 && header.jsonBytes <= jsonLimitBytes,
+    hint: header.jsonBytes > jsonLimitBytes
+      ? `glTF JSON chunk ${(header.jsonBytes / 1024).toFixed(1)} KB exceeds ${maxJsonKb} KB (keep Three.js objects/bones out of userData)`
+      : 'GLTFExporter produced an empty or malformed buffer',
+  },
   { gate: 'RG2 triangles', value: `${before.tris} in -> ${after.tris} out`, pass: before.tris > 0 && before.tris === after.tris, hint: 'triangle count changed across GLTFExporter -> GLTFLoader round-trip' },
   { gate: 'RG3 meshes', value: `${before.meshes} in -> ${after.meshes} out (${after.vertexColorMeshes} vertex-colored)`, pass: before.meshes === after.meshes && before.vertexColorMeshes === after.vertexColorMeshes, hint: 'mesh or vertex color attributes lost on export' },
   { gate: 'RG4 clips', value: `${inClips.length} in -> ${outClips.length} out [${outClips.join(', ')}]`, pass: inClips.length === outClips.length && inClips.every((n: string, i: number) => outClips[i] === n), hint: 'animation clips missing or renamed during export' },
@@ -190,6 +207,120 @@ try {
   });
 }
 
+const reloadedSkinned: any[] = [];
+reloaded.scene.traverseVisible((obj: any) => {
+  if (obj.isSkinnedMesh && obj.geometry?.attributes?.position && obj.geometry?.attributes?.skinIndex && obj.geometry?.attributes?.skinWeight) {
+    reloadedSkinned.push(obj);
+  }
+});
+if (reloadedSkinned.length > 0 && (reloaded.animations?.length ?? 0) > 0) {
+  reloaded.scene.updateMatrixWorld(true);
+  const restDiag = Math.max(0.001, new THREE.Box3().setFromObject(reloaded.scene, true).getSize(new THREE.Vector3()).length());
+  const maxTearTol = Math.max(0.015, restDiag * 0.012);
+  const rootBones = new Set<string>();
+  reloaded.scene.traverse((obj: any) => {
+    if (obj.isBone && !obj.parent?.isBone && obj.name) rootBones.add(obj.name);
+  });
+
+  type SeamRep = { meshIdx: number; vi: number; sigKey: string; nonRootBones: string[] };
+  const buckets = new Map<string, SeamRep[]>();
+  const bucketSeen = new Map<string, Set<string>>();
+  const tmpV = new THREE.Vector3();
+  for (let meshIdx = 0; meshIdx < reloadedSkinned.length; meshIdx++) {
+    const mesh = reloadedSkinned[meshIdx];
+    const pos = mesh.geometry.getAttribute('position');
+    const si = mesh.geometry.getAttribute('skinIndex');
+    const sw = mesh.geometry.getAttribute('skinWeight');
+    const skelBones: any[] = mesh.skeleton?.bones ?? [];
+    for (let vi = 0; vi < pos.count; vi++) {
+      const merged = new Map<string, number>();
+      const bIdx = [si.getX(vi), si.getY(vi), si.getZ(vi), si.getW(vi)];
+      const bWt = [sw.getX(vi), sw.getY(vi), sw.getZ(vi), sw.getW(vi)];
+      for (let k = 0; k < 4; k++) {
+        const w = Math.round(bWt[k] * 1000);
+        if (w <= 0) continue;
+        const bName = skelBones[bIdx[k]]?.name ?? `#${bIdx[k]}`;
+        merged.set(bName, (merged.get(bName) ?? 0) + w);
+      }
+      const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      const sigKey = sorted.map(([b, w]) => `${b}:${w}`).join(',');
+      tmpV.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+      const rk = `${Math.round(tmpV.x * 1000)},${Math.round(tmpV.y * 1000)},${Math.round(tmpV.z * 1000)}`;
+      let seen = bucketSeen.get(rk);
+      if (!seen) bucketSeen.set(rk, (seen = new Set()));
+      const dedupKey = `${meshIdx}|${sigKey}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      let list = buckets.get(rk);
+      if (!list) buckets.set(rk, (list = []));
+      list.push({ meshIdx, vi, sigKey, nonRootBones: sorted.map(([b]) => b).filter((b) => !rootBones.has(b)) });
+    }
+  }
+
+  const seamPairs: Array<{ a: SeamRep; b: SeamRep }> = [];
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        if (a.meshIdx === b.meshIdx) {
+          if (a.sigKey !== b.sigKey) seamPairs.push({ a, b });
+        } else if (a.nonRootBones.some((bn) => b.nonRootBones.includes(bn))) {
+          seamPairs.push({ a, b });
+        }
+      }
+    }
+  }
+
+  let worstDist = 0;
+  let worstInfo = '';
+  if (seamPairs.length > 0) {
+    const mixer = new THREE.AnimationMixer(reloaded.scene);
+    const vA = new THREE.Vector3(), vB = new THREE.Vector3();
+    for (const clip of reloaded.animations) {
+      const dur = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+      const times = new Set<number>([0, dur * 0.25, dur * 0.5, dur * 0.75, dur]);
+      let extraKeys = 0;
+      for (const tr of clip.tracks) {
+        if (extraKeys >= 3) break;
+        for (let i = 0; i < tr.times.length && extraKeys < 3; i++) {
+          const t = tr.times[i];
+          if (t > 0 && t < dur) { times.add(t); extraKeys++; }
+        }
+      }
+      const action = mixer.clipAction(clip).setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+      for (const t of [...times].sort((a, b) => a - b)) {
+        mixer.setTime(t);
+        reloaded.scene.updateMatrixWorld(true);
+        for (const { a, b } of seamPairs) {
+          const meshA = reloadedSkinned[a.meshIdx], meshB = reloadedSkinned[b.meshIdx];
+          meshA.getVertexPosition(a.vi, vA).applyMatrix4(meshA.matrixWorld);
+          meshB.getVertexPosition(b.vi, vB).applyMatrix4(meshB.matrixWorld);
+          const d = vA.distanceTo(vB);
+          if (d > worstDist) {
+            worstDist = d;
+            worstInfo = `${clip.name}@${t.toFixed(2)}s (${meshA.name || 'skin'}/${meshB.name || 'skin'})`;
+          }
+        }
+      }
+      action.stop();
+    }
+  }
+  const rg9Pass = worstDist <= maxTearTol;
+  gates.push({
+    gate: 'RG9 posed skin integrity',
+    value: seamPairs.length === 0
+      ? `0 conflicting seam weights across ${reloadedSkinned.length} SkinnedMesh(es)`
+      : rg9Pass
+        ? `max seam gap ${worstDist.toFixed(4)}m <= ${maxTearTol.toFixed(4)}m across ${seamPairs.length} pair(s)`
+        : `skin tear ${worstDist.toFixed(4)}m > ${maxTearTol.toFixed(4)}m at ${worstInfo}`,
+    pass: rg9Pass,
+    hint: 'use shared world-corner skin weights (worldVertexT or attachWorldSkinWeights) and unify multi-part skinned geometry per material so posed bends never tear apart',
+  });
+}
+
 const unverified = ['Visual appearance, lighting, and target-engine import (e.g. Blender / Roblox Studio) are not tested by headless GLTFLoader parse'];
 console.log(gates.map((g) => `${g.pass ? 'PASS' : 'FAIL'}  ${g.gate}: ${g.value}${g.pass ? '' : '  -> ' + g.hint}`).join('\n'));
 for (const [label, list] of [['source', sourceMotion], ['reloaded', reloadedMotion]] as const) {
@@ -208,7 +339,7 @@ console.log(`wrote ${outPath}`);
 console.log(`UNVERIFIED: ${unverified.join('; ')}`);
 const ok = gates.every((g) => g.pass);
 process.exit(emit({
-  tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, before, after, clips: outClips,
+  tool: 'export-rigged-glb', ok, out: outPath, bytes: diskBytes.byteLength, jsonBytes: header.jsonBytes, before, after, clips: outClips,
   staticClips: staticClipsList,
   ...(animations.length ? { motion: { source: sourceMotion, reloaded: reloadedMotion } } : {}),
   gates, unverified,

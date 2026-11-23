@@ -9,6 +9,10 @@ Scripts (run them, do not read them): `scripts/rig-check.ts`; library `scripts/r
 ## §18. Run rig-check
 
 ```
+# Directly on a (params, THREE) builder module (extracts hierarchy, tracks, and clipMinY automatically):
+npx tsx scripts/rig-check.ts --module ./myAsset.ts [--export buildAsset] [--params '{"seed":1}'] [--kind hero|creature|vehicle|building|prop] [--motion in-place|free] [--static-clips a,b]
+
+# Or from standalone JSON metadata:
 npx tsx scripts/rig-check.ts --meta char_metadata.json [--kind hero|creature|vehicle|building|prop] [--max-pivots N] [--motion in-place|free] [--static-clips a,b] [--allow-refpose]
 ```
 

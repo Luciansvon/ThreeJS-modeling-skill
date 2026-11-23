@@ -119,7 +119,7 @@ Code: `src/params.ts`. API:
 
 ## 13. Checklist (tick per asset, do not ship pre-ticked)
 
-Run `qa-asset.ts --module ./asset.ts --grounded` directly on pure kernels OR `(params, THREE)` builders (`tris.json` optional). Add `--symmetric` for intended symmetry. Never run inline `npx tsx -e` in Windows PowerShell (write a `.ts` script instead to prevent shell hangs). Inspect `review.png` for geometry and colored `capture-studio.ts` renders for appearance.
+Run `qa-asset.ts --module ./asset.ts --grounded`, `mesh-stats.ts --module`, and `rig-check.ts --module` directly on pure kernels OR `(params, THREE)` builders (`tris.json` optional). Add `--symmetric` for intended symmetry. Never run inline `npx tsx -e` in Windows PowerShell (write a `.ts` script instead to prevent shell hangs). Inspect `review.png` for geometry and colored `capture-studio.ts` renders for appearance.
 
 On revision, check what changed using the least expensive evidence that can reveal a problem. Run applicable checks on the delivered build. Keep detailed logs with the asset and summarize the observed result and material gaps. If a tool is unavailable, continue independent work and report any unresolved requested check at handoff. See `references/qa-gates.md` and, for previews, `references/studio-preview.md`.
 
@@ -136,7 +136,7 @@ Geometry and look
 - [ ] Axes follow §0; faces described by axis; right = −X when forward = +Z
 - [ ] Custom geometry has positive `signedVolume`, also after mirroring; `DoubleSide` only on zero-thickness sheets
 - [ ] Mirrored parts go through `add()`/`addTris`, `mirrorTris`, or `VoxelGrid.mirrorX()` (`src/voxel.ts`), never a bare negative-scale `applyMatrix4`
-- [ ] Normals and linear vertex colors (`new THREE.Color(hex)`, never `/ 255`) preserve contrast in the reloaded asset; use `bakeFlat` and `paint` for faceted parts.
+- [ ] Normals, default Corner Voxel AO (`src/voxel.ts`), and sRGB colors (`new THREE.Color(hex)`, `shadeHexSRGB`, never `/ 255` or linear `offsetHSL` on dark shades) preserve contrast; use `bakeFlat` and `paint` for faceted parts.
 - [ ] Jitter is applied before `add()`, seam-welded, with bounding volumes recomputed
 - [ ] Metal parts have an environment map or a lowered `metalness`
 - [ ] Overlays use a constant-distance inset and a small lift against z-fighting
@@ -205,7 +205,7 @@ Write `ref-spec.md`, cache `ref.json` (`--grid auto` handles uneven turnarounds,
 
 ## 16. GLB file (when the user wants a `.glb`)
 
-For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`) to verify Q1–Q5 and E1–E6. When retaining vertex colors, materials, UVs, skins, or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--open a,b] [--static-clips a,b]` to verify `RG1–RG8` (including reloaded GLB Q1–Q4 topology and per-clip motion parity, `references/glb-export.md`).
+For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`) to verify Q1–Q5 and E1–E6. When retaining vertex colors, materials, UVs, skins, or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--open a,b] [--static-clips a,b]` to verify `RG1–RG9` (JSON bloat guard, reloaded GLB Q1–Q4, per-clip motion, and posed skin integrity, `references/glb-export.md`).
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
@@ -213,7 +213,7 @@ Choose a budget from the asset's delivery target. A browser used to inspect a mo
 
 ## 18. Rig, clip and expression check (when the asset has pivots, clips or expression swaps)
 
-Run `npx tsx scripts/rig-check.ts --meta char_metadata.json --kind creature --motion free [--static-clips a,b]` (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping/lunging sway) to verify R1 hierarchy · R2 rest-pose · R3 clips (excluding `RefPose`) · R4 tracks & drift (rejects Euler `.rotation`) · R5 static expression mapping · R6 slide & floor (`qa.clipMinY`) clearance · R7 clip motion. Use Fast Preview for exported textures and clip playback, Full Preview for rig and expression inspection, and the target engine to verify imports. Details: `references/rig-check.md` and `references/studio-preview.md`.
+Run `npx tsx scripts/rig-check.ts --module ./asset.ts --kind creature --motion free [--static-clips a,b]` (or `--meta char_metadata.json`) (`--kind` sets category bone limits; `--motion in-place` enforces 0m X/Z drift for locomotion loops while `free` allows hovering/leaping sway) to verify R1–R7 (hierarchy, rest, clips, tracks/drift, expressions, clearance, per-clip motion). Use Fast/Full Preview (`--bloom` when emissive) for visual playback (`references/rig-check.md`, `references/studio-preview.md`).
 ~~~
 
 ## references/composite.md
@@ -756,7 +756,7 @@ Mix these treatments where the brief calls for it. `PartBuilder` bakes flat norm
 
 **Materials.** Match the reference palette and response under delivery lighting. Set roughness by finish. Use metallic response for exposed metal and an environment when it needs reflections. Give transparent glass its own material and check opacity and sorting from the relevant views. Use `emissive` for visible glow and add actual lighting when the brief calls for a light source.
 
-**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly.
+**Color management.** `new THREE.Color('#2d6a4f')` reads hex as sRGB and stores linear values. Vertex-color attributes are read as linear, so copy `c.r, c.g, c.b` directly. **Never shift lightness directly in Three.js linear HSL (`col.offsetHSL`)** on dark tones (`l < 0.1`): linear shifts blow dark shades up to pastel/lavender—use `shadeHexSRGB(hex, delta, satScale)` from `src/voxel.ts` instead.
 
 ### Choose the texture path
 
@@ -833,13 +833,15 @@ The pinned base is measured from the geometry's own bounding box (primitives are
 
 For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel.ts`) so interior faces are culled **only within the same material** (preventing open-edge holes where emissive eyes or markings meet the body), duplicate diagonal 2x2 pinches are bridged symmetrically, and vertices convert hex colors safely via `new THREE.Color(hex)` (never `/ 255`):
 
-- `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
+- `createVoxelMaterials(THREE, { roughness?, metalness?, glowToneMapped? })` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls), plus `createHdrGlowMaterial(THREE, hex, emissiveIntensity)` for multi-tier HDR bloom accents (`emissiveIntensity > 1` with Studio **Bloom**).
+- `shadeHexSRGB(hex, lightnessDelta, satScale?)` shifts shades in perceptual sRGB HSL so deep dark armor never turns pastel/lavender under `offsetHSL`.
 - `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
-- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
-- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { vertexT, greedy? })` / `.buildMeshes(THREE, materials, { greedy? })`
-- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
+- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.fillSuperEllipsoid(..., { power })` / `.fillTube(p0, p1, r0, r1, ...)` / `.fillCubicBezier(p0, p1, p2, p3, r0, r1, ...)` / `.mirrorX()`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts(by?, { greedy? })` / `.buildGeometries(THREE, { worldVertexT, ao?, aoLevels?, dirShade?, glowBoost?, greedy? })` / `.buildMeshes(THREE, materials, { ao?, glowBoost?, greedy? })`
+- **Automatic Corner Voxel AO + directional shading (`ao: true` default):** `buildGeometries` and `buildMeshes` automatically bake 3-neighbor corner AO (`[1.0, 0.89, 0.78, 0.66]`) and subtle directional face shading (`0.85..1.00`) onto non-glow buckets at **0 extra triangles** (auto-disabled for `glow`/`emissive` buckets and `greedy: true`). Pass `{ ao: false }` only if exact unshaded linear colors are needed, and `glowBoost: 1.6` when driving selective Studio Bloom on vertex-colored `glow` parts.
+- **Greedy meshing option (`greedy: true`, default `false`):** Merges adjacent coplanar same-color voxel faces to cut flat triangle counts by ~40–60% for mobile or multi-character runtime budgets while keeping bounds and stepped corners intact (skipped automatically when `{ worldVertexT }` / `{ vertexT }` skin weights are passed; keep `greedy: false` when running strict closed-edge weld QA `Q4`/`RG8` because merged quads can touch along T-junctions).
 
-For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.
+For skinned voxel tails or necks, emit **one** continuous `SkinnedMesh` per material in a straight `-Z` bind pose and bind via `worldVertexT` (never per-`cell` weights!) or `attachWorldSkinWeights(THREE, geo, boneOrder, sampler)` (`src/voxel.ts`) so coincident corners share bit-identical skin weights and pass `RG9 posed skin integrity` with zero tearing under extreme rotation.
 ~~~
 
 ## references/rigging-biped.md
@@ -866,7 +868,10 @@ Rules:
 - Mirror with `mirrorBone` for the pivot and a mirror matrix for the parts. The mirror matrix is applied before the pivot shift inside `RigBuilder`, and `PartBuilder` restores the winding (SKILL.md §6.1).
 - Ground in rest pose, using `groundAsset(rig)` for a rigid build. Keep skinned ground offsets on the asset wrapper. Author foot IK, hovering elevation, or hip bob in the clips.
 - **Exported rotation tracks:** Always author exported rotations with `QuaternionKeyframeTrack` targeting `<nodeName>.quaternion` (`makeClip` and `bakeClip30fps` do this automatically). `GLTFExporter` only exports `position`, `quaternion`, `scale`, and `morphTargetInfluences`; `.rotation` or `.rotation[x]` scalar Euler tracks animate in preview but are dropped during GLB export while the clip name remains, leaving the model frozen in its rest pose. Give every animated pivot a unique name satisfying `THREE.PropertyBinding.sanitizeNodeName(name) === name` that resolves uniquely from the root via `THREE.PropertyBinding.findNode`.
-- **Hinged voxel parts:** For rigged or hinged voxel builds, merge blocks and cull hidden interior faces **only within the same rigid part on the same pivot**. Keep exterior faces where adjacent parts belong to different pivots so bending joints never open hollow gaps, and inspect seams at peak clip rotation.
+- **Hinged & skinned voxel parts (anti-gap & anti-shred rules):**
+  - Keep **>= 2 voxels of interior socket overlap** across rigid voxel joints (neck-to-torso, jaw-to-head, shoulder, hip, wing root) so pitching or head nodding never exposes a hollow gap. Merge/cull hidden interior faces only within each rigid pivot+material bucket.
+  - For skinned voxel tails, necks, or capes: author **one unified `SkinnedMesh` per material** in an uncurled/neutral bind pose (`-Z`), NEVER split into multiple loose sub-meshes curled tight and then forced straight `~170°` in `Fly`, and assign weights via `worldVertexT` or `attachWorldSkinWeights` (`src/voxel.ts`) keyed strictly by world vertex coordinates `(wx, wy, wz)` — never per-cell indices — so vertices never rip apart ("kropos") during playback (`RG9 posed skin integrity`).
+  - **Wing spread sign check (`+Z` forward, `+Y` up, `+X` left wing):** In `Fly` clips, rotate wing roots **outward** into the screen (`-Y` yaw + raised upward roll `|z| >= 0.9 rad` on `+X` wing, mirrored cleanly on `-X`) rather than positive yaw that folds membranes inward behind `-Z` like hanging curtains. Verify wing spread & uncurled trailing tail visually from `3/4` and `Side` studio captures.
 
 ### Reference pose vs natural locomotion posture (all creature archetypes)
 
@@ -953,7 +958,7 @@ const walk = makeClip('walk', 1, {
 const mixer = new THREE.AnimationMixer(root); mixer.clipAction(walk).play();   // in the render loop: mixer.update(dt)
 ```
 
-Pose without a clip (nod, wave, idle): set `root.userData.bones.head.rotation.x = 0.2` directly. For a static pose baked into the asset, apply it once after `build` and keep it deterministic (a pure function of the params).
+Pose without a clip (nod, wave, idle): keep live bone references in the builder's JS return (`const { root, animations, bones } = buildAsset(...)`) and set `bones.head.rotation.x = 0.2` directly — **do not store live `bones`, `anchors`, or `AnimationClip` graphs on `root.userData`** (that leaks quadratic MBs of glTF `extras` bloat; `export-rigged-glb.ts` strips runtime `userData` and `RG1` fails oversized JSON chunks). For a static pose baked into the asset, apply it once after `build` and keep it deterministic.
 
 ### Facial motion and root isolation
 
@@ -988,7 +993,7 @@ For a dragon, snake, fish, or tentacle, author the bind pose with a tail extendi
 - `buildBoneHierarchy(specs)` returns `rootBone`, `bones` by name, and `boneOrder` in input order. Each spec has `name`, optional `parent`, and `worldPos` in asset space. List a single root and put each parent before its children. Use `boneOrder` to construct the `THREE.Skeleton`.
 - `attachCurveSkinWeights(geometry, boneOrder, chainBoneNames, { vertexT, boneT })` assigns up to two adjacent bones per vertex. Record one `vertexT` per position entry as you generate the rings (for pure kernel tubes built with `tubeTrisWithT` in `src/organic.ts`, use its returned `{ tris, vertexT }` directly instead of guessing nearest bones in Euclidean space). Use the same normalized curve parameter for the increasing `boneT` values. Duplicated vertices from seams, caps, or flat shading keep their authored `t`. Close folds can place widely separated values of `t` at the same point in space.
 - `bakeClip30fps(name, duration, bones, evalPose, { fps, eulerOrder, loop })` defaults to 30 fps, `YXZ`, and `loop = true`. It samples at `frame / fps` and adds the clip endpoint. The evaluator receives `0 <= u < 1` (and `u = 1` when `loop: false` for one-shot or chained clips) and can return `rotations` (local Euler deltas in radians), `scales` (absolute local values), and `rootOffset` (local offset from the root rest position). Missing channels use rest values. Looping clips reuse the first pose at the last key; pass `loop: false` so `evalPose(1)` authors the final key. Quaternion signs follow the shortest path between frames, so a full turn can close with opposite signs representing the same orientation.
-- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata`. Clips can also come from `root.userData.animations` or `root.animations`. Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
+- `extractQaArtifacts({ root, bones, animations, motionMode })` returns named `tris`, `meshMeta`, and `rigMetadata` directly (or run `npx tsx scripts/rig-check.ts --module ./asset.ts` and `scripts/mesh-stats.ts --module ./asset.ts` without writing temporary extraction scripts). Return `{ root, animations }` directly (`animations` alongside `root`, not bloated inside `root.userData`). Use `motionMode: 'free'` for intentional X/Z root motion. The default is `'in-place'`.
 
 Build, bind, ground, and extract a simple tail. This tube uses `getPointAt()` so its ring indices give the authored arc-length parameters. Save the example alongside `src/skinnedRig.ts` to run it.
 
@@ -1022,17 +1027,16 @@ const swim = bakeClip30fps('Swim', 1.2, bones, (u) => ({
   rotations: { tailBase: [0, 0.28 * Math.sin(2 * Math.PI * u), 0], tailMid: [0, 0.44 * Math.sin(2 * Math.PI * u - 0.55), 0] },
   rootOffset: [0, 0, 0],
 }));
-root.userData.animations = [swim];
-const artifacts = extractQaArtifacts({ root, bones });
+const artifacts = extractQaArtifacts({ root, bones, animations: [swim] });
 for (const [name, data] of Object.entries(artifacts)) writeFileSync(`${name}.json`, JSON.stringify(data));
 ```
 
-Run the checks from the skill folder. The example tube has open ends, so pass `--open tail` only for that part.
+Run the checks directly against your `(params, THREE)` module (no manual `JSON` extraction needed) or from extracted artifacts:
 
 ```bash
-npx tsx scripts/qa-asset.ts --tris tris.json --open tail
-npx tsx scripts/mesh-stats.ts --tris tris.json --meta meshMeta.json --profile web --kind creature
-npx tsx scripts/rig-check.ts --meta rigMetadata.json --kind creature
+npx tsx scripts/qa-asset.ts --module ./asset.ts --open tail
+npx tsx scripts/mesh-stats.ts --module ./asset.ts --profile web --kind creature
+npx tsx scripts/rig-check.ts --module ./asset.ts --kind creature --motion free
 ```
 
 QA samples a detached copy in export space. Keep the asset's ground offset on its wrapper. Helper-built bones use their authored local positions with identity rest rotations and scales. Supply manually built bones in their rest pose. Extraction uses visible `Mesh` and `SkinnedMesh` triangles, including indexed geometry and material groups. Keep all skeleton bones under `root` and address their position, quaternion, or scale by unique bone name. Instanced or batched meshes and tracks on non-bone objects require separate QA. Mesh metadata uses the stats CLI's bone/material grouping and dimensions of loaded material textures. Floor clearance is the lowest transformed vertex from both rigid and skinned parts at 30 fps and at every clip key, including the endpoints. View deformations between samples in preview.
@@ -1115,30 +1119,30 @@ Contents: Mode comparison · Quick (Fast) mode · Balance mode · Quality mode �
 | **Reference inspection** | Once at intake (`ref-spec.md` + cache `regions` if provided) | Intake + `ref-compare` + **1 side-by-side reopen** with studio capture | Intake + `ref-compare` + **reopen side-by-side on every polish round** |
 | **Build & detail** | Full model, accurate proportions, bright emissive eyes/accents (`new THREE.Color(hex)`) | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
 | **Facial rig (iteration 1)** | Lightweight jaw + simple blink when face is prominent | **Automatic full facial rig from iteration 1** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` in closed sockets + `Idle` blinks & combat shifts) | Same full facial rig + nuanced gaze saccades & close-up `Face` preset polish inspect |
-| **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual & geometry polish pass after first render | **>= 2** visual polish passes until reference & pose read cleanly |
-| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (with `--lods` when relevant) |
+| **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual polish pass after first render (**cap `G2` IoU tuning at 1–2 checks**, accept soft `>= 0.65` on perspective refs when `G1`/`G4` pass) | **>= 2** visual polish passes until reference & pose read cleanly |
+| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts --module` | `Q1–Q10` + `mesh-stats.ts --module` (with `--lods` when relevant) |
 | **Color QC (`G3` & `G4`)** | **`G3` palette only** (`0` `G4` overhead; `--mode fast`) | `G3` + **`G4` Regional Color once** after materials (max 1 fix round) | `G3` + **`G4` Regional Color** + verify once after fix (no infinite loop) |
-| **Rig & GLB motion gates** | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) when GLB asked | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) | Full `R1–R7` + `RG1–RG8` evidence pre & post export |
-| **Locomotion posture check** | Side-view sanity check (`capture-studio.ts --motion-view side`) | Side-view + `--motion-vfx` / `--extras` across active clips | Dual dark+light multi-view checks for all 6 archetypes |
+| **Rig & GLB motion gates** | `rig-check.ts --module` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG9`) when GLB asked | `rig-check.ts --module` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG9`) | Full `R1–R7` + `RG1–RG9` evidence pre & post export |
+| **Locomotion posture check** | Side-view sanity check (`capture-studio.ts --motion-view side`) | Side-view + `--motion-vfx` (`clean` + `VFX` tiles) on dark bg | Dual `--background dark` + `light` multi-view checks |
 | **Runtime VFX & choreography** | Style-matched layered VFX & lively clips (no deliberate throttling) | Rich layered VFX, anchored positions, lively idle & movement | Full multi-layered VFX, nuanced secondary follow-through & contrast |
-| **Preview & captures** | `Fast` or `Full Preview` + **1** colored `capture-studio.ts` check | `studio_preview.html` + `capture-studio.ts` (`--vfx --motion-vfx`) | `studio_preview.html` + **both dark and light** `capture-studio.ts` sheets |
+| **Preview & captures** | `Fast` or `Full Preview` + **1** colored `capture-studio.ts` check | `studio_preview.html` + **1 dark** `capture-studio.ts` (`--vfx --motion-vfx`) | `studio_preview.html` + **both dark and light** `capture-studio.ts` sheets |
 
 ## Quick (Fast) mode
 
 Never deliberately degrade visuals into a crude blockout or weak dot VFX. **Quick** speeds up delivery by skipping multi-round polish loops and skipping `G4` regional color checks (`G3` only, zero `G4` overhead):
-1. Build the grounded, outward-wound asset with deterministic seed (`??`), clean manifold topology (`src/voxel.ts` for voxel builds), accurate `new THREE.Color(hex)` vertex/material colors, and natural creature locomotion posture (`references/rigging-biped.md`).
+1. Build the grounded, outward-wound asset with deterministic seed (`??`), clean manifold topology (`src/voxel.ts` with default Corner AO for voxel builds), accurate `new THREE.Color(hex)` / `shadeHexSRGB` colors, and natural creature locomotion posture (`references/rigging-biped.md`).
 2. Run `scripts/qa-asset.ts --module` (`Q1–Q4`, `Q6`, `review.png`) and fix any winding, open/duplicated edge, or grounding error.
-3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`) and run `scripts/rig-check.ts` + `scripts/export-rigged-glb.ts` (checks `RG1–RG8` including reloaded GLB topology).
-4. Pack the preview (`scripts/pack-studio.ts`) and run **1** colored `scripts/capture-studio.ts` check (never rely on `review.png` to judge real colors or VFX). Pass `--mode fast` if invoking `ref-compare.ts` so `G4` adds zero overhead.
+3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`), keep `{ root, animations }` free of `userData` bone/clip bloat, and run `scripts/rig-check.ts --module` + `scripts/export-rigged-glb.ts` (`RG1–RG9` including JSON bloat & posed skin integrity).
+4. Pack the preview (`scripts/pack-studio.ts --bloom` when emissive accents glow) and run **1** colored `scripts/capture-studio.ts` check (never rely on `review.png` to judge real colors or VFX). Pass `--mode fast` if invoking `ref-compare.ts` so `G4` adds zero overhead.
 
 ## Balance mode (recommended default)
 
-Use **Balance** for normal production deliverables:
+Use **Balance** for normal production deliverables (faster than `Quality` — target fewer passes and dark-only studio captures):
 1. Inspect the source reference once at intake (`references/reference-matching.md`), record `ref-spec.md`, note static turnaround poses, and extract/cache `ref.json` (including optional Semantic Color Mapping regions — never re-analyze unchanged references).
-2. Run geometry QA (`scripts/qa-asset.ts --module`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; fix only failing regions once).
-3. Author natural creature locomotion postures and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX matching the asset's visual style (`references/studio-preview.md`).
-4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG8`) when `.glb` is requested.
-5. Capture rendered studio views (`scripts/capture-studio.ts --vfx --motion-vfx --extras ...`), **reopen the source reference image side-by-side** with the sheet, execute 1 visual polish pass fixing any landmark, seam, posture, or VFX anchoring mismatch, and re-run affected gates.
+2. Run `scripts/qa-asset.ts --module`, `scripts/mesh-stats.ts --module`, and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; **cap `G2` IoU refinement at max 1–2 loops**, moving on cleanly when perspective sheets reach `>= 0.65` soft IoU alongside passing `G1`/`G2` aspect/`G4`).
+3. Author natural creature locomotion postures (`>= 2`-voxel joint overlap, unified `-Z` skinned tail, spread wings) and **automatic closed-socket facial pivots** (`eyeL/R`, `eyelidL/R`, `browL/R`, `lowerJawPivot` with natural `Idle` blinks/glances and combat shifts on expressive characters, `references/rigging-biped.md`), plus anchored stacked fluid/impact VFX (`references/studio-preview.md`).
+4. Run `scripts/rig-check.ts --module` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG9`) directly without writing glue metadata scripts.
+5. Capture rendered studio views (`scripts/capture-studio.ts --background dark --vfx --motion-vfx --extras ...`, which verifies both clean and VFX locomotion frames), **reopen the source reference image side-by-side** with the sheet, execute **1** targeted visual polish pass, and re-run only affected gates (skip redundant `--background light` sheets reserved for `Quality`).
 
 ## Quality mode
 

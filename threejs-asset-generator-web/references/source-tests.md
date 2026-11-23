@@ -704,7 +704,8 @@ console.log('SKINNED RIG OK (folded weights, YXZ motion, loop wrap, posed QA and
 // npx tsx src/voxel.test.ts
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { VoxelGrid, createVoxelMaterials } from './voxel';
+import { VoxelGrid, attachWorldSkinWeights, createHdrGlowMaterial, createVoxelMaterials, shadeHexSRGB } from './voxel';
+import { attachCurveSkinWeights, buildBoneHierarchy } from './skinnedRig';
 import { boundsOf, qaGates, signedVolume, triCount } from '../scripts/qacheck';
 
 // 1. Multi-material voxel inlay + deliberate diagonal pinch + exact X-mirroring ('even' axis)
@@ -730,17 +731,21 @@ import { boundsOf, qaGates, signedVolume, triCount } from '../scripts/qacheck';
   assert.deepEqual(failed, [], `expected all QA gates to pass after fixDiagonalPinches: ${JSON.stringify(failed)}`);
   assert.ok(afterParts.body && afterParts.glow, 'material buckets remain separated cleanly');
 
-  // Verify buildMeshes + sRGB->linear vertex colors + vertexT
+  // Verify buildMeshes + unshaded sRGB->linear vertex colors ({ ao: false }) + worldVertexT + default Corner AO
   const mats = createVoxelMaterials(THREE);
-  const built = v.buildMeshes(THREE, mats);
-  assert.ok(built.meshes.body.isMesh && built.meshes.glow.isMesh);
-  const colorAttr = built.meshes.body.geometry.getAttribute('color');
+  const unshaded = v.buildMeshes(THREE, mats, { ao: false });
+  assert.ok(unshaded.meshes.body.isMesh && unshaded.meshes.glow.isMesh);
+  const colorAttr = unshaded.meshes.body.geometry.getAttribute('color');
   const firstR = colorAttr.getX(0);
   const expectedLinearR = new THREE.Color('#262b74').r;
-  assert.ok(Math.abs(firstR - expectedLinearR) < 1e-4, `vertex color must be linear sRGB (${expectedLinearR}), not 0x26/255 (~0.149): got ${firstR}`);
+  assert.ok(Math.abs(firstR - expectedLinearR) < 1e-4, `vertex color with ao:false must match exact linear sRGB (${expectedLinearR}): got ${firstR}`);
   assert.ok(firstR < 0.04, `dark indigo linear red should stay dark (< 0.04), got ${firstR}`);
 
-  const geomsWithT = v.buildGeometries(THREE, { vertexT: (_x, y) => Math.max(0, Math.min(1, y / 0.4)) });
+  const defaultAo = v.buildMeshes(THREE, mats);
+  const aoQa = qaGates(defaultAo.parts, { symmetric: true, grounding: true });
+  assert.deepEqual(aoQa.gates.filter((g) => !g.pass), [], 'default Corner AO diagonal flip keeps Q1-Q6 cleanly passing');
+
+  const geomsWithT = v.buildGeometries(THREE, { worldVertexT: (_x, y) => Math.max(0, Math.min(1, y / 0.4)) });
   assert.equal(geomsWithT.body.vertexT?.length, geomsWithT.body.geometry.getAttribute('position').count);
 }
 
@@ -779,6 +784,113 @@ import { boundsOf, qaGates, signedVolume, triCount } from '../scripts/qacheck';
   const greedyBuilt = block.buildMeshes(THREE, mats, { greedy: true });
   assert.deepEqual(greedyBuilt.colors, stdBuilt.colors);
   assert.equal(greedyBuilt.meshes.body.geometry.getIndex()!.count / 3, greedyTris);
+}
+
+// 4. Corner Voxel AO darkens concave creases while keeping glow unshaded + glowBoost + HDR material helper
+{
+  const stepGrid = new VoxelGrid({ voxelSize: 0.1, symAxis: 'even' });
+  stepGrid.fillBox(0, 0, 0, 1, 0, 0, '#ffffff', 'body');
+  stepGrid.set(1, 1, 0, '#ffffff', 'body'); // protruding wall creates concave corner at x=1 on top of (0,0,0)
+  stepGrid.set(0, 0, 1, '#ff5500', 'glow');
+  const g = stepGrid.buildGeometries(THREE, { glowBoost: 1.6 });
+  const pos = g.body.geometry.getAttribute('position');
+  const nor = g.body.geometry.getAttribute('normal');
+  const col = g.body.geometry.getAttribute('color');
+  let outerTopL = -1, creaseTopL = -1;
+  for (let i = 0; i < pos.count; i++) {
+    if (nor.getY(i) > 0.9 && Math.abs(pos.getY(i) - 0.1) < 1e-5) {
+      if (Math.abs(pos.getX(i)) < 1e-5) outerTopL = col.getX(i);
+      if (Math.abs(pos.getX(i) - 0.1) < 1e-5) creaseTopL = col.getX(i);
+    }
+  }
+  assert.ok(outerTopL > 0.99 && creaseTopL > 0 && creaseTopL < outerTopL * 0.92, `expected AO crease darkening (${creaseTopL}) vs exposed (${outerTopL})`);
+
+  const glowCol = g.glow.geometry.getAttribute('color');
+  const expectedGlowR = new THREE.Color('#ff5500').r * 1.6;
+  assert.ok(Math.abs(glowCol.getX(0) - expectedGlowR) < 1e-4, 'glow bucket skips AO and scales by glowBoost');
+  const hdrMat = createHdrGlowMaterial(THREE, '#ff6600', 1.8);
+  assert.equal(hdrMat.emissiveIntensity, 1.8);
+  assert.equal(hdrMat.toneMapped, false);
+}
+
+// 5. Organic curve sculpting (fillSuperEllipsoid, fillTube, fillCubicBezier) passes Q1-Q6
+{
+  const org = new VoxelGrid({ voxelSize: 0.1, symAxis: 'even' });
+  org.fillSuperEllipsoid(0, 2, 0, 2.2, 2.2, 2.2, '#2d283e', { power: 2.8 });
+  org.fillCubicBezier([1, 4, 0], [3, 6, -1], [4, 9, -2], [3, 11, -1], 1.1, 0.4, '#8b7b6b');
+  org.fillTube([0, 2, -2], [0, 1, -7], 1.2, 0.5, '#2d283e');
+  org.mirrorX();
+  org.fixDiagonalPinches();
+  org.ground(0);
+  const res = qaGates(org.buildParts(), { symmetric: true, grounding: true });
+  assert.deepEqual(res.gates.filter((g) => !g.pass), [], JSON.stringify(res.gates));
+}
+
+// 6. shadeHexSRGB strictly darkens dark colors without lavender blowup
+{
+  const darkBase = '#1c1428';
+  const darker = shadeHexSRGB(darkBase, -0.07);
+  const baseC = new THREE.Color(darkBase), darkC = new THREE.Color(darker);
+  assert.ok(darkC.b <= baseC.b && darkC.g <= baseC.g && darkC.r <= baseC.r, `negative shift on ${darkBase} -> ${darker} must never brighten`);
+  const veryDark = '#050308';
+  const deeper = shadeHexSRGB(veryDark, -0.1);
+  assert.ok(new THREE.Color(deeper).b <= new THREE.Color(veryDark).b, `ultra-dark ${veryDark} -> ${deeper} must never jump brighter`);
+  const lighter = shadeHexSRGB(darkBase, 0.1);
+  assert.ok(new THREE.Color(lighter).b > baseC.b && new THREE.Color(lighter).b < 0.25, `positive shift on ${darkBase} -> ${lighter} stays controlled`);
+}
+
+// 7. World-corner skinning (worldVertexT + attachWorldSkinWeights) stays zero-tear under 150-degree bend
+{
+  const tail = new VoxelGrid({ voxelSize: 0.1, symAxis: 'odd' });
+  tail.fillBox(-1, 0, -6, 1, 1, 0, '#2a2238', 'body');
+  tail.fixDiagonalPinches();
+  const { rootBone, bones, boneOrder } = buildBoneHierarchy([
+    { name: 'root', worldPos: [0, 0.1, 0.05] },
+    { name: 'mid', parent: 'root', worldPos: [0, 0.1, -0.25] },
+    { name: 'tip', parent: 'mid', worldPos: [0, 0.1, -0.55] },
+  ]);
+  const built = tail.buildGeometries(THREE, {
+    ao: false,
+    worldVertexT: (_wx, _wy, wz) => Math.max(0, Math.min(1, (0.05 - wz) / 0.7)),
+  });
+  attachCurveSkinWeights(built.body.geometry, boneOrder, ['root', 'mid', 'tip'], { vertexT: built.body.vertexT!, boneT: [0, 0.5, 1] });
+  const skin = new THREE.SkinnedMesh(built.body.geometry, createVoxelMaterials(THREE).body);
+  skin.add(rootBone);
+  skin.bind(new THREE.Skeleton(boneOrder.map((n) => bones[n])));
+
+  // Map rest coincident pairs
+  const pos = skin.geometry.getAttribute('position');
+  const buckets = new Map<string, number[]>();
+  for (let i = 0; i < pos.count; i++) {
+    const k = `${Math.round(pos.getX(i) * 1000)},${Math.round(pos.getY(i) * 1000)},${Math.round(pos.getZ(i) * 1000)}`;
+    const list = buckets.get(k) ?? [];
+    list.push(i);
+    buckets.set(k, list);
+  }
+  bones.mid.rotation.x = 2.6; // extreme 149-deg bend
+  rootBone.updateMatrixWorld(true);
+  const v0 = new THREE.Vector3(), v1 = new THREE.Vector3();
+  for (const idxs of buckets.values()) {
+    skin.getVertexPosition(idxs[0], v0);
+    for (let j = 1; j < idxs.length; j++) {
+      skin.getVertexPosition(idxs[j], v1);
+      assert.ok(v0.distanceTo(v1) < 1e-6, 'worldVertexT keeps shared corners fused under extreme bend');
+    }
+  }
+
+  // Test attachWorldSkinWeights directly too
+  const geo2 = built.body.geometry.clone();
+  attachWorldSkinWeights(THREE, geo2, boneOrder, (_wx, _wy, wz) => {
+    const u = Math.max(0, Math.min(1, (0.05 - wz) / 0.7));
+    return [{ bone: 'root', weight: 1 - u }, { bone: 'tip', weight: u }];
+  });
+  const si2 = geo2.getAttribute('skinIndex'), sw2 = geo2.getAttribute('skinWeight');
+  for (const idxs of buckets.values()) {
+    for (let j = 1; j < idxs.length; j++) {
+      assert.equal(si2.getX(idxs[0]), si2.getX(idxs[j]));
+      assert.ok(Math.abs(sw2.getX(idxs[0]) - sw2.getX(idxs[j])) < 1e-6);
+    }
+  }
 }
 
 console.log('voxel.test.ts PASS');
@@ -1423,6 +1535,32 @@ const failing = (r: { gates: { gate: string; pass: boolean }[] }) => r.gates.fil
       assert.ok(!existsSync(profile.path) && !existsSync(tooLow.path) && !existsSync(invalid.path));
     }
   }
+
+  // 6. v4.6 direct --module support on (params, THREE) builders auto-extracts materials, bones, and exact draw calls
+  const threeAsset = join(out, 'threeAsset.ts');
+  writeFileSync(threeAsset, `
+    export function buildCreatureAsset(_p: unknown, THREE: any) {
+      const root = new THREE.Group();
+      const bRoot = new THREE.Bone(); bRoot.name = 'rootBone';
+      const bHead = new THREE.Bone(); bHead.name = 'headBone'; bRoot.add(bHead);
+      const bWing = new THREE.Bone(); bWing.name = 'wingBone'; bRoot.add(bWing);
+      const bTail = new THREE.Bone(); bTail.name = 'tailBone'; bRoot.add(bTail);
+      const bodyMat = new THREE.MeshStandardMaterial({ name: 'body' });
+      const glowMat = new THREE.MeshBasicMaterial({ name: 'glow' });
+      const m1 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), bodyMat); m1.name = 'torso';
+      const m2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), glowMat); m2.name = 'eyes';
+      bRoot.add(m1, m2);
+      root.add(bRoot);
+      return { root, animations: [] };
+    }
+  `);
+  const modStats = run('--module', threeAsset, '--profile', 'web', '--kind', 'creature');
+  assert.equal(modStats.code, 0, modStats.out);
+  const modS = modStats.res?.stats as Stats;
+  assert.equal(modS.drawCallsExact, true);
+  assert.equal(modS.materials, 2);
+  assert.equal(modS.bones, 4);
+  assert.equal(modS.drawCalls, 2);
 }
 console.log('BUDGET OK');
 ~~~
@@ -1756,6 +1894,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { partsToGlb, readGlb, glbGates, faceNormal, type Parts } from './glb';
+import { parseGlbHeader } from './asset-builder';
 import { parseResult, spawnTsx } from './result';
 import { box, buildCrateTris } from './fixtures/crate.qa';
 
@@ -2015,7 +2154,110 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
     assert.equal(parseResult(rg8Fail.stdout)?.gates?.find((g) => g.gate === 'RG8 topology')?.pass, false);
     const rg8OpenOk = runRigged(openSheet, 'sheet-open-ok.glb', '--open', 'flag_sheet');
     assert.equal(rg8OpenOk.gates?.find((g) => g.gate === 'RG8 topology')?.pass, true);
-    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS, RG8 topology');
+
+    // 8. v4.6 userData bloat prevention + RG1 JSON guard + RG9 posed skin integrity
+    const bloatMod = 'bloatRig.ts';
+    writeFileSync(join(out, bloatMod), `
+      export function buildBloat(_p: unknown, THREE: any) {
+        const root = new THREE.Group();
+        const rootBone = new THREE.Bone(); rootBone.name = 'hips';
+        const child = new THREE.Bone(); child.name = 'head'; child.position.set(0, 1, 0);
+        rootBone.add(child);
+        const geo = new THREE.BoxGeometry(0.4, 0.8, 0.4);
+        const count = geo.attributes.position.count;
+        const si = new Uint16Array(count * 4), sw = new Float32Array(count * 4);
+        for (let i = 0; i < count; i++) sw[i * 4] = 1;
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+        mesh.name = 'body';
+        mesh.add(rootBone);
+        mesh.bind(new THREE.Skeleton([rootBone, child]));
+        root.add(mesh);
+        const clip = new THREE.AnimationClip('Nod', 1, [
+          new THREE.QuaternionKeyframeTrack('head.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.25, 0, 0, 0.968, 0, 0, 0, 1]),
+        ]);
+        // Simulate common leak: attaching live bones & animations onto userData
+        root.userData = { bones: { hips: rootBone, head: child }, animations: [clip], tag: 'clean-note' };
+        return { root, animations: [clip] };
+      }
+    `);
+    const antiBloat = runRigged(bloatMod, 'anti-bloat.glb');
+    const diskBloat = readFileSync(join(out, 'anti-bloat.glb'));
+    const bloatHeader = parseGlbHeader(diskBloat);
+    assert.ok(bloatHeader.jsonBytes < 16 * 1024, `expected stripped JSON chunk < 16 KB, got ${bloatHeader.jsonBytes}`);
+    assert.equal(antiBloat.gates?.find((g) => g.gate === 'RG1 written')?.pass, true);
+    const reloadedBloat = await new GLTFLoader().parseAsync(diskBloat.buffer.slice(diskBloat.byteOffset, diskBloat.byteOffset + diskBloat.byteLength), '');
+    const bloatRawJson = diskBloat.toString('utf8', 20, 20 + bloatHeader.jsonBytes);
+    assert.match(bloatRawJson, /"clean-note"/);
+    assert.doesNotMatch(bloatRawJson, /"bones":\{/);
+    assert.equal(reloadedBloat.scene.userData.bones, undefined);
+
+    // RG9 fails on cell-split skinned vertices that rip apart under rotation, passes on shared world weights
+    const tearMod = 'tearTail.ts';
+    writeFileSync(join(out, tearMod), `
+      import * as THREE from 'three';
+      export function buildTear(p: { broken?: boolean }) {
+        const root = new THREE.Group();
+        const b0 = new THREE.Bone(); b0.name = 'tail0'; b0.position.set(0, 0.5, 0);
+        const b1 = new THREE.Bone(); b1.name = 'tail1'; b1.position.set(0, 0, -0.5);
+        b0.add(b1);
+        // Two closed boxes meeting seamlessly at z = -0.5
+        const mkBox = (z0: number, z1: number) => new THREE.BoxGeometry(0.2, 0.2, z1 - z0).translate(0, 0.5, (z0 + z1) / 2);
+        const gA = mkBox(-0.5, 0), gB = mkBox(-1.0, -0.5);
+        const merge = (a: any, b: any) => {
+          const pA = a.attributes.position.array, pB = b.attributes.position.array;
+          const nA = a.attributes.normal.array, nB = b.attributes.normal.array;
+          const pos = new Float32Array(pA.length + pB.length); pos.set(pA, 0); pos.set(pB, pA.length);
+          const nor = new Float32Array(nA.length + nB.length); nor.set(nA, 0); nor.set(nB, nA.length);
+          const nonIdx = new THREE.BufferGeometry();
+          const ia = a.index.array, ib = b.index.array;
+          const uPos = [], uNor = [];
+          for (let i = 0; i < ia.length; i++) { const k = ia[i] * 3; uPos.push(pA[k], pA[k+1], pA[k+2]); uNor.push(nA[k], nA[k+1], nA[k+2]); }
+          for (let i = 0; i < ib.length; i++) { const k = ib[i] * 3; uPos.push(pB[k], pB[k+1], pB[k+2]); uNor.push(nB[k], nB[k+1], nB[k+2]); }
+          nonIdx.setAttribute('position', new THREE.Float32BufferAttribute(uPos, 3));
+          nonIdx.setAttribute('normal', new THREE.Float32BufferAttribute(uNor, 3));
+          return nonIdx;
+        };
+        const geo = merge(gA, gB);
+        const pos = geo.attributes.position;
+        const si = new Uint16Array(pos.count * 4), sw = new Float32Array(pos.count * 4);
+        const splitIdx = gA.index.count;
+        for (let i = 0; i < pos.count; i++) {
+          const wz = pos.getZ(i);
+          if (p.broken) {
+            // Broken per-segment weighting: gA corners at z=-0.5 get 100% b0 while gB corners at z=-0.5 get 100% b1!
+            si[i * 4] = i < splitIdx ? 0 : 1;
+            sw[i * 4] = 1;
+          } else {
+            const w1 = wz < -0.55 ? 1 : wz > -0.45 ? 0 : (-0.45 - wz) / 0.1;
+            si[i * 4] = 0; si[i * 4 + 1] = 1;
+            sw[i * 4] = 1 - w1; sw[i * 4 + 1] = w1;
+          }
+        }
+        geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+        const skin = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+        skin.name = 'tail';
+        skin.add(b0);
+        skin.bind(new THREE.Skeleton([b0, b1]));
+        root.add(skin);
+        const fly = new THREE.AnimationClip('Fly', 1, [
+          new THREE.QuaternionKeyframeTrack('tail1.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0.866, 0, 0, 0.5, 0, 0, 0, 1]),
+        ]);
+        return { root, animations: [fly] };
+      }
+    `);
+    const tearFail = spawnTsx(rigCli, ['--module', tearMod, '--params', '{"broken":true}', '--open', 'tail', '--out', 'tear-fail.glb'], { cwd: out, env });
+    assert.equal(tearFail.status, 2, tearFail.stdout + tearFail.stderr);
+    const tearJson = parseResult(tearFail.stdout)!;
+    const rg9Fail = tearJson.gates?.find((g) => g.gate === 'RG9 posed skin integrity');
+    assert.equal(rg9Fail?.pass, false, `expected RG9 failure on torn tail seam, got: ${JSON.stringify(tearJson.gates)}`);
+    assert.match(String(rg9Fail?.value), /Fly@/);
+
+    const tearOk = runRigged(tearMod, 'tear-ok.glb', '--params', '{"broken":false}', '--open', 'tail');
+    assert.equal(tearOk.gates?.find((g) => g.gate === 'RG9 posed skin integrity')?.pass, true);
+    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS, RG8 topology, RG1 bloat guard, RG9 posed skin integrity');
   } else {
     console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
   }
@@ -2612,6 +2854,40 @@ const miss = run(); assert.equal(miss.status, 1);
   assert.deepEqual(failedNames(staticMeta), [], 'qa.staticClips allows intentional static clip');
 }
 
+// 6. v4.6 direct --module inspection without intermediate metadata JSON script
+{
+  const modFile = join(dir, 'creatureMod.ts');
+  writeFileSync(modFile, `
+    export function buildCreature(_p: unknown, THREE: any) {
+      const root = new THREE.Group(); root.name = 'creature_root';
+      const hips = new THREE.Bone(); hips.name = 'hips'; hips.position.set(0, 0.6, 0);
+      const tail = new THREE.Bone(); tail.name = 'tail'; tail.position.set(0, 0, -0.4);
+      hips.add(tail);
+      const geo = new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 0.6, 0);
+      const count = geo.attributes.position.count;
+      const si = new Uint16Array(count * 4), sw = new Float32Array(count * 4);
+      for (let i = 0; i < count; i++) sw[i * 4] = 1;
+      geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+      geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+      const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+      mesh.name = 'body';
+      mesh.add(hips);
+      mesh.updateMatrixWorld(true);
+      mesh.bind(new THREE.Skeleton([hips, tail]));
+      root.add(mesh);
+      const fly = new THREE.AnimationClip('Fly', 1, [
+        new THREE.QuaternionKeyframeTrack('tail.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0, 0.25, 0, 0.968, 0, 0, 0, 1]),
+      ]);
+      return { root, animations: [fly] };
+    }
+  `);
+  const modRun = run('--module', modFile, '--export', 'buildCreature', '--kind', 'creature', '--motion', 'free');
+  assert.equal(modRun.status, 0, modRun.stdout + modRun.stderr);
+  const modRes = parseResult(modRun.stdout)!;
+  assert.equal(modRes.ok, true);
+  assert.equal(modRes.gates?.find((g) => g.gate === 'R7 clip motion')?.pass, true);
+}
+
 console.log('RIGCHECK OK');
 ~~~
 
@@ -2725,6 +3001,7 @@ try {
   for (const view of ['34-front', '34-back', 'front', 'side', 'back', 'top']) {
     assert.match(html, new RegExp(`data-view="${view}"`));
   }
+  assert.match(html, /id="bloom-toggle"/);
   assert.match(html, /id="bg-toggle"/);
   assert.match(html, /id="export-glb"/);
   assert.match(html, /id="verify-glb"/);
@@ -2763,7 +3040,9 @@ try {
     writeFileSync(animated, `
       export function build(params, THREE) {
         const root = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({ color: '#9012ac' }));
-        const track = new THREE.VectorKeyframeTrack('.position', [0, 0.5, 1], [0, 0, 0, 0, 0.2, 0, 0, 0, 0]);
+        root.name = 'pulseBox';
+        root.userData = { bones: { pulseBox: root }, animations: [] };
+        const track = new THREE.VectorKeyframeTrack('pulseBox.position', [0, 0.5, 1], [0, 0, 0, 0, 0.2, 0, 0, 0, 0]);
         return { root, animations: [new THREE.AnimationClip('Pulse', 1, [track])] };
       }
     `);
@@ -2785,15 +3064,16 @@ try {
     await verifyStudioVfx(browserPath, withVfx, out);
     console.log('Studio VFX defaults, playback, scrub, toggle, and capture readbacks verified in browser.');
 
-    // Verify --initial-clip + --autoplay AND capture-studio --motion-vfx + --extras multi-row contact sheet
+    // Verify --initial-clip + --autoplay + --bloom AND capture-studio --motion-vfx (clean + VFX tiles) + --extras
     const autoHtml = join(dir, 'autoplay.html');
     const autoPack = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
-      '--module', animated, '--vfx', effects, '--initial-clip', 'Pulse', '--autoplay', '--out', autoHtml,
+      '--module', animated, '--vfx', effects, '--initial-clip', 'Pulse', '--autoplay', '--bloom', '--out', autoHtml,
     ], { timeout: 15_000 });
     assert.equal(autoPack.status, 0, autoPack.stdout + autoPack.stderr);
     const autoRes = parseResult(autoPack.stdout)!;
     assert.equal(autoRes.initialClip, 'Pulse');
     assert.equal(autoRes.autoplay, true);
+    assert.equal(autoRes.bloom, true);
 
     const multiPng = join(dir, 'multi-sheet.png');
     const multiCap = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
@@ -2804,11 +3084,42 @@ try {
     assert.equal(multiCap.status, 0, multiCap.stdout + multiCap.stderr);
     const multiRes = parseResult(multiCap.stdout)!;
     assert.equal(multiRes.status, 'PASS');
-    assert.equal((multiRes.tiles as unknown[]).length, 6);
+    assert.equal((multiRes.tiles as unknown[]).length, 7);
+    const tileLabels = (multiRes.tiles as { label: string; evidence: { vfx: string } | null }[]);
+    assert.equal(tileLabels.find((t) => t.label === 'Mid locomotion (clean)')?.evidence?.vfx, 'off');
+    assert.equal(tileLabels.find((t) => t.label === 'Mid locomotion (VFX)')?.evidence?.vfx, 'visible');
     const sheetPng = decodePngRgba(readFileSync(multiPng))!;
     assert.equal(sheetPng.width, 1920);
-    assert.equal(sheetPng.height, 1800);
-    console.log('Studio autoplay, shadows, --motion-vfx, and 6-tile --extras capture verified in browser.');
+    assert.equal(sheetPng.height, 2400);
+
+    // Verify Bloom toggle and Verify GLB in live browser
+    const { chromium } = await import('playwright-core');
+    const browser = await chromium.launch({
+      executablePath: browserPath, headless: true, timeout: 15_000,
+      args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.goto(pathToFileURL(autoHtml).href);
+      await page.waitForFunction(() => document.documentElement.dataset.studioState !== 'loading');
+      const bloomInfo = await page.evaluate(() => window.threejsStudio!.info!());
+      assert.equal(bloomInfo.bloomAvailable, true);
+      assert.equal(bloomInfo.bloom, true);
+      const bloomBtn = page.locator('#bloom-toggle');
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'true');
+      await bloomBtn.click();
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'false');
+      await bloomBtn.click();
+      assert.equal(await bloomBtn.getAttribute('aria-pressed'), 'true');
+      await page.locator('#verify-glb').click();
+      await page.waitForFunction(() => /^(GLB OK|GLB FAIL|Verify failed)/.test(document.getElementById('glb-status')?.textContent ?? ''));
+      const verifyText = await page.locator('#glb-status').textContent();
+      assert.match(verifyText ?? '', /^GLB OK .*JSON \d+\.\d+ KB/);
+      assert.deepEqual(await page.evaluate(() => window.threejsStudio?.getErrors()), []);
+    } finally {
+      await browser.close();
+    }
+    console.log('Studio autoplay, --bloom toggle, Verify GLB, shadows, --motion-vfx clean+VFX, and 7-tile capture verified in browser.');
   }
 } finally {
   assert.equal(dirname(dir), temp);

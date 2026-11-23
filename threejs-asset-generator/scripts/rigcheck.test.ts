@@ -176,4 +176,38 @@ const miss = run(); assert.equal(miss.status, 1);
   assert.deepEqual(failedNames(staticMeta), [], 'qa.staticClips allows intentional static clip');
 }
 
+// 6. v4.6 direct --module inspection without intermediate metadata JSON script
+{
+  const modFile = join(dir, 'creatureMod.ts');
+  writeFileSync(modFile, `
+    export function buildCreature(_p: unknown, THREE: any) {
+      const root = new THREE.Group(); root.name = 'creature_root';
+      const hips = new THREE.Bone(); hips.name = 'hips'; hips.position.set(0, 0.6, 0);
+      const tail = new THREE.Bone(); tail.name = 'tail'; tail.position.set(0, 0, -0.4);
+      hips.add(tail);
+      const geo = new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 0.6, 0);
+      const count = geo.attributes.position.count;
+      const si = new Uint16Array(count * 4), sw = new Float32Array(count * 4);
+      for (let i = 0; i < count; i++) sw[i * 4] = 1;
+      geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+      geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+      const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial());
+      mesh.name = 'body';
+      mesh.add(hips);
+      mesh.updateMatrixWorld(true);
+      mesh.bind(new THREE.Skeleton([hips, tail]));
+      root.add(mesh);
+      const fly = new THREE.AnimationClip('Fly', 1, [
+        new THREE.QuaternionKeyframeTrack('tail.quaternion', [0, 0.5, 1], [0, 0, 0, 1, 0, 0.25, 0, 0.968, 0, 0, 0, 1]),
+      ]);
+      return { root, animations: [fly] };
+    }
+  `);
+  const modRun = run('--module', modFile, '--export', 'buildCreature', '--kind', 'creature', '--motion', 'free');
+  assert.equal(modRun.status, 0, modRun.stdout + modRun.stderr);
+  const modRes = parseResult(modRun.stdout)!;
+  assert.equal(modRes.ok, true);
+  assert.equal(modRes.gates?.find((g) => g.gate === 'R7 clip motion')?.pass, true);
+}
+
 console.log('RIGCHECK OK');

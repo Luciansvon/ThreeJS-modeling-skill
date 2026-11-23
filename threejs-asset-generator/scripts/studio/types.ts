@@ -13,6 +13,7 @@ export type StudioConfig = {
   background: StudioBackground;
   initialClip?: string;
   autoplay?: boolean;
+  bloom?: boolean;
 };
 
 export type StudioVfxContext = {
@@ -32,6 +33,7 @@ export type StudioFrame = {
   time?: number;
   vfx?: boolean;
   background?: StudioBackground;
+  bloom?: boolean;
   label?: string;
 };
 export type StudioFrameEvidence = StudioPose & {
@@ -48,6 +50,7 @@ export type StudioInfo = Omit<StudioConfig, 'builder'> & {
   fingerprint: ReturnType<typeof assetFingerprint>;
   bounds: { rest: Bounds; sampled: Bounds; samplesPerClip: number };
   vfxAvailable: boolean;
+  bloomAvailable: boolean;
   threeRevision: string;
 };
 export type StudioDiagnostic = { kind: 'javascript' | 'webgl'; message: string };

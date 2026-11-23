@@ -33,8 +33,8 @@ A limit the table does not give is reported under `not checked`. Do not fill it 
 # Counts for an asset whose deployment target is still open
 npx tsx scripts/mesh-stats.ts --tris tris.json
 
-# A kernel, no THREE (the builder is called with `{...params}`)
-npx tsx scripts/mesh-stats.ts --module ./myKernel.ts --export buildMyTris --profile web --kind prop
+# Kernel or (params, THREE) builder (extracts tris, materials, bones, textures, and exact draw calls automatically):
+npx tsx scripts/mesh-stats.ts --module ./myAsset.ts --export buildAsset --profile web --kind creature
 
 # The final asset as tris.json, with what the arrays cannot say, and the GLB you exported
 npx tsx scripts/mesh-stats.ts --tris tris.json --meta meta.json --glb asset.glb --profile mobile --kind hero
