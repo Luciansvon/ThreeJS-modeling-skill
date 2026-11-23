@@ -3,6 +3,7 @@
 //   @@RESULT {"tool":"run-tests","ok":true,"gates":[{"gate":"...","value":"...","pass":true,"hint":""}], ...}
 // Exit codes: 0 = ok, 2 = a gate failed, 1 = usage or internal error. `gates` uses the same shape as scripts/refcheck.ts `Gate`.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
+import * as nodeModule from 'node:module';
 export const MARKER = '@@RESULT ';
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
 export type Result = { tool: string; ok: boolean; gates?: Gate[] } & Record<string, unknown>;
@@ -37,4 +38,20 @@ export function spawnTsx(file: string, args: string[], opts: Partial<SpawnSyncOp
   return loaderArgs.length
     ? spawnSync(process.execPath, [...loaderArgs, file, ...args], base)
     : spawnSync('tsx', [file, ...args], { ...base, shell: process.platform === 'win32' });
+}
+
+/** Lets external user builders resolve `three` and `three/*` from this skill's install when missing in cwd. */
+export function registerThreeHook() {
+  return nodeModule.registerHooks?.({
+    resolve(specifier, context, nextResolve) {
+      if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
+      try {
+        return nextResolve(specifier, context);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
+        return nextResolve(import.meta.resolve(specifier), context);
+      }
+    },
+  });
 }

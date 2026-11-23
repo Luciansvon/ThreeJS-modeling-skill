@@ -1,6 +1,6 @@
 # Tool and fixture source
 
-Contents: package.json · scripts/asset-builder.ts · scripts/budget.ts · scripts/capture-studio.ts · scripts/clip-motion.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/pack-studio.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · scripts/studio/framing.ts · scripts/studio/index.html · scripts/studio/runtime.ts · scripts/studio/types.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
+Contents: package.json · scripts/asset-builder.ts · scripts/budget.ts · scripts/capture-studio.ts · scripts/clip-motion.ts · scripts/color-qc.ts · scripts/export-glb.ts · scripts/export-rigged-glb.ts · scripts/fixtures/crate.qa.ts · scripts/fixtures/dragon.qa.ts · scripts/glb.ts · scripts/mesh-stats.ts · scripts/pack-studio.ts · scripts/package.json · scripts/png.ts · scripts/qa-asset.ts · scripts/qacheck.ts · scripts/ref-compare.ts · scripts/ref-intake.ts · scripts/refcheck.ts · scripts/result.ts · scripts/review.ts · scripts/rig-check.ts · scripts/rigcheck.ts · scripts/sharp.ts · scripts/studio/framing.ts · scripts/studio/index.html · scripts/studio/runtime.ts · scripts/studio/types.ts · tools/check.ts · tools/package.json · tools/run-tests.ts · tools/trigger-check.ts · tools/validate-skills.ts · assets/fast-preview.html
 
 Generated from the canonical harness files. Search by original file path and use the [web runtime guide](runtime.md) to choose which commands or helpers to use in this session.
 
@@ -9,7 +9,7 @@ Generated from the canonical harness files. Search by original file path and use
 ~~~json source-excerpt
 {
   "name": "threejs-asset-generator",
-  "version": "4.3.3",
+  "version": "4.4.0",
   "private": true,
   "type": "module",
   "description": "Style-adaptive procedural Three.js assets, reference matching, geometry checks, animation, VFX previews and GLB export.",
@@ -90,6 +90,44 @@ export function countScene(root: THREE.Object3D) {
     if (geometry.attributes.color) vertexColorMeshes++;
   });
   return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
+}
+
+/** Extracts world-space triangle arrays per visible mesh (works for static, rigid, and SkinnedMesh rigs). */
+export function extractObjectParts(
+  root: THREE.Object3D,
+  three: { Vector3: new () => THREE.Vector3 },
+): Record<string, number[]> {
+  root.updateMatrixWorld(true);
+  const parts: Record<string, number[]> = {};
+  const used = new Set<string>();
+  const v = new three.Vector3();
+  let meshIdx = 0;
+
+  root.traverseVisible((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry?.attributes?.position) return;
+    meshIdx++;
+    const baseName = mesh.name || `mesh_${meshIdx}`;
+    let name = baseName;
+    for (let suffix = 2; used.has(name); suffix++) name = `${baseName}_${suffix}`;
+    used.add(name);
+
+    const pos = mesh.geometry.getAttribute('position');
+    const idx = mesh.geometry.index;
+    const count = idx ? idx.count : pos.count;
+    const arr: number[] = [];
+    const isSkinned = (mesh as THREE.SkinnedMesh).isSkinnedMesh === true;
+    for (let i = 0; i < count; i++) {
+      const vi = idx ? idx.getX(i) : i;
+      if (isSkinned) (mesh as THREE.SkinnedMesh).getVertexPosition(vi, v).applyMatrix4(mesh.matrixWorld);
+      else v.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+      arr.push(v.x, v.y, v.z);
+    }
+    if (arr.length >= 9) parts[name] = arr;
+  });
+
+  if (!Object.keys(parts).length) throw new Error('asset contains no visible mesh triangles');
+  return parts;
 }
 ~~~
 
@@ -292,7 +330,7 @@ import { decodePngRgba, encodePngRgba } from './png';
 import { emit } from './result';
 import type { StudioBackground, StudioFrame, StudioFrameEvidence, StudioInfo, StudioView } from './studio/types';
 
-const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--motion-view view] [--action Clip --peak seconds] [--action-view view] [--background dark|light] [--vfx] [--browser executable]';
+const usage = 'Usage: tsx scripts/capture-studio.ts --studio ./index.html --out studio-contact-sheet.png [--locomotion Clip] [--motion-view view] [--motion-vfx] [--action Clip --peak seconds] [--action-view view] [--extra Clip@time[:view][:vfx]] [--extras a,b] [--background dark|light] [--vfx] [--browser executable]';
 const tool = 'capture-studio';
 const viewport = { width: 960, height: 600 };
 const validViews = new Set<StudioView>(['34-front', '34-back', 'front', 'side', 'back', 'top']);
@@ -305,6 +343,8 @@ type PlanOptions = {
   action?: string;
   peak?: number;
   vfx?: boolean;
+  motionVfx?: boolean;
+  extraSpecs?: readonly string[];
   motionView: StudioView;
   actionView: StudioView;
   background?: StudioBackground;
@@ -332,7 +372,41 @@ async function installedBrowsers(explicit?: string) {
   return found.filter((path): path is string => path !== null);
 }
 
-function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, motionView, actionView, background }: PlanOptions): PlannedTile[] {
+function parseExtraTile(
+  spec: string,
+  info: StudioInfo,
+  defaultVfx: boolean,
+  background?: StudioBackground,
+): PlannedTile {
+  const parts = spec.split(':').map((s) => s.trim()).filter(Boolean);
+  const head = parts[0] ?? '';
+  const atIdx = head.lastIndexOf('@');
+  const clipName = (atIdx >= 0 ? head.slice(0, atIdx) : head).trim();
+  const timeStr = atIdx >= 0 ? head.slice(atIdx + 1).trim() : undefined;
+  let extraView: StudioView = '34-front';
+  let extraVfx = defaultVfx;
+  for (const tag of parts.slice(1)) {
+    if (validViews.has(tag as StudioView)) extraView = tag as StudioView;
+    else if (tag.toLowerCase() === 'vfx') extraVfx = true;
+    else if (tag.toLowerCase() === 'novfx' || tag.toLowerCase() === 'clean') extraVfx = false;
+    else throw new Error(`Unknown modifier "${tag}" in --extra "${spec}"`);
+  }
+  const matches = info.clips.filter((clip) => clip.name === clipName);
+  const clip = matches[0];
+  if (matches.length !== 1 || clip.duration <= 0 || clip.tracks <= 0) {
+    return { label: `Extra: ${clipName || spec}`, status: 'UNVERIFIED', reason: `No unique, positive-duration animated clip named “${clipName}”.` };
+  }
+  const t = timeStr !== undefined && timeStr !== '' ? Number(timeStr) : clip.duration / 2;
+  if (!Number.isFinite(t) || t < 0 || t > clip.duration) {
+    return { label: `Extra: ${clip.name}`, status: 'UNVERIFIED', reason: `Set --extra time for "${clip.name}" within 0–${clip.duration} seconds.` };
+  }
+  return {
+    label: `${clip.name} (${t.toFixed(2)}s)`,
+    frame: { view: extraView, clip: clip.name, time: t, vfx: extraVfx, ...(background ? { background } : {}) },
+  };
+}
+
+function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, motionVfx = false, extraSpecs = [], motionView, actionView, background }: PlanOptions): PlannedTile[] {
   const hasAnimations = info.clips.some((clip) => clip.duration > 0 && clip.tracks > 0);
   const findClip = (name: string | undefined) => {
     const matches = info.clips.filter((clip) => clip.name === name);
@@ -349,8 +423,12 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
     : `No unique, positive-duration animated clip named “${name}”.`;
   const withBg = (frame: StudioFrame): StudioFrame => (background ? { ...frame, background } : frame);
   let midway: PlannedTile;
-  if (walk) midway = { label: 'Mid locomotion', frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2 }) };
-  else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
+  if (walk) {
+    midway = {
+      label: 'Mid locomotion',
+      frame: withBg({ view: motionView, clip: walk.name, time: walk.duration / 2, ...(motionVfx ? { vfx: true } : {}) }),
+    };
+  } else if (!hasAnimations && locomotion === undefined) midway = notApplicable('Mid locomotion');
   else midway = unverified('Mid locomotion', missing(locomotion, '--locomotion'));
   let actionTile: PlannedTile;
   if (!hasAnimations && action === undefined && peak === undefined && !vfx) actionTile = notApplicable('Action peak');
@@ -358,11 +436,13 @@ function planTiles(info: StudioInfo, { locomotion, action, peak, vfx = false, mo
   else if (peak === undefined || peak > attack.duration) {
     actionTile = unverified('Action peak', `Set --peak to the authored peak time within 0–${attack.duration} seconds.`);
   } else actionTile = { label: 'Action peak', frame: withBg({ view: actionView, clip: attack.name, time: peak, vfx }) };
-  return [
+  const base: PlannedTile[] = [
     { label: '3/4 front', frame: withBg({ view: '34-front' }) },
     { label: '3/4 back', frame: withBg({ view: '34-back' }) },
     midway, actionTile,
   ];
+  for (const spec of extraSpecs) base.push(parseExtraTile(spec, info, vfx, background));
+  return base;
 }
 
 async function placeholder(page: Page, tile: MissingTile) {
@@ -383,18 +463,23 @@ async function placeholder(page: Page, tile: MissingTile) {
 
 function contactSheet(tiles: Buffer[]) {
   const { width, height } = viewport;
-  const stride = width * 2 * 4;
-  const rgba = new Uint8Array(stride * height * 2);
+  const cols = 2, rows = Math.max(1, Math.ceil(tiles.length / cols));
+  const stride = width * cols * 4;
+  const rgba = new Uint8Array(stride * height * rows);
+  // Fill unused trailing cells (e.g., 5 tiles in a 2x3 grid) with dark studio matte #131b26
+  for (let i = 0; i < rgba.length; i += 4) {
+    rgba[i] = 19; rgba[i + 1] = 27; rgba[i + 2] = 38; rgba[i + 3] = 255;
+  }
   for (const [index, input] of tiles.entries()) {
     const tile = decodePngRgba(input);
     if (!tile || tile.width !== width || tile.height !== height) throw new Error(`Could not decode the ${width} × ${height} PNG for tile ${index + 1}`);
-    const start = (index % 2) * width * 4 + Math.floor(index / 2) * height * stride;
+    const start = (index % cols) * width * 4 + Math.floor(index / cols) * height * stride;
     for (let y = 0; y < height; y++) {
       const row = y * width * 4;
       rgba.set(tile.rgba.subarray(row, row + width * 4), start + y * stride);
     }
   }
-  return encodePngRgba(rgba, width * 2, height * 2);
+  return encodePngRgba(rgba, width * cols, height * rows);
 }
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -402,9 +487,15 @@ const messageOf = (error: unknown) => error instanceof Error ? error.message : S
 async function main() {
   const { values } = parseArgs({ options: {
     studio: { type: 'string' }, out: { type: 'string' }, locomotion: { type: 'string' },
-    'motion-view': { type: 'string' }, action: { type: 'string' }, 'action-view': { type: 'string' },
+    'motion-view': { type: 'string' }, 'motion-vfx': { type: 'boolean' },
+    action: { type: 'string' }, 'action-view': { type: 'string' },
+    extra: { type: 'string', multiple: true }, extras: { type: 'string' },
     peak: { type: 'string' }, background: { type: 'string' }, vfx: { type: 'boolean' }, browser: { type: 'string' },
   } });
+  const extraSpecs = [
+    ...(values.extra ?? []),
+    ...(values.extras ? values.extras.split(',').map((s) => s.trim()).filter(Boolean) : []),
+  ];
   if (!values.studio || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.png') throw new Error('--out must end in .png');
   const studio = resolve(values.studio), out = resolve(values.out);
@@ -429,7 +520,8 @@ async function main() {
   function finish() {
     for (const error of errors) console.error(`${error.kind}: ${error.message}`);
     for (const reason of unverified) console.log(`UNVERIFIED: ${reason}`);
-    if (written) console.log(`Wrote ${out} (${written} bytes, ${viewport.width * 2} × ${viewport.height * 2})`);
+    const outRows = Math.max(1, Math.ceil(Math.max(1, tiles.length) / 2));
+    if (written) console.log(`Wrote ${out} (${written} bytes, ${viewport.width * 2} × ${viewport.height * outRows})`);
     return emit({
       tool, ok: status === 'PASS', status, studio, out: written ? out : null, bytes: written ?? 0,
       browser: browserPath, motionView, actionView, background: background ?? null, info, tiles, errors, warnings, launchErrors, unverified,
@@ -513,7 +605,10 @@ async function main() {
       return;
     }
 
-    const plan = planTiles(info, { locomotion: values.locomotion, action: values.action, peak, vfx: values.vfx, motionView, actionView, background });
+    const plan = planTiles(info, {
+      locomotion: values.locomotion, action: values.action, peak, vfx: values.vfx,
+      motionVfx: values['motion-vfx'], extraSpecs, motionView, actionView, background,
+    });
     const frames: Buffer[] = [];
     let fallback: Page | undefined;
     for (const tile of plan) {
@@ -887,6 +982,693 @@ export function clipMotion(
 }
 ~~~
 
+## scripts/color-qc.ts
+
+~~~typescript source-excerpt
+// scripts/color-qc.ts: G4 Regional Color QC (Semantic ROI + CIEDE2000 ΔE00) for Three.js Asset Generator.
+// Pure TypeScript, zero external dependencies (shared by Harness and Web Full).
+// Core CIE transforms, CIEDE2000 (Sharma et al. 2005), and ROI statistics adapted from:
+// https://github.com/Luciansvon/AI-COLOR-COMPARE (src/color_science/transforms.ts, ciede2000.ts, metrics.ts).
+import type { Gate } from './result';
+
+export interface RGB {
+  r: number; // 0..255
+  g: number; // 0..255
+  b: number; // 0..255
+}
+
+export interface LinearRGB {
+  r: number; // 0..1+
+  g: number; // 0..1+
+  b: number; // 0..1+
+}
+
+export interface XYZ {
+  x: number; // 0..100+
+  y: number; // 0..100
+  z: number; // 0..100+
+}
+
+export interface Lab {
+  l: number; // 0..100
+  a: number; // -128..+127
+  b: number; // -128..+127
+}
+
+export interface PixelDataStats {
+  meanLab: Lab;
+  meanRgb: RGB;
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  shadowClippingRatio: number;
+  highlightClippingRatio: number;
+  pixelCount: number;
+}
+
+export interface SemanticRegionRoi {
+  view?: string;
+  x: number; // 0..100 percent
+  y: number; // 0..100 percent
+  width: number; // 0..100 percent
+  height: number; // 0..100 percent
+}
+
+export interface SemanticRegionRef {
+  region: string;
+  hex?: string;
+  label?: string;
+  status?: 'confident' | 'uncertain';
+  roi?: SemanticRegionRoi;
+  emissive?: boolean;
+}
+
+export type RegionColorSource = 'vertex-color' | 'material' | 'texture' | 'render' | 'declared';
+
+export interface ModelRegionSample {
+  region: string;
+  hex?: string;
+  linearRgb?: LinearRGB;
+  srgb?: RGB;
+  source: RegionColorSource;
+  unreadable?: boolean;
+  note?: string;
+}
+
+export interface G4Thresholds {
+  /** Maximum full CIEDE2000 ΔE00 allowed for unlit material/vertex/texture checks. */
+  maxDeltaE00: number;
+  /** Advisory ΔE00 notice threshold. */
+  warnDeltaE00: number;
+  /** Maximum lighting-invariant ΔE00 (kL=4, kC=3, kH=1) allowed on render samples before failing chromatic accuracy. */
+  renderChromaticMaxDeltaE00: number;
+  /** Minimum |ΔL*| required to classify an exceed on a render sample as exposure/lighting-driven. */
+  minLightingDeltaL: number;
+}
+
+export const DEFAULT_G4_THRESHOLDS: G4Thresholds = {
+  maxDeltaE00: 12.0,
+  warnDeltaE00: 7.0,
+  renderChromaticMaxDeltaE00: 7.5,
+  minLightingDeltaL: 8.0,
+};
+
+export type G4Status = 'PASS' | 'FAIL' | 'SKIPPED' | 'ERROR';
+
+export interface RegionQCResult {
+  region: string;
+  label?: string;
+  status: G4Status;
+  source?: RegionColorSource;
+  refHex?: string;
+  modelHex?: string;
+  deltaE00?: number;
+  chromaticDeltaE00?: number;
+  deltaL?: number;
+  deltaA?: number;
+  deltaB?: number;
+  lightingOnlyWarning?: boolean;
+  reason: string;
+}
+
+export interface RegionalColorQCReport {
+  status: G4Status;
+  mode: string;
+  evaluated: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errored: number;
+  maxDeltaE00: number;
+  thresholds: G4Thresholds;
+  regions: RegionQCResult[];
+  gate: Gate | null;
+  reason: string;
+}
+
+// CIE D65 2-degree standard illuminant (reused from AI-COLOR-COMPARE transforms.ts)
+const D65_XN = 95.047;
+const D65_YN = 100.0;
+const D65_ZN = 108.883;
+const rad = (deg: number) => (deg * Math.PI) / 180;
+const deg = (r: number) => (r * 180) / Math.PI;
+
+export function sRGBToLinearRGB(rgb: RGB): LinearRGB {
+  const toLinear = (c: number) => {
+    const v = Math.max(0, Math.min(255, c)) / 255;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return { r: toLinear(rgb.r), g: toLinear(rgb.g), b: toLinear(rgb.b) };
+}
+
+export function linearRGBToSRGB(linear: LinearRGB): RGB {
+  const toSRGB = (v: number) => {
+    const clamped = Math.max(0, Math.min(1, v));
+    const c = clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
+    return Math.round(c * 255);
+  };
+  return { r: toSRGB(linear.r), g: toSRGB(linear.g), b: toSRGB(linear.b) };
+}
+
+export function hexToRgb(hex: string): RGB {
+  const clean = hex.trim().replace(/^#/, '');
+  const full = clean.length === 3
+    ? `${clean[0]}${clean[0]}${clean[1]}${clean[1]}${clean[2]}${clean[2]}`
+    : clean;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) throw new Error(`Invalid hex color: "${hex}"`);
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+export const rgbToHex = (rgb: RGB): string =>
+  '#' + [rgb.r, rgb.g, rgb.b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+
+export function rgbToXyz(rgb: RGB): XYZ {
+  return linearRgbToXyz(sRGBToLinearRGB(rgb));
+}
+
+export function linearRgbToXyz(lin: LinearRGB): XYZ {
+  const r = Math.max(0, lin.r), g = Math.max(0, lin.g), b = Math.max(0, lin.b);
+  return {
+    x: (r * 0.4124564 + g * 0.3575761 + b * 0.1804375) * 100,
+    y: (r * 0.2126729 + g * 0.7151522 + b * 0.0721750) * 100,
+    z: (r * 0.0193339 + g * 0.1191920 + b * 0.9503041) * 100,
+  };
+}
+
+function fXYZ(t: number): number {
+  const delta = 6 / 29;
+  return t > delta * delta * delta ? Math.cbrt(t) : t / (3 * delta * delta) + 4 / 29;
+}
+
+export function xyzToLab(xyz: XYZ): Lab {
+  const fx = fXYZ(xyz.x / D65_XN);
+  const fy = fXYZ(xyz.y / D65_YN);
+  const fz = fXYZ(xyz.z / D65_ZN);
+  return { l: Math.max(0, 116 * fy - 16), a: 500 * (fx - fy), b: 200 * (fy - fz) };
+}
+
+export const rgbToLab = (rgb: RGB): Lab => xyzToLab(rgbToXyz(rgb));
+export const linearRgbToLab = (lin: LinearRGB): Lab => xyzToLab(linearRgbToXyz(lin));
+
+/**
+ * CIEDE2000 color difference (ΔE00) per CIE & Sharma et al. (2005).
+ * Ported directly from Luciansvon/AI-COLOR-COMPARE `src/color_science/ciede2000.ts`.
+ */
+export function calculateDeltaE00(lab1: Lab, lab2: Lab, kL = 1.0, kC = 1.0, kH = 1.0): number {
+  const { l: l1, a: a1, b: b1 } = lab1;
+  const { l: l2, a: a2, b: b2 } = lab2;
+  const c1 = Math.hypot(a1, b1);
+  const c2 = Math.hypot(a2, b2);
+  const cBar = (c1 + c2) / 2;
+  const cBar7 = Math.pow(cBar, 7);
+  const g = 0.5 * (1 - Math.sqrt(cBar7 / (cBar7 + Math.pow(25, 7))));
+
+  const a1Prime = (1 + g) * a1;
+  const a2Prime = (1 + g) * a2;
+  const c1Prime = Math.hypot(a1Prime, b1);
+  const c2Prime = Math.hypot(a2Prime, b2);
+
+  let h1Prime = deg(Math.atan2(b1, a1Prime));
+  if (h1Prime < 0) h1Prime += 360;
+  let h2Prime = deg(Math.atan2(b2, a2Prime));
+  if (h2Prime < 0) h2Prime += 360;
+
+  const deltaLPrime = l2 - l1;
+  const deltaCPrime = c2Prime - c1Prime;
+
+  let deltaHPrimeDegrees = 0;
+  if (c1Prime * c2Prime !== 0) {
+    const diff = h2Prime - h1Prime;
+    if (Math.abs(diff) <= 180) deltaHPrimeDegrees = diff;
+    else if (diff > 180) deltaHPrimeDegrees = diff - 360;
+    else deltaHPrimeDegrees = diff + 360;
+  }
+  const deltaHPrime = 2 * Math.sqrt(c1Prime * c2Prime) * Math.sin(rad(deltaHPrimeDegrees / 2));
+
+  const lBarPrime = (l1 + l2) / 2;
+  const cBarPrime = (c1Prime + c2Prime) / 2;
+
+  let hBarPrime = 0;
+  if (c1Prime * c2Prime === 0) {
+    hBarPrime = h1Prime + h2Prime;
+  } else {
+    const diff = Math.abs(h1Prime - h2Prime);
+    const sum = h1Prime + h2Prime;
+    if (diff <= 180) hBarPrime = sum / 2;
+    else if (sum < 360) hBarPrime = (sum + 360) / 2;
+    else hBarPrime = (sum - 360) / 2;
+  }
+
+  const t = 1
+    - 0.17 * Math.cos(rad(hBarPrime - 30))
+    + 0.24 * Math.cos(rad(2 * hBarPrime))
+    + 0.32 * Math.cos(rad(3 * hBarPrime + 6))
+    - 0.20 * Math.cos(rad(4 * hBarPrime - 63));
+
+  const deltaTheta = 30 * Math.exp(-Math.pow((hBarPrime - 275) / 25, 2));
+  const cBarPrime7 = Math.pow(cBarPrime, 7);
+  const rc = 2 * Math.sqrt(cBarPrime7 / (cBarPrime7 + Math.pow(25, 7)));
+
+  const lBarMinus50Sq = Math.pow(lBarPrime - 50, 2);
+  const sL = 1 + (0.015 * lBarMinus50Sq) / Math.sqrt(20 + lBarMinus50Sq);
+  const sC = 1 + 0.045 * cBarPrime;
+  const sH = 1 + 0.015 * cBarPrime * t;
+  const rT = -Math.sin(rad(2 * deltaTheta)) * rc;
+
+  const lTerm = deltaLPrime / (kL * sL);
+  const cTerm = deltaCPrime / (kC * sC);
+  const hTerm = deltaHPrime / (kH * sH);
+  return Math.sqrt(Math.max(0, lTerm * lTerm + cTerm * cTerm + hTerm * hTerm + rT * cTerm * hTerm));
+}
+
+/**
+ * Extracts Lab/RGB/brightness/contrast/saturation statistics from RGBA pixel bytes
+ * (reused from AI-COLOR-COMPARE `src/color_science/metrics.ts`, ignoring transparent pixels).
+ */
+export function extractROIStats(rgbaPixels: Uint8Array | Uint8ClampedArray | number[], alphaCut = 128): PixelDataStats {
+  const total = Math.floor(rgbaPixels.length / 4);
+  if (!total) {
+    return {
+      meanLab: { l: 0, a: 0, b: 0 },
+      meanRgb: { r: 0, g: 0, b: 0 },
+      brightness: 0, contrast: 0, saturation: 0,
+      shadowClippingRatio: 0, highlightClippingRatio: 0, pixelCount: 0,
+    };
+  }
+
+  let sumR = 0, sumG = 0, sumB = 0, sumL = 0, sumA = 0, sumBLab = 0, sumSat = 0;
+  let shadowClipped = 0, highlightClipped = 0, count = 0;
+  const lValues: number[] = [];
+
+  for (let i = 0; i < total; i++) {
+    const idx = i * 4;
+    if (rgbaPixels[idx + 3] < alphaCut) continue;
+    const r = rgbaPixels[idx], g = rgbaPixels[idx + 1], b = rgbaPixels[idx + 2];
+    count++;
+    sumR += r; sumG += g; sumB += b;
+    if (r < 5 && g < 5 && b < 5) shadowClipped++;
+    if (r > 250 || g > 250 || b > 250) highlightClipped++;
+    const lab = rgbToLab({ r, g, b });
+    lValues.push(lab.l);
+    sumL += lab.l; sumA += lab.a; sumBLab += lab.b;
+    sumSat += Math.hypot(lab.a, lab.b);
+  }
+
+  if (!count) {
+    return {
+      meanLab: { l: 0, a: 0, b: 0 },
+      meanRgb: { r: 0, g: 0, b: 0 },
+      brightness: 0, contrast: 0, saturation: 0,
+      shadowClippingRatio: 0, highlightClippingRatio: 0, pixelCount: 0,
+    };
+  }
+
+  const meanL = sumL / count;
+  let sumVar = 0;
+  for (const l of lValues) sumVar += (l - meanL) * (l - meanL);
+
+  return {
+    meanLab: { l: meanL, a: sumA / count, b: sumBLab / count },
+    meanRgb: { r: Math.round(sumR / count), g: Math.round(sumG / count), b: Math.round(sumB / count) },
+    brightness: meanL,
+    contrast: Math.sqrt(sumVar / count),
+    saturation: sumSat / count,
+    shadowClippingRatio: shadowClipped / count,
+    highlightClippingRatio: highlightClipped / count,
+    pixelCount: count,
+  };
+}
+
+/** Extracts ROI stats from a percentage bounding box `{ x, y, width, height }` on an RGBA image. */
+export function extractROIBoxStats(
+  rgba: Uint8Array | Uint8ClampedArray,
+  totalWidth: number,
+  totalHeight: number,
+  box: SemanticRegionRoi,
+  alphaCut = 128,
+): PixelDataStats {
+  const x0 = Math.max(0, Math.min(totalWidth - 1, Math.round((box.x / 100) * totalWidth)));
+  const y0 = Math.max(0, Math.min(totalHeight - 1, Math.round((box.y / 100) * totalHeight)));
+  const cw = Math.max(1, Math.min(totalWidth - x0, Math.round((box.width / 100) * totalWidth)));
+  const ch = Math.max(1, Math.min(totalHeight - y0, Math.round((box.height / 100) * totalHeight)));
+  const cropped = new Uint8Array(cw * ch * 4);
+  for (let y = 0; y < ch; y++) {
+    const srcStart = ((y0 + y) * totalWidth + x0) * 4;
+    cropped.set(rgba.subarray(srcStart, srcStart + cw * 4), y * cw * 4);
+  }
+  return extractROIStats(cropped, alphaCut);
+}
+
+/** Priority 3 fallback: sample a rendered frame's semantic ROI box into a ModelRegionSample. */
+export function sampleRenderRegion(
+  region: string,
+  rgba: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  box: SemanticRegionRoi,
+): ModelRegionSample {
+  const stats = extractROIBoxStats(rgba, width, height, box);
+  if (!stats.pixelCount) return { region, source: 'render', unreadable: true, note: 'ROI contains no opaque pixels' };
+  return {
+    region,
+    srgb: stats.meanRgb,
+    hex: rgbToHex(stats.meanRgb),
+    source: 'render',
+  };
+}
+
+const normalizeName = (s: string) => s.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const tokensOf = (s: string) => normalizeName(s).split(/\s+/).filter(Boolean);
+
+function matchRegionScore(region: string, candidates: string[], aliases?: Record<string, string | string[]>): number {
+  const normRegion = normalizeName(region);
+  const aliasList = aliases?.[region];
+  const targets = [normRegion, ...(Array.isArray(aliasList) ? aliasList.map(normalizeName) : aliasList ? [normalizeName(aliasList)] : [])].filter(Boolean);
+  let best = 0;
+  for (const cand of candidates) {
+    const nc = normalizeName(cand);
+    if (!nc) continue;
+    const cTokens = tokensOf(cand);
+    for (const target of targets) {
+      if (nc === target) best = Math.max(best, 100);
+      else if (cTokens.includes(target)) best = Math.max(best, 80);
+      else if (nc.includes(target)) best = Math.max(best, 60);
+      else {
+        const tTokens = tokensOf(target);
+        if (tTokens.length && tTokens.every((t) => cTokens.includes(t))) best = Math.max(best, 70);
+      }
+    }
+  }
+  return best;
+}
+
+type DuckAttr = { count?: number; itemSize?: number; array?: ArrayLike<number>; getX?: (i: number) => number; getY?: (i: number) => number; getZ?: (i: number) => number };
+type DuckMaterial = { color?: { r: number; g: number; b: number }; emissive?: { r: number; g: number; b: number }; map?: { image?: { data?: ArrayLike<number>; width?: number; height?: number } } };
+type DuckNode = {
+  name?: string;
+  visible?: boolean;
+  isMesh?: boolean;
+  parent?: DuckNode | null;
+  children?: DuckNode[];
+  geometry?: { attributes?: Record<string, DuckAttr> };
+  material?: DuckMaterial | DuckMaterial[];
+};
+
+function collectMeshesWithPaths(root: DuckNode): Array<{ mesh: DuckNode; names: string[] }> {
+  const out: Array<{ mesh: DuckNode; names: string[] }> = [];
+  const visit = (node: DuckNode, ancestors: string[]) => {
+    if (!node || node.visible === false) return;
+    const chain = node.name ? [...ancestors, node.name] : ancestors;
+    if (node.isMesh && node.geometry?.attributes?.position) out.push({ mesh: node, names: chain });
+    if (Array.isArray(node.children)) for (const child of node.children) visit(child, chain);
+  };
+  visit(root, []);
+  return out;
+}
+
+function readAttrVec(attr: DuckAttr, index: number): [number, number, number] {
+  if (typeof attr.getX === 'function' && typeof attr.getY === 'function' && typeof attr.getZ === 'function') {
+    return [attr.getX(index), attr.getY(index), attr.getZ(index)];
+  }
+  const s = attr.itemSize ?? 3;
+  const a = attr.array!;
+  return [a[index * s] ?? 0, a[index * s + 1] ?? 0, a[index * s + 2] ?? 0];
+}
+
+function sampleMeshBaseColor(mesh: DuckNode, emissiveHint = false): { linear?: LinearRGB; srgb?: RGB; source: RegionColorSource; unreadable?: boolean; note?: string } {
+  const matRaw = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+  const mat: DuckMaterial = matRaw ?? {};
+  const tint = mat.color ? { r: mat.color.r, g: mat.color.g, b: mat.color.b } : { r: 1, g: 1, b: 1 };
+  const colAttr = mesh.geometry?.attributes?.color;
+
+  // Priority 1a: vertex colors multiplied by material.color (Three.js sRGB->linear shader rule)
+  if (colAttr && (colAttr.count ?? 0) > 0) {
+    const n = colAttr.count!;
+    const step = Math.max(1, Math.floor(n / 1024));
+    let sr = 0, sg = 0, sb = 0, cnt = 0;
+    for (let i = 0; i < n; i += step) {
+      const [vx, vy, vz] = readAttrVec(colAttr, i);
+      sr += vx * tint.r; sg += vy * tint.g; sb += vz * tint.b; cnt++;
+    }
+    const lin = { r: sr / cnt, g: sg / cnt, b: sb / cnt };
+    return { linear: lin, srgb: linearRGBToSRGB(lin), source: 'vertex-color' };
+  }
+
+  // Priority 2: texture map pixel buffer (optionally indexed by mesh UVs so shared texture atlases stay per-part!)
+  if (mat.map) {
+    const img = mat.map.image;
+    const data = img?.data;
+    const w = img?.width ?? 0, h = img?.height ?? 0;
+    if (!data || w <= 0 || h <= 0) {
+      return { source: 'texture', unreadable: true, note: 'material.map has no readable pixel buffer in current runtime' };
+    }
+    const uv = mesh.geometry?.attributes?.uv;
+    let sr = 0, sg = 0, sb = 0, cnt = 0;
+    if (uv && (uv.count ?? 0) > 0) {
+      const step = Math.max(1, Math.floor(uv.count! / 512));
+      for (let i = 0; i < uv.count!; i += step) {
+        let u: number, v: number;
+        if (typeof uv.getX === 'function' && typeof uv.getY === 'function') {
+          u = uv.getX(i); v = uv.getY(i);
+        } else {
+          const s = uv.itemSize ?? 2;
+          u = uv.array![i * s]; v = uv.array![i * s + 1];
+        }
+        const uu = ((u % 1) + 1) % 1;
+        const vv = ((v % 1) + 1) % 1;
+        const px = Math.min(w - 1, Math.floor(uu * w));
+        const py = Math.min(h - 1, Math.floor((1 - vv) * h));
+        const off = (py * w + px) * 4;
+        if ((data[off + 3] ?? 255) < 128) continue;
+        const linTex = sRGBToLinearRGB({ r: data[off], g: data[off + 1], b: data[off + 2] });
+        sr += linTex.r * tint.r; sg += linTex.g * tint.g; sb += linTex.b * tint.b; cnt++;
+      }
+    }
+    if (!cnt) {
+      const stats = extractROIStats(data instanceof Uint8Array || data instanceof Uint8ClampedArray ? data : Array.from(data));
+      if (!stats.pixelCount) return { source: 'texture', unreadable: true, note: 'texture contains no opaque pixels' };
+      const linTex = sRGBToLinearRGB(stats.meanRgb);
+      const lin = { r: linTex.r * tint.r, g: linTex.g * tint.g, b: linTex.b * tint.b };
+      return { linear: lin, srgb: linearRGBToSRGB(lin), source: 'texture' };
+    }
+    const lin = { r: sr / cnt, g: sg / cnt, b: sb / cnt };
+    return { linear: lin, srgb: linearRGBToSRGB(lin), source: 'texture' };
+  }
+
+  // Priority 1b: scalar material.color / emissive (zero lighting influence)
+  if (emissiveHint && mat.emissive && (tint.r + tint.g + tint.b) < 0.05 && (mat.emissive.r + mat.emissive.g + mat.emissive.b) > 0.05) {
+    const em = { r: mat.emissive.r, g: mat.emissive.g, b: mat.emissive.b };
+    return { linear: em, srgb: linearRGBToSRGB(em), source: 'material' };
+  }
+  return { linear: tint, srgb: linearRGBToSRGB(tint), source: 'material' };
+}
+
+/**
+ * Priority 1 & 2 model sampler: reads base material/vertex/texture colors from named meshes or parent groups
+ * directly in memory without rendering frames or calling any AI.
+ */
+export function sampleModelRegionColors(
+  root: unknown,
+  regions: readonly SemanticRegionRef[],
+  regionAliases?: Record<string, string | string[]>,
+): Record<string, ModelRegionSample> {
+  const result: Record<string, ModelRegionSample> = {};
+  if (!root || !regions.length) return result;
+  const entries = collectMeshesWithPaths(root as DuckNode);
+
+  for (const ref of regions) {
+    let bestScore = 0;
+    const matched: DuckNode[] = [];
+    for (const entry of entries) {
+      const score = matchRegionScore(ref.region, entry.names, regionAliases);
+      if (score <= 0) continue;
+      if (score > bestScore) { bestScore = score; matched.length = 0; matched.push(entry.mesh); }
+      else if (score === bestScore) matched.push(entry.mesh);
+    }
+    if (!matched.length) continue;
+
+    let sr = 0, sg = 0, sb = 0, cnt = 0;
+    let source: RegionColorSource = 'material';
+    let unreadable = false;
+    let note: string | undefined;
+    for (const m of matched) {
+      const s = sampleMeshBaseColor(m, ref.emissive);
+      source = s.source;
+      if (s.unreadable) { unreadable = true; note = s.note; continue; }
+      if (s.linear) { sr += s.linear.r; sg += s.linear.g; sb += s.linear.b; cnt++; }
+    }
+    if (!cnt) {
+      result[ref.region] = { region: ref.region, source, unreadable: true, note: unreadable ? note : 'unable to sample mesh color' };
+      continue;
+    }
+    const lin = { r: sr / cnt, g: sg / cnt, b: sb / cnt };
+    const srgb = linearRGBToSRGB(lin);
+    result[ref.region] = { region: ref.region, linearRgb: lin, srgb, hex: rgbToHex(srgb), source };
+  }
+  return result;
+}
+
+const shiftHint = (dL: number, dA: number, dB: number) => {
+  const notes: string[] = [];
+  if (Math.abs(dL) >= 5) notes.push(dL > 0 ? 'too light' : 'too dark');
+  if (Math.abs(dA) >= 5) notes.push(dA > 0 ? 'too red/magenta' : 'too green');
+  if (Math.abs(dB) >= 5) notes.push(dB > 0 ? 'too yellow/warm' : 'too blue/cool');
+  return notes.length ? notes.join(', ') : 'hue/chroma mismatch';
+};
+
+/**
+ * Evaluates G4 Regional Color QC using CIEDE2000 (ΔE00).
+ * Fast/Quick modes return SKIPPED immediately with zero G4 overhead.
+ */
+export function evaluateRegionalColorQC(
+  refRegions: readonly SemanticRegionRef[] | undefined,
+  modelSamples: Record<string, ModelRegionSample> | undefined,
+  options: { mode?: string; thresholds?: Partial<G4Thresholds> } = {},
+): RegionalColorQCReport {
+  const mode = (options.mode ?? 'balance').toLowerCase();
+  const thresholds: G4Thresholds = { ...DEFAULT_G4_THRESHOLDS, ...options.thresholds };
+
+  if (mode === 'fast' || mode === 'quick') {
+    return {
+      status: 'SKIPPED', mode, evaluated: 0, passed: 0, failed: 0, skipped: 0, errored: 0,
+      maxDeltaE00: 0, thresholds, regions: [], gate: null,
+      reason: `Mode "${options.mode ?? mode}" runs G3 palette only (G4 skipped with zero overhead)`,
+    };
+  }
+
+  if (!refRegions?.length) {
+    return {
+      status: 'SKIPPED', mode, evaluated: 0, passed: 0, failed: 0, skipped: 0, errored: 0,
+      maxDeltaE00: 0, thresholds, regions: [], gate: null,
+      reason: 'No cached semantic region metadata in reference; G4 skipped cleanly',
+    };
+  }
+
+  const regions: RegionQCResult[] = [];
+  let passed = 0, failed = 0, skipped = 0, errored = 0, maxDeltaE00 = 0;
+
+  for (const ref of refRegions) {
+    if (ref.status === 'uncertain' || !ref.hex) {
+      skipped++;
+      regions.push({
+        region: ref.region, label: ref.label, status: 'SKIPPED', refHex: ref.hex,
+        reason: 'reference region marked uncertain or missing hex',
+      });
+      continue;
+    }
+
+    const sample = modelSamples?.[ref.region];
+    if (!sample) {
+      skipped++;
+      regions.push({
+        region: ref.region, label: ref.label, status: 'SKIPPED', refHex: ref.hex,
+        reason: `no model region sample found for "${ref.region}"`,
+      });
+      continue;
+    }
+    if (sample.unreadable) {
+      skipped++;
+      regions.push({
+        region: ref.region, label: ref.label, status: 'SKIPPED', source: sample.source, refHex: ref.hex,
+        reason: sample.note ?? 'model region color buffer unreadable',
+      });
+      continue;
+    }
+
+    try {
+      const refRgb = hexToRgb(ref.hex);
+      const refLab = rgbToLab(refRgb);
+      const modelLab = sample.srgb ? rgbToLab(sample.srgb)
+        : sample.linearRgb ? linearRgbToLab(sample.linearRgb)
+          : sample.hex ? rgbToLab(hexToRgb(sample.hex))
+            : null;
+      if (!modelLab) {
+        skipped++;
+        regions.push({
+          region: ref.region, label: ref.label, status: 'SKIPPED', source: sample.source, refHex: ref.hex,
+          reason: 'model region sample lacks color values',
+        });
+        continue;
+      }
+
+      const modelHex = sample.hex ?? (sample.srgb ? rgbToHex(sample.srgb) : sample.linearRgb ? rgbToHex(linearRGBToSRGB(sample.linearRgb)) : undefined);
+      const dE = Number(calculateDeltaE00(refLab, modelLab, 1, 1, 1).toFixed(2));
+      const dEChromatic = Number(calculateDeltaE00(refLab, modelLab, 4.0, 3.0, 1.0).toFixed(2));
+      const dL = Number((modelLab.l - refLab.l).toFixed(2));
+      const dA = Number((modelLab.a - refLab.a).toFixed(2));
+      const dB = Number((modelLab.b - refLab.b).toFixed(2));
+      const refC = Math.hypot(refLab.a, refLab.b);
+      const modC = Math.hypot(modelLab.a, modelLab.b);
+      maxDeltaE00 = Math.max(maxDeltaE00, dE);
+
+      const neutralSafe = refC >= 8 || modC < 12;
+      const isLightingOnlyRenderShift = sample.source === 'render'
+        && dE > thresholds.maxDeltaE00
+        && neutralSafe
+        && dEChromatic <= thresholds.renderChromaticMaxDeltaE00
+        && Math.abs(dL) >= thresholds.minLightingDeltaL;
+
+      if (isLightingOnlyRenderShift) {
+        passed++;
+        regions.push({
+          region: ref.region, label: ref.label, status: 'PASS', source: sample.source,
+          refHex: ref.hex, modelHex, deltaE00: dE, chromaticDeltaE00: dEChromatic,
+          deltaL: dL, deltaA: dA, deltaB: dB, lightingOnlyWarning: true,
+          reason: `render brightness/lighting shift (ΔE00=${dE}, chromatic ΔE00=${dEChromatic} <= ${thresholds.renderChromaticMaxDeltaE00}) — base hue preserved`,
+        });
+      } else if (dE <= thresholds.maxDeltaE00) {
+        passed++;
+        regions.push({
+          region: ref.region, label: ref.label, status: 'PASS', source: sample.source,
+          refHex: ref.hex, modelHex, deltaE00: dE, chromaticDeltaE00: dEChromatic,
+          deltaL: dL, deltaA: dA, deltaB: dB,
+          reason: dE > thresholds.warnDeltaE00 ? `within limit with mild drift (ΔE00=${dE})` : `matched (ΔE00=${dE})`,
+        });
+      } else {
+        failed++;
+        regions.push({
+          region: ref.region, label: ref.label, status: 'FAIL', source: sample.source,
+          refHex: ref.hex, modelHex, deltaE00: dE, chromaticDeltaE00: dEChromatic,
+          deltaL: dL, deltaA: dA, deltaB: dB,
+          reason: `ΔE00=${dE} > ${thresholds.maxDeltaE00} (ref ${ref.hex} vs model ${modelHex}: ${shiftHint(dL, dA, dB)})`,
+        });
+      }
+    } catch (error) {
+      errored++;
+      regions.push({
+        region: ref.region, label: ref.label, status: 'ERROR', source: sample.source, refHex: ref.hex,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const evaluated = passed + failed;
+  const status: G4Status = errored > 0 ? 'ERROR' : failed > 0 ? 'FAIL' : evaluated === 0 ? 'SKIPPED' : 'PASS';
+  const failedList = regions.filter((r) => r.status === 'FAIL').map((r) => `${r.region} (ΔE00 ${r.deltaE00})`);
+  const errList = regions.filter((r) => r.status === 'ERROR').map((r) => `${r.region}: ${r.reason}`);
+
+  let gate: Gate | null = null;
+  if (status === 'PASS' || status === 'FAIL') {
+    gate = {
+      gate: 'G4 regional color',
+      value: status === 'PASS'
+        ? `${passed} region(s) matched via CIEDE2000 (max ΔE00 ${maxDeltaE00.toFixed(2)} <= ${thresholds.maxDeltaE00}${skipped ? `; ${skipped} skipped` : ''})`
+        : `${failed} region(s) mismatched: ${failedList.join(', ')}`,
+      pass: status === 'PASS',
+      hint: status === 'PASS' ? '' : `adjust material/vertex colors for failing region(s): ${failedList.join(', ')} (max 1 correction round)`,
+    };
+  }
+
+  const reason = status === 'PASS' ? gate!.value
+    : status === 'FAIL' ? gate!.value
+      : status === 'ERROR' ? `G4 technical error: ${errList.join('; ')}`
+        : 'All regions were uncertain, unmapped, or unreadable — G4 reported as SKIPPED';
+
+  return { status, mode, evaluated, passed, failed, skipped, errored, maxDeltaE00, thresholds, regions, gate, reason };
+}
+~~~
+
 ## scripts/export-glb.ts
 
 ~~~typescript source-excerpt
@@ -963,16 +1745,16 @@ process.exit(emit({ tool: 'export-glb', ok: failed.length === 0, gates, skipped:
 
 ~~~typescript source-excerpt
 // scripts/export-rigged-glb.ts: official Three.js GLB export + disk round-trip verifier for assets with vertex colors, materials, skins/bones, or AnimationClips.
-// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}'] [--static-clips a,b]
+// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}'] [--static-clips a,b] [--open sheet1,sheet2|all]
 // The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
 // Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import * as nodeModule from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { countScene, selectBuilder, unpackAsset } from './asset-builder';
+import { countScene, extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
 import { clipMotion, type ClipMotion, type NodeMotion } from './clip-motion';
-import { emit, type Gate } from './result';
+import { qaGates } from './qacheck';
+import { emit, registerThreeHook, type Gate } from './result';
 
 // Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
 if (typeof (globalThis as Record<string, unknown>).FileReader === 'undefined') {
@@ -999,9 +1781,10 @@ const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && 
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
 
 const modFile = opt('module'), outFile = opt('out');
-if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] --out asset.glb');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] --out asset.glb');
 const staticClipsList = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const staticClips = new Set(staticClipsList);
+const openList = opt('open')?.split(',').map((s) => s.trim()).filter(Boolean);
 let params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
@@ -1016,20 +1799,7 @@ try {
   fail(`three / addons not available: ${(e as Error).message}`);
 }
 
-// Let external builders resolve their own modules first. For missing Three.js imports,
-// resolve against this skill without relocating the builder or changing NODE_PATH.
-const hooks = nodeModule.registerHooks?.({
-  resolve(specifier, context, nextResolve) {
-    if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
-    try {
-      return nextResolve(specifier, context);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
-      return nextResolve(import.meta.resolve(specifier), context);
-    }
-  },
-});
+const hooks = registerThreeHook();
 
 let asset: ReturnType<typeof unpackAsset>;
 try {
@@ -1141,6 +1911,28 @@ if (animations.length > 0) {
     value: motionIssues.length ? motionIssues.join('; ') : clipSummaries.join('; '),
     pass: motionIssues.length === 0,
     hint: 'ensure every non-static clip moves at least one bound pivot across timestamps before and after export, or pass intentionally static clip names via --static-clips',
+  });
+}
+
+try {
+  const reloadedParts = extractObjectParts(reloaded.scene, THREE);
+  const topo = qaGates(reloadedParts, { open: openList, grounding: false });
+  const topoGates = topo.gates.filter((g) => ['Q1 finite', 'Q2 degenerate', 'Q3 winding', 'Q4 closed'].includes(g.gate));
+  const topoFails = topoGates.filter((g) => !g.pass);
+  gates.push({
+    gate: 'RG8 topology',
+    value: topoFails.length
+      ? topoFails.map((g) => `${g.gate}: ${g.value}`).join(' | ')
+      : `${Object.keys(reloadedParts).length} mesh(es) clean (Q1–Q4 finite, valid winding, zero open/duplicated edges${openList?.length ? `; open: ${openList.join(',')}` : ''})`,
+    pass: topoFails.length === 0,
+    hint: topoFails[0]?.hint ?? 'keep exported meshes watertight without interior cuts or overlapping coplanar voxel segments (pass --open <names> for thin sheets)',
+  });
+} catch (e) {
+  gates.push({
+    gate: 'RG8 topology',
+    value: (e as Error).message,
+    pass: false,
+    hint: 'exported GLB contained no valid mesh geometry',
   });
 }
 
@@ -1430,7 +2222,7 @@ import { parseArgs } from 'node:util';
 import { emit } from './result';
 import type { StudioBackground, StudioConfig } from './studio/types';
 
-const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] --out index.html';
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] [--initial-clip Clip] [--autoplay] --out index.html';
 const harness = fileURLToPath(new URL('../', import.meta.url));
 const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
 
@@ -1439,6 +2231,7 @@ async function main() {
     module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
     out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
     margin: { type: 'string' }, 'front-side': { type: 'string' }, background: { type: 'string' },
+    'initial-clip': { type: 'string' }, autoplay: { type: 'boolean' },
   } });
   if (!values.module || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
@@ -1463,6 +2256,8 @@ async function main() {
   const out = resolve(values.out);
   const config: StudioConfig = {
     module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide, background,
+    ...(values['initial-clip'] ? { initialClip: values['initial-clip'] } : {}),
+    ...(values.autoplay ? { autoplay: true } : {}),
   };
   const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
   const configJson = JSON.stringify(config);
@@ -1516,6 +2311,7 @@ async function main() {
   return emit({
     tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
     builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide, background,
+    initialClip: config.initialClip ?? null, autoplay: Boolean(config.autoplay),
     unverified,
   });
 }
@@ -1679,10 +2475,11 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writePngRgba } from './png';
+import { extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
 import { normalizeParts, qaGates, determinismGates, type Gate, type Parts, type QAOptions } from './qacheck';
 import { parseBudgetArgs } from './budget';
 import { renderSheet, WRONG_TOL } from './review';
-import { emit } from './result';
+import { emit, registerThreeHook } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'qa-asset', ok: false, error: msg }, 1)); };
@@ -1697,15 +2494,33 @@ const { platform, kind, triangleLimit } = target;
 const o: QAOptions = { budget: triangleLimit ?? undefined, groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 o.grounding = !modFile || flag('grounded') || flag('footprint');   // Q6 needs the final grounded asset: always for --tris, only on request for a raw kernel
 
-let parts: Parts, build: ((p: Record<string, unknown>) => unknown) | undefined, params: Record<string, unknown> = {};
+let parts: Parts, build: ((p: Record<string, unknown>) => Promise<Parts>) | undefined, params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
+let threeMod: typeof import('three') | undefined;
+try { threeMod = await import('three'); } catch { threeMod = undefined; }
+const toParts = (built: unknown): Parts => {
+  if ((built as { isBufferGeometry?: boolean } | null)?.isBufferGeometry) {
+    throw new Error('builder returned a THREE.BufferGeometry; wrap it in a THREE.Mesh/Object3D (or return { root, animations }) or pass triangle arrays via --tris');
+  }
+  const b = built as { isObject3D?: boolean; root?: { isObject3D?: boolean } } | null;
+  if (b?.isObject3D || b?.root?.isObject3D) {
+    if (!threeMod) throw new Error('the builder returns a THREE.Object3D, which requires `three`. Install three or write tris.json and use --tris.');
+    return extractObjectParts(unpackAsset(built).root, threeMod);
+  }
+  return normalizeParts(built);
+};
 try {
   if (modFile) {
-    const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>, fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
-    const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
-    if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
-    build = mod[name!] as (p: Record<string, unknown>) => unknown;
-    parts = normalizeParts(await build({ ...params }));
+    const hooks = registerThreeHook();
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
+    } finally {
+      hooks?.deregister();
+    }
+    const { build: rawBuild } = selectBuilder(mod, opt('export'), modFile);
+    build = async (p: Record<string, unknown>) => toParts(await rawBuild(p, threeMod as typeof import('three')));
+    parts = await build({ ...params });
   } else parts = normalizeParts(JSON.parse(readFileSync(resolve(trisFile!), 'utf8')));
 } catch (e) {
   const m = (e as Error).message;
@@ -1927,33 +2742,121 @@ export async function determinismGates(build: Build, params: Record<string, unkn
 ## scripts/ref-compare.ts
 
 ~~~typescript source-excerpt
-// Compare geometry and palette with ref.json when those features change.
+// Compare geometry, global palette (G3), and semantic regional color (G4 via CIEDE2000) with ref.json.
 //   1. Write the same triangle formats as qa-asset and mesh-stats. Add hex colors to { tris, colors } or { parts, colors } for G3.
-//   2. npx tsx ref-compare.ts ref.json tris.json        -> prints PASS/FAIL per gate, writes diff-<view>.png (red = reference only, blue = model only)
+//   2. npx tsx ref-compare.ts ref.json tris.json [--mode fast|quick|balance|quality] [--regions model-regions.json | --module ./asset.ts [--export buildAsset]] [--g4-threshold 12]
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
+import {
+  evaluateRegionalColorQC,
+  sampleModelRegionColors,
+  type ModelRegionSample,
+  type RegionalColorQCReport,
+} from './color-qc';
 import { scaleNearestRgba, writePngRgba } from './png';
 import { compareToRef, formatGates, RES, type RefData } from './refcheck';
 import { flatten, normalizeParts } from './qacheck';
-import { emit } from './result';
+import { emit, registerThreeHook } from './result';
 
-const [refFile = 'ref.json', trisFile = 'tris.json'] = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const positional: string[] = [];
+const opts = new Map<string, string>();
+for (let i = 0; i < rawArgs.length; i++) {
+  const a = rawArgs[i];
+  if (a.startsWith('--')) {
+    const key = a.slice(2);
+    const val = rawArgs[i + 1];
+    if (val !== undefined && !val.startsWith('--')) { opts.set(key, val); i++; }
+    else opts.set(key, 'true');
+  } else positional.push(a);
+}
+
+const refFile = positional[0] ?? 'ref.json';
+const trisFile = positional[1] ?? 'tris.json';
+const mode = opts.get('mode') ?? 'balance';
+const regionsPath = opts.get('regions');
+const modulePath = opts.get('module');
+const g4ThreshRaw = opts.get('g4-threshold');
 const fail = (error: string): never => { console.error(error); process.exit(emit({ tool: 'ref-compare', ok: false, error }, 1)); };
+
+function normalizeModelSamples(raw: unknown): Record<string, ModelRegionSample> {
+  if (!raw || typeof raw !== 'object') return {};
+  const obj = (raw as Record<string, unknown>).regionColors && typeof (raw as Record<string, unknown>).regionColors === 'object'
+    ? (raw as Record<string, unknown>).regionColors as Record<string, unknown>
+    : raw as Record<string, unknown>;
+  const out: Record<string, ModelRegionSample> = {};
+  for (const [region, val] of Object.entries(obj)) {
+    if (typeof val === 'string') out[region] = { region, hex: val, source: 'declared' };
+    else if (val && typeof val === 'object') {
+      const v = val as Partial<ModelRegionSample>;
+      out[region] = { region, source: v.source ?? 'declared', ...v };
+    }
+  }
+  return out;
+}
+
+let ref: RefData;
 let compared: ReturnType<typeof compareToRef>;
+let g4Report: RegionalColorQCReport | undefined;
+
 try {
-  const ref = JSON.parse(readFileSync(refFile, 'utf8')) as RefData;
-  const model = JSON.parse(readFileSync(trisFile, 'utf8'));
-  const parts = normalizeParts(model);
-  const tris = flatten(parts);
-  if (!tris.length || Object.values(parts).some((part) => part.length % 9 || !part.every(Number.isFinite))) {
+  ref = JSON.parse(readFileSync(refFile, 'utf8')) as RefData;
+  let tris: number[];
+  let colors: string[] = [];
+  let modelSamples: Record<string, ModelRegionSample> = {};
+
+  if (modulePath) {
+    const THREE = await import('three');
+    const hooks = registerThreeHook();
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import(pathToFileURL(resolve(modulePath)).href)) as Record<string, unknown>;
+    } finally {
+      hooks?.deregister();
+    }
+    const { build } = selectBuilder(mod, opts.get('export'), modulePath);
+    const params = opts.get('params') ? JSON.parse(opts.get('params')!) : {};
+    const { root } = unpackAsset(await build(params, THREE));
+    const parts = extractObjectParts(root, THREE);
+    tris = flatten(parts);
+    if (ref.regions?.length && mode.toLowerCase() !== 'fast' && mode.toLowerCase() !== 'quick') {
+      modelSamples = sampleModelRegionColors(root, ref.regions);
+      colors = Object.values(modelSamples).map((s) => s.hex).filter((h): h is string => Boolean(h));
+    }
+  } else {
+    const model = JSON.parse(readFileSync(trisFile, 'utf8'));
+    const parts = normalizeParts(model);
+    tris = flatten(parts);
+    colors = Array.isArray(model?.colors) ? model.colors.filter((color: unknown): color is string => typeof color === 'string') : [];
+    if (model?.regionColors) modelSamples = normalizeModelSamples(model.regionColors);
+  }
+
+  if (regionsPath) {
+    modelSamples = { ...modelSamples, ...normalizeModelSamples(JSON.parse(readFileSync(resolve(regionsPath), 'utf8'))) };
+  }
+
+  if (!tris.length || tris.length % 9 || !tris.every(Number.isFinite)) {
     throw new Error('model needs finite coordinates in groups of nine per triangle');
   }
-  const colors = Array.isArray(model?.colors) ? model.colors.filter((color: unknown): color is string => typeof color === 'string') : [];
   compared = compareToRef(tris, ref, colors);
+
+  if (ref.regions?.length) {
+    const thresholds = g4ThreshRaw ? { maxDeltaE00: Number(g4ThreshRaw) } : undefined;
+    if (g4ThreshRaw && !Number.isFinite(thresholds!.maxDeltaE00)) throw new Error('--g4-threshold must be a finite number');
+    g4Report = evaluateRegionalColorQC(ref.regions, modelSamples, { mode, thresholds });
+    if (g4Report.gate) compared.gates.push(g4Report.gate);
+  }
 } catch (e) {
-  fail(`cannot compare ${refFile} and ${trisFile}: ${(e as Error).message}`);
+  fail(`cannot compare ${refFile} and ${modulePath ?? trisFile}: ${(e as Error).message}`);
 }
+
 const { gates, diffs, angles } = compared;
 console.log(formatGates(gates));
+if (g4Report && !g4Report.gate) {
+  console.log(`${g4Report.status}  G4 regional color: ${g4Report.reason}`);
+}
 const written: string[] = [];
 for (const [view, rgba] of Object.entries(diffs)) {
   const f = `diff-${view}.png`, up = scaleNearestRgba(rgba, RES, RES, 4);
@@ -1962,9 +2865,18 @@ for (const [view, rgba] of Object.entries(diffs)) {
   written.push(f);
   console.log('wrote', f);
 }
+const g4Error = g4Report?.status === 'ERROR';
 const failed = gates.filter((g) => !g.pass);
-console.log(failed.length ? `\n${failed.length} numeric check(s) failed. Inspect the relevant view and compare it with the reference.` : '\nNumeric checks passed. Compare the rendered identifying features with the reference (G4).');
-process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed: failed.length, diffs: written, angles }));
+console.log(failed.length || g4Error ? `\n${failed.length} numeric check(s) failed. Inspect the relevant view and compare it with the reference.` : '\nNumeric checks passed. Compare the rendered identifying features with the reference.');
+process.exit(emit({
+  tool: 'ref-compare',
+  ok: failed.length === 0 && !g4Error,
+  gates,
+  failed: failed.length,
+  diffs: written,
+  angles,
+  ...(g4Report ? { g4: g4Report } : {}),
+}));
 ~~~
 
 ## scripts/ref-intake.ts
@@ -1973,13 +2885,16 @@ process.exit(emit({ tool: 'ref-compare', ok: failed.length === 0, gates, failed:
 // scripts/ref-intake.ts: reference image(s) or a multi-view turnaround sheet -> ref.json (silhouette masks, aspect, palette). Run ONCE per reference.
 //   Separate views:   npx tsx ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json [--tol 40] [--w 1.2 --d 2.5] [--no-flood]
 //   Multi-view sheet: npx tsx ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json [--tol 18]
+//   Uneven 3-view:    npx tsx ref-intake.ts --sheet sheet.png --grid auto --views front,side,back --out ref.json
 // Reads standard 8-bit PNGs without external dependencies; uses `sharp` when installed (required for JPEG/WebP).
 // Writes <out-stem>-<view>-mask.png beside --out. LOOK at it once; if the silhouette is wrong, adjust --tol.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, parse, resolve } from 'node:path';
 import { loadSharp } from './sharp';
 import { decodePngRgba, writePngRgba } from './png';
-import { maskFromRGBA, frameMask, dominantColors, maskToB64, splitGridSheet, fitRgba, type RefData, type View } from './refcheck';
+import { extractROIBoxStats, rgbToHex, type SemanticRegionRef } from './color-qc';
+import { maskFromRGBA, frameMask, dominantColors, maskToB64, splitGridSheet, splitAutoHorizontalBands, fitRgba, type RefData, type View } from './refcheck';
 import { emit } from './result';
 
 const args = process.argv.slice(2);
@@ -1988,11 +2903,12 @@ const flag = (k: string) => args.includes('--' + k);
 const fail = (error: string): never => { console.error(error); process.exit(emit({ tool: 'ref-intake', ok: false, error }, 1)); };
 const out = resolve(opt('out') ?? 'ref.json'), tol = Number(opt('tol') ?? 40), flood = !flag('no-flood');
 const sheetFile = opt('sheet'), gridStr = opt('grid') ?? '3x2', viewsStr = opt('views') ?? 'front,back,top,bottom,side,34';
+const regionsFile = opt('regions');
 const files = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--') && !['--no-flood'].includes(args[i - 1]))).map((a) => (a.includes('=') ? a.split('=') : ['front', a]) as [string, string]);
 
 if (flag('out') && !opt('out')) fail('--out needs a file path');
 if (!sheetFile && !files.length) {
-  fail('usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood]');
+  fail('usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2|auto --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood] [--regions regions.json]');
 }
 
 const sharp = await loadSharp();
@@ -2009,20 +2925,30 @@ async function loadImageRgba(file: string, maxDim = 512): Promise<{ rgba: Uint8A
 }
 
 const inputs: { view: View; rgba: Uint8Array; w: number; h: number }[] = [];
-const VALID_VIEWS = new Set<string>(['front', 'side', 'top', '34', '34_back']);
+const VALID_VIEWS = new Set<string>(['front', 'back', 'side', 'top', '34', '34_back']);
 if (sheetFile) {
-  const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
-  if (!gm) fail(`--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`);
-  const cols = Number(gm[1]), rows = Number(gm[2]);
+  const names = viewsStr.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const isAuto = gridStr.trim().toLowerCase() === 'auto';
+  let cols: number, rows: number;
+  if (isAuto) {
+    if (names.length < 2) fail('--grid auto requires at least 2 view names in --views (e.g. front,side,back)');
+    cols = names.length;
+    rows = 1;
+  } else {
+    const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
+    if (!gm) fail(`--grid must be COLSxROWS or "auto", got "${gridStr}"`);
+    cols = Number(gm[1]); rows = Number(gm[2]);
+  }
   const full = await loadImageRgba(sheetFile, Math.max(cols, rows) * 512);
-  const tiles = splitGridSheet(full.rgba, full.w, full.h, cols, rows);
-  const names = viewsStr.split(',').map((s) => s.trim().toLowerCase());
+  const tiles = rows === 1 && cols > 1
+    ? splitAutoHorizontalBands(full.rgba, full.w, full.h, cols, { tol, flood })
+    : splitGridSheet(full.rgba, full.w, full.h, cols, rows);
   names.forEach((v, idx) => {
     if (!VALID_VIEWS.has(v) || idx >= tiles.length) return;
     const tile = fitRgba(tiles[idx].rgba, tiles[idx].w, tiles[idx].h, 512);
     inputs.push({ view: v as View, ...tile });
   });
-  if (!inputs.length) fail(`--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`);
+  if (!inputs.length) fail(`--views "${viewsStr}" matched none of front, back, side, top, 34, 34_back in ${cols}x${rows} grid`);
 } else {
   for (const [view, file] of files) {
     if (!/^[a-z0-9][a-z0-9_-]*$/i.test(view)) fail(`invalid view name "${view}"`);
@@ -2037,7 +2963,9 @@ if (opt('w') || opt('d')) ref.proportions = { w: opt('w') ? Number(opt('w')) : u
 try {
   if (statSync(out, { throwIfNoEntry: false })?.isDirectory()) throw new Error('--out points to a directory');
   mkdirSync(outDir, { recursive: true });
+  const rawViews = new Map<string, { rgba: Uint8Array; w: number; h: number }>();
   for (const { view, rgba, w, h } of inputs) {
+    rawViews.set(view, { rgba, w, h });
     const mask = maskFromRGBA(rgba, w, h, { tol, flood }), { mask: framed, aspect } = frameMask(mask);
     const maskFile = `${outStem}-${view}-mask.png`, maskPath = join(outDir, maskFile);
     ref.views[view] = { w: framed.w, h: framed.h, data: maskToB64(framed), aspect, mask: maskFile };
@@ -2052,21 +2980,40 @@ try {
     console.log(`${view}: aspect ${aspect.toFixed(2)} (w/h), foreground ${(fg * 100).toFixed(0)}% of the image${suspicious ? '  <- suspicious, inspect mask and adjust --tol' : ''}`);
     console.log('wrote', maskPath);
   }
+  if (regionsFile) {
+    const rawRegions = JSON.parse(readFileSync(resolve(regionsFile), 'utf8'));
+    const list: SemanticRegionRef[] = Array.isArray(rawRegions) ? rawRegions : Array.isArray(rawRegions?.regions) ? rawRegions.regions : [];
+    const fallbackView = rawViews.get('front') ?? [...rawViews.values()][0];
+    ref.regions = list.map((entry) => {
+      if (entry.status === 'uncertain' || entry.hex || !entry.roi) return entry;
+      const viewBuf = rawViews.get(entry.roi.view ?? 'front') ?? fallbackView;
+      if (!viewBuf) return { ...entry, status: 'uncertain' as const };
+      const stats = extractROIBoxStats(viewBuf.rgba, viewBuf.w, viewBuf.h, entry.roi);
+      if (!stats.pixelCount) return { ...entry, status: 'uncertain' as const };
+      return { ...entry, hex: rgbToHex(stats.meanRgb), status: entry.status ?? ('confident' as const) };
+    });
+    const hash = createHash('sha256').update(JSON.stringify(ref.regions)).digest('hex').slice(0, 12);
+    ref.regionCacheKey = `regions-${hash}`;
+  }
   writeFileSync(out, JSON.stringify(ref));
 } catch (e) {
   fail(`cannot write reference outputs beside ${out}: ${(e as Error).message}`);
 }
 console.log('palette:', ref.palette.map((c) => `${c.hex} ${(c.share * 100).toFixed(0)}%`).join('  '));
+if (ref.regions?.length) {
+  console.log('regions:', ref.regions.map((r) => `${r.region}=${r.status === 'uncertain' ? 'uncertain' : r.hex ?? 'uncertain'}`).join('  '));
+}
 console.log('wrote', out);
-process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palette, warnings }));
+process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palette, regions: ref.regions ?? [], regionCacheKey: ref.regionCacheKey ?? null, warnings }));
 ~~~
 
 ## scripts/refcheck.ts
 
 ~~~typescript source-excerpt
 // scripts/refcheck.ts: pure reference-vs-result measurements. No THREE, no DOM, no image library. Node-testable.
-// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
-export type View = 'front' | 'side' | 'top' | '34' | '34_back';
+// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  back = camera at -Z (u = -x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
+import type { SemanticRegionRef } from './color-qc';
+export type View = 'front' | 'back' | 'side' | 'top' | '34' | '34_back';
 export type Mask = { w: number; h: number; data: Uint8Array };              // 1 = inside the shape
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
@@ -2112,6 +3059,7 @@ export function silhouette(t: Tris, view: View, res = RES, camera?: CameraAngles
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
     if (view === 'front') { U[i] = x; V[i] = y; }
+    else if (view === 'back') { U[i] = -x; V[i] = y; }
     else if (view === 'side') { U[i] = -z; V[i] = y; }
     else if (view === 'top') { U[i] = x; V[i] = -z; }
     else {
@@ -2148,6 +3096,77 @@ export function cropRgba(rgba: Uint8Array | Uint8ClampedArray, w: number, h: num
     }
   }
   return { rgba: out, w: cw, h: ch };
+}
+
+/** Splits a horizontal multi-view strip at vertical whitespace gaps, handling unevenly spaced panels. Falls back to uniform splitGridSheet when clean gaps cannot isolate expectedCount views. */
+export function splitAutoHorizontalBands(
+  rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, expectedCount: number,
+  o: { tol?: number; alphaCut?: number; flood?: boolean } = {},
+) {
+  if (expectedCount < 2 || w < expectedCount * 4) return splitGridSheet(rgba, w, h, expectedCount, 1);
+  const tol = o.tol ?? 40, border: number[] = [];
+  for (let x = 0; x < w; x++) border.push(x, (h - 1) * w + x);
+  for (let y = 1; y < h - 1; y++) border.push(y * w, y * w + w - 1);
+  const med = (k: number) => { const v = border.map((p) => rgba[p * 4 + k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const transparent = med(3) < 250, bg = [med(0), med(1), med(2)];
+  const fg = new Uint8Array(w * h);
+  if (transparent || o.flood === false) {
+    for (let i = 0; i < w * h; i++) fg[i] = transparent ? (rgba[i * 4 + 3] >= (o.alphaCut ?? 128) ? 1 : 0) : dist([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]], bg) > tol ? 1 : 0;
+  } else {
+    const isBg = new Uint8Array(w * h), q = new Int32Array(w * h);
+    let head = 0, tail = 0;
+    const nearBg = (p: number) => dist([rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2]], bg) <= tol;
+    for (const p of border) if (!isBg[p] && nearBg(p)) { isBg[p] = 1; q[tail++] = p; }
+    while (head < tail) {
+      const p = q[head++], x = p % w, y = (p - x) / w;
+      if (x > 0 && !isBg[p - 1] && nearBg(p - 1)) { isBg[p - 1] = 1; q[tail++] = p - 1; }
+      if (x + 1 < w && !isBg[p + 1] && nearBg(p + 1)) { isBg[p + 1] = 1; q[tail++] = p + 1; }
+      if (y > 0 && !isBg[p - w] && nearBg(p - w)) { isBg[p - w] = 1; q[tail++] = p - w; }
+      if (y + 1 < h && !isBg[p + w] && nearBg(p + w)) { isBg[p + w] = 1; q[tail++] = p + w; }
+    }
+    for (let i = 0; i < w * h; i++) fg[i] = isBg[i] ? 0 : 1;
+  }
+
+  const colThresh = Math.max(1, Math.floor(h * 0.005));
+  const occupiedCols = new Uint8Array(w);
+  let totalOcc = 0;
+  for (let x = 0; x < w; x++) {
+    let col = 0;
+    for (let y = 0; y < h; y++) col += fg[y * w + x];
+    if (col > colThresh) { occupiedCols[x] = 1; totalOcc++; }
+  }
+  let minX = 0, maxX = w - 1;
+  while (minX < w && !occupiedCols[minX]) minX++;
+  while (maxX > minX && !occupiedCols[maxX]) maxX--;
+  const minSliceOcc = Math.max(4, Math.floor(totalOcc / (expectedCount * 6)));
+  if (totalOcc < expectedCount * 4) return splitGridSheet(rgba, w, h, expectedCount, 1);
+
+  const prefix = new Int32Array(w + 1);
+  for (let x = 0; x < w; x++) prefix[x + 1] = prefix[x] + occupiedCols[x];
+  const gaps: { mid: number; width: number }[] = [];
+  for (let x = minX; x <= maxX; x++) {
+    if (occupiedCols[x]) continue;
+    let end = x;
+    while (end + 1 <= maxX && !occupiedCols[end + 1]) end++;
+    gaps.push({ mid: Math.floor((x + end + 1) / 2), width: end - x + 1 });
+    x = end;
+  }
+  gaps.sort((a, b) => b.width - a.width || a.mid - b.mid);
+  const chosen: number[] = [];
+  for (const gap of gaps) {
+    if (chosen.length === expectedCount - 1) break;
+    const trial = [...chosen, gap.mid].sort((a, b) => a - b);
+    const bounds = [0, ...trial, w];
+    let ok = true;
+    for (let i = 0; i + 1 < bounds.length; i++) {
+      if (prefix[bounds[i + 1]] - prefix[bounds[i]] < minSliceOcc) { ok = false; break; }
+    }
+    if (ok) chosen.push(gap.mid);
+  }
+  if (chosen.length !== expectedCount - 1) return splitGridSheet(rgba, w, h, expectedCount, 1);
+  chosen.sort((a, b) => a - b);
+  const bounds = [0, ...chosen, w];
+  return Array.from({ length: expectedCount }, (_, i) => cropRgba(rgba, w, h, bounds[i], 0, bounds[i + 1] - bounds[i], h));
 }
 
 /** Splits an even cols x rows turnaround sheet into row-major RGBA tiles. */
@@ -2285,7 +3304,13 @@ export function paletteGap(refColors: { hex: string; share: number }[], used: st
   return worst;
 }
 
-export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
+export type RefData = {
+  views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>;
+  palette: { hex: string; share: number }[];
+  proportions?: { w?: number; d?: number };
+  regions?: SemanticRegionRef[];
+  regionCacheKey?: string;
+};
 export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
@@ -2298,7 +3323,7 @@ export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = []
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
-  for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
+  for (const view of ['front', 'back', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
     const angled = view === '34' || view === '34_back';
     const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;
@@ -2332,6 +3357,7 @@ export const formatGates = (g: Gate[]) => g.map((x) => `${x.pass ? 'PASS' : 'FAI
 //   @@RESULT {"tool":"run-tests","ok":true,"gates":[{"gate":"...","value":"...","pass":true,"hint":""}], ...}
 // Exit codes: 0 = ok, 2 = a gate failed, 1 = usage or internal error. `gates` uses the same shape as scripts/refcheck.ts `Gate`.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
+import * as nodeModule from 'node:module';
 export const MARKER = '@@RESULT ';
 export type Gate = { gate: string; value: string; pass: boolean; hint: string };
 export type Result = { tool: string; ok: boolean; gates?: Gate[] } & Record<string, unknown>;
@@ -2366,6 +3392,22 @@ export function spawnTsx(file: string, args: string[], opts: Partial<SpawnSyncOp
   return loaderArgs.length
     ? spawnSync(process.execPath, [...loaderArgs, file, ...args], base)
     : spawnSync('tsx', [file, ...args], { ...base, shell: process.platform === 'win32' });
+}
+
+/** Lets external user builders resolve `three` and `three/*` from this skill's install when missing in cwd. */
+export function registerThreeHook() {
+  return nodeModule.registerHooks?.({
+    resolve(specifier, context, nextResolve) {
+      if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
+      try {
+        return nextResolve(specifier, context);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
+        return nextResolve(import.meta.resolve(specifier), context);
+      }
+    },
+  });
 }
 ~~~
 
@@ -2997,7 +4039,7 @@ export function frameCamera(
     #asset-name, #metrics, .hint { color: #aebdd0; }
     #asset-name { overflow-wrap: anywhere; }
     .header-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; }
-    #stage { position: relative; background: #202b3a; min-width: 0; }
+    #stage { position: relative; background: #0d1422; min-width: 0; }
     canvas { display: block; width: 100%; height: 100%; touch-action: none; }
     #notice {
       position: absolute;
@@ -3114,7 +4156,7 @@ const viewNames: Record<StudioView, string> = {
   back: 'Back',
   top: 'Top',
 };
-const backgrounds: Record<StudioBackground, string> = { dark: '#202b3a', light: '#c8ced8' };
+const backgrounds: Record<StudioBackground, string> = { dark: '#0d1422', light: '#eef2f6' };
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function disposeObjectTree(root: THREE.Object3D) {
@@ -3209,17 +4251,22 @@ export async function startStudio(
     scene.background = sceneBgColor;
     scene.add(root);
     // Three.js caches a skinned mesh's culling sphere. Its animated vertices can leave that sphere.
-    root.traverse((object) => { if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false; });
+    root.traverse((object) => {
+      if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false;
+      if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
+    });
 
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       const room = new RoomEnvironment();
       const pmrem = new THREE.PMREMGenerator(renderer);
       scene.environment = pmrem.fromScene(room).texture;
-      scene.environmentIntensity = 0.65;
+      scene.environmentIntensity = 0.45;
       room.dispose();
       pmrem.dispose();
     } catch (error) {
@@ -3227,16 +4274,35 @@ export async function startStudio(
       return;
     }
 
-    const key = new THREE.DirectionalLight('#fff4df', 2.35);
-    key.position.set(-3, 6, 4);
-    scene.add(key, new THREE.HemisphereLight('#edf6ff', '#6c7480', 1.25));
     const width = Math.max(0.001, sampled.getSize(new THREE.Vector3()).length());
-    const darkGrid = new THREE.GridHelper(width * 1.8, 16, '#65778e', '#4a5b70');
-    const lightGrid = new THREE.GridHelper(width * 1.8, 16, '#7d8696', '#a1a9b8');
     const center = sampled.getCenter(new THREE.Vector3());
+    const span = Math.max(2, width * 0.85);
+    const key = new THREE.DirectionalLight('#fff5e6', 2.45);
+    key.position.set(center.x - span * 0.9, span * 1.8, center.z + span * 1.2);
+    key.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.bias = -0.0005;
+    key.shadow.camera.left = -span;
+    key.shadow.camera.right = span;
+    key.shadow.camera.top = span;
+    key.shadow.camera.bottom = -span;
+    key.shadow.camera.near = 0.2;
+    key.shadow.camera.far = Math.max(20, width * 6);
+    const rim = new THREE.DirectionalLight('#7cc8ff', 0.85);
+    rim.position.set(center.x + span, span * 1.2, center.z - span * 1.3);
+    rim.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
+    scene.add(key, key.target, rim, rim.target, new THREE.HemisphereLight('#dceaff', '#2a3548', 0.68));
+    const darkGrid = new THREE.GridHelper(width * 1.8, 16, '#32445d', '#1e2c40');
+    const lightGrid = new THREE.GridHelper(width * 1.8, 16, '#9ca8ba', '#cbd3df');
     darkGrid.position.set(center.x, 0, center.z);
     lightGrid.position.set(center.x, 0, center.z);
-    scene.add(darkGrid, lightGrid);
+    const shadowGeo = new THREE.PlaneGeometry(width * 2.4, width * 2.4);
+    shadowGeo.rotateX(-Math.PI / 2);
+    const shadowPlane = new THREE.Mesh(shadowGeo, new THREE.ShadowMaterial({ opacity: 0.24 }));
+    shadowPlane.position.set(center.x, 0.001, center.z);
+    shadowPlane.receiveShadow = true;
+    scene.add(darkGrid, lightGrid, shadowPlane);
 
     const vfxGroup = new THREE.Group();
     vfxGroup.name = '_studio_vfx';
@@ -3534,6 +4600,17 @@ export async function startStudio(
     controls.addEventListener('change', () => { if (!fitting) draw(); });
 
     setEffectsEnabled(true);
+    const initialIndex = config.initialClip
+      ? clips.findIndex((clip) => clip.name === config.initialClip)
+      : (config.autoplay && clips.length ? Math.max(0, clips.findIndex((clip) => /idle/i.test(clip.name))) : -1);
+    if (config.initialClip && initialIndex < 0) {
+      throw new Error(`Unknown initial clip "${config.initialClip}"`);
+    }
+    if (initialIndex >= 0) {
+      selectClip(initialIndex);
+      applyPose(0);
+      clipSelect.value = String(initialIndex);
+    }
     syncAnimation();
     resize();
     checkRenderedFrame();
@@ -3544,6 +4621,10 @@ export async function startStudio(
       notice.hidden = true;
     }
     new ResizeObserver(resize).observe(stage);
+    if (config.autoplay && initialIndex >= 0 && (clips[initialIndex]?.duration ?? 0) > 0 && !ticking) {
+      ticking = requestAnimationFrame(tick);
+      syncAnimation();
+    }
   } catch (error) {
     fail('javascript', error);
   }
@@ -3566,6 +4647,8 @@ export type StudioConfig = {
   margin: number;
   frontSide: 'left' | 'right';
   background: StudioBackground;
+  initialClip?: string;
+  autoplay?: boolean;
 };
 
 export type StudioVfxContext = {

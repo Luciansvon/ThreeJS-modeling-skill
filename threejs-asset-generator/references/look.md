@@ -2,7 +2,7 @@
 
 Reference for `threejs-asset-generator`. Use it to choose geometry, normals, materials, and texture treatment from the brief or reference. Section numbers match `SKILL.md`.
 
-Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`)
+Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`) · §5.1 Manifold voxel grid (`voxel.ts`)
 
 ## 4. Surface style and materials
 
@@ -89,3 +89,14 @@ Code: `src/jitter.ts`. API:
 
 
 The pinned base is measured from the geometry's own bounding box (primitives are centered on the origin, so a fixed `|y| < 0.02` test would pin the equator, not the bottom). Bounding volumes are recomputed after displacement, and normals are computed once, in `bakeFlat`. Express `amount` relative to the shape size (for example `0.12 * radius`), not as a global constant.
+
+## 5.1 Manifold voxel grid builder (`src/voxel.ts`)
+
+For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel.ts`) so interior faces are culled **only within the same material** (preventing open-edge holes where emissive eyes or markings meet the body), duplicate diagonal 2x2 pinches are bridged symmetrically, and vertices convert hex colors safely via `new THREE.Color(hex)` (never `/ 255`):
+
+- `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
+- `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
+- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts()` / `.buildGeometries(THREE, { vertexT })` / `.buildMeshes(THREE, materials)`
+
+For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.

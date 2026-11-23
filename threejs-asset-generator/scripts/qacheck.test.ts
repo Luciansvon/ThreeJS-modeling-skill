@@ -117,5 +117,24 @@ assert.throws(() => normalizeParts({ a: 'x' }), /builder must return/);
   const missing = run('--module', join(out, 'nope.ts')); assert.equal(missing.code, 1); assert.match(String(missing.res?.error), /cannot build or read/);
   const needsThree = join(out, 'three.qa.ts'); writeFileSync(needsThree, `import * as THREE from 'three'; export const build = () => new THREE.BoxGeometry();`);
   const three = run('--module', needsThree); assert.equal(three.code, 1); assert.match(String(three.res?.error), /--tris|three/);
+
+  // Direct Three.js (params, THREE) builder support without needing tris.json
+  const threeAsset = join(out, 'three-asset.qa.ts');
+  writeFileSync(threeAsset, `
+    export function buildCube(params: { seed?: number }, THREE: any) {
+      const seed = params.seed ?? 1;
+      const w = 1 + (seed % 13) * 0.05;
+      const group = new THREE.Group();
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, 1, 1), new THREE.MeshStandardMaterial());
+      mesh.name = 'body';
+      mesh.position.y = 0.5;
+      group.add(mesh);
+      return { root: group, animations: [] };
+    }
+  `);
+  const direct = run('--module', threeAsset, '--grounded', '--footprint', '--symmetric', '--budget', '100', '--out', out);
+  assert.equal(direct.code, 0, direct.out);
+  assert.equal(direct.res?.ok, true);
+  assert.equal((direct.res?.gates as unknown[]).length, 10, 'direct Three.js module runs Q1..Q10');
 }
 console.log('QACHECK OK');

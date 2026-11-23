@@ -10,10 +10,11 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writePngRgba } from './png';
+import { extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
 import { normalizeParts, qaGates, determinismGates, type Gate, type Parts, type QAOptions } from './qacheck';
 import { parseBudgetArgs } from './budget';
 import { renderSheet, WRONG_TOL } from './review';
-import { emit } from './result';
+import { emit, registerThreeHook } from './result';
 
 const args = process.argv.slice(2), opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && !args[i + 1]?.startsWith('--') ? args[i + 1] : undefined; }, flag = (k: string) => args.includes('--' + k);
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'qa-asset', ok: false, error: msg }, 1)); };
@@ -28,15 +29,33 @@ const { platform, kind, triangleLimit } = target;
 const o: QAOptions = { budget: triangleLimit ?? undefined, groundY: num('ground-y'), open: opt('open')?.split(',').map((s) => s.trim()).filter(Boolean), symmetric: flag('symmetric'), footprint: flag('footprint') };
 o.grounding = !modFile || flag('grounded') || flag('footprint');   // Q6 needs the final grounded asset: always for --tris, only on request for a raw kernel
 
-let parts: Parts, build: ((p: Record<string, unknown>) => unknown) | undefined, params: Record<string, unknown> = {};
+let parts: Parts, build: ((p: Record<string, unknown>) => Promise<Parts>) | undefined, params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
+let threeMod: typeof import('three') | undefined;
+try { threeMod = await import('three'); } catch { threeMod = undefined; }
+const toParts = (built: unknown): Parts => {
+  if ((built as { isBufferGeometry?: boolean } | null)?.isBufferGeometry) {
+    throw new Error('builder returned a THREE.BufferGeometry; wrap it in a THREE.Mesh/Object3D (or return { root, animations }) or pass triangle arrays via --tris');
+  }
+  const b = built as { isObject3D?: boolean; root?: { isObject3D?: boolean } } | null;
+  if (b?.isObject3D || b?.root?.isObject3D) {
+    if (!threeMod) throw new Error('the builder returns a THREE.Object3D, which requires `three`. Install three or write tris.json and use --tris.');
+    return extractObjectParts(unpackAsset(built).root, threeMod);
+  }
+  return normalizeParts(built);
+};
 try {
   if (modFile) {
-    const mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>, fns = Object.keys(mod).filter((k) => typeof mod[k] === 'function');
-    const name = opt('export') ?? (fns.length === 1 ? fns[0] : mod.default ? 'default' : undefined);
-    if (!name || typeof mod[name] !== 'function') fail(`pick the builder with --export <name>. Functions exported by ${modFile}: ${fns.join(', ') || 'none'}`);
-    build = mod[name!] as (p: Record<string, unknown>) => unknown;
-    parts = normalizeParts(await build({ ...params }));
+    const hooks = registerThreeHook();
+    let mod: Record<string, unknown>;
+    try {
+      mod = (await import(pathToFileURL(resolve(modFile)).href)) as Record<string, unknown>;
+    } finally {
+      hooks?.deregister();
+    }
+    const { build: rawBuild } = selectBuilder(mod, opt('export'), modFile);
+    build = async (p: Record<string, unknown>) => toParts(await rawBuild(p, threeMod as typeof import('three')));
+    parts = await build({ ...params });
   } else parts = normalizeParts(JSON.parse(readFileSync(resolve(trisFile!), 'utf8')));
 } catch (e) {
   const m = (e as Error).message;

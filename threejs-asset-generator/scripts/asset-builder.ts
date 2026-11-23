@@ -43,3 +43,41 @@ export function countScene(root: THREE.Object3D) {
   });
   return { tris: Math.round(tris), meshes, skins, bones, vertexColorMeshes };
 }
+
+/** Extracts world-space triangle arrays per visible mesh (works for static, rigid, and SkinnedMesh rigs). */
+export function extractObjectParts(
+  root: THREE.Object3D,
+  three: { Vector3: new () => THREE.Vector3 },
+): Record<string, number[]> {
+  root.updateMatrixWorld(true);
+  const parts: Record<string, number[]> = {};
+  const used = new Set<string>();
+  const v = new three.Vector3();
+  let meshIdx = 0;
+
+  root.traverseVisible((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry?.attributes?.position) return;
+    meshIdx++;
+    const baseName = mesh.name || `mesh_${meshIdx}`;
+    let name = baseName;
+    for (let suffix = 2; used.has(name); suffix++) name = `${baseName}_${suffix}`;
+    used.add(name);
+
+    const pos = mesh.geometry.getAttribute('position');
+    const idx = mesh.geometry.index;
+    const count = idx ? idx.count : pos.count;
+    const arr: number[] = [];
+    const isSkinned = (mesh as THREE.SkinnedMesh).isSkinnedMesh === true;
+    for (let i = 0; i < count; i++) {
+      const vi = idx ? idx.getX(i) : i;
+      if (isSkinned) (mesh as THREE.SkinnedMesh).getVertexPosition(vi, v).applyMatrix4(mesh.matrixWorld);
+      else v.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+      arr.push(v.x, v.y, v.z);
+    }
+    if (arr.length >= 9) parts[name] = arr;
+  });
+
+  if (!Object.keys(parts).length) throw new Error('asset contains no visible mesh triangles');
+  return parts;
+}

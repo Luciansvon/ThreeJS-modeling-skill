@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { decodePngRgba } from './png';
 import { parseResult, spawnTsx } from './result';
 import type { StudioPose } from './studio/types';
 
@@ -152,7 +153,7 @@ try {
         pulse.position.set(0.48, 0.15, 0.4);
         group.add(pulse);
         return { update(pose) {
-          window.studioVfxProbe.pose = pose;
+          (window.studioVfxProbe ??= { readbacks: 0 }).pose = pose;
           group.visible = pose.clip === 'Pulse' && pose.time > 0;
         } };
       }
@@ -163,6 +164,31 @@ try {
     assert.equal(bundledVfx.status, 0, bundledVfx.stdout + bundledVfx.stderr);
     await verifyStudioVfx(browserPath, withVfx, out);
     console.log('Studio VFX defaults, playback, scrub, toggle, and capture readbacks verified in browser.');
+
+    // Verify --initial-clip + --autoplay AND capture-studio --motion-vfx + --extras multi-row contact sheet
+    const autoHtml = join(dir, 'autoplay.html');
+    const autoPack = spawnTsx(fileURLToPath(new URL('./pack-studio.ts', import.meta.url)), [
+      '--module', animated, '--vfx', effects, '--initial-clip', 'Pulse', '--autoplay', '--out', autoHtml,
+    ], { timeout: 15_000 });
+    assert.equal(autoPack.status, 0, autoPack.stdout + autoPack.stderr);
+    const autoRes = parseResult(autoPack.stdout)!;
+    assert.equal(autoRes.initialClip, 'Pulse');
+    assert.equal(autoRes.autoplay, true);
+
+    const multiPng = join(dir, 'multi-sheet.png');
+    const multiCap = spawnTsx(fileURLToPath(new URL('./capture-studio.ts', import.meta.url)), [
+      '--studio', autoHtml, '--out', multiPng, '--locomotion', 'Pulse', '--motion-view', 'side', '--motion-vfx',
+      '--action', 'Pulse', '--peak', '0.5', '--vfx', '--extras', 'Pulse@0.25:front:vfx,Pulse@0.75:top:clean',
+      '--browser', browserPath,
+    ], { timeout: 30_000 });
+    assert.equal(multiCap.status, 0, multiCap.stdout + multiCap.stderr);
+    const multiRes = parseResult(multiCap.stdout)!;
+    assert.equal(multiRes.status, 'PASS');
+    assert.equal((multiRes.tiles as unknown[]).length, 6);
+    const sheetPng = decodePngRgba(readFileSync(multiPng))!;
+    assert.equal(sheetPng.width, 1920);
+    assert.equal(sheetPng.height, 1800);
+    console.log('Studio autoplay, shadows, --motion-vfx, and 6-tile --extras capture verified in browser.');
   }
 } finally {
   assert.equal(dirname(dir), temp);

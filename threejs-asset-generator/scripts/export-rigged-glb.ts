@@ -1,14 +1,14 @@
 // scripts/export-rigged-glb.ts: official Three.js GLB export + disk round-trip verifier for assets with vertex colors, materials, skins/bones, or AnimationClips.
-// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}'] [--static-clips a,b]
+// Usage: npx tsx scripts/export-rigged-glb.ts --module ./myAsset.ts --export buildAsset --out asset.glb [--params '{"seed":1}'] [--static-clips a,b] [--open sheet1,sheet2|all]
 // The exported function receives `(params, THREE)` and may return a THREE.Object3D (with optional root.userData.animations) or { root: THREE.Object3D, animations?: THREE.AnimationClip[] }.
 // Last stdout line is @@RESULT {json}. Exit 0 = ok, 2 = verification gate failed, 1 = usage/load error.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import * as nodeModule from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { countScene, selectBuilder, unpackAsset } from './asset-builder';
+import { countScene, extractObjectParts, selectBuilder, unpackAsset } from './asset-builder';
 import { clipMotion, type ClipMotion, type NodeMotion } from './clip-motion';
-import { emit, type Gate } from './result';
+import { qaGates } from './qacheck';
+import { emit, registerThreeHook, type Gate } from './result';
 
 // Minimal Node FileReader polyfill needed by Three.js GLTFExporter in headless Node environments
 if (typeof (globalThis as Record<string, unknown>).FileReader === 'undefined') {
@@ -35,9 +35,10 @@ const opt = (k: string) => { const i = args.indexOf('--' + k); return i >= 0 && 
 const fail = (msg: string): never => { console.error(msg); process.exit(emit({ tool: 'export-rigged-glb', ok: false, error: msg }, 1)); };
 
 const modFile = opt('module'), outFile = opt('out');
-if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] --out asset.glb');
+if (!modFile || !outFile) fail('usage: tsx scripts/export-rigged-glb.ts --module ./myAsset.ts [--export name] [--params json] [--static-clips a,b] [--open a,b|all] --out asset.glb');
 const staticClipsList = (opt('static-clips') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const staticClips = new Set(staticClipsList);
+const openList = opt('open')?.split(',').map((s) => s.trim()).filter(Boolean);
 let params: Record<string, unknown> = {};
 try { if (opt('params')) params = JSON.parse(opt('params')!); } catch (e) { fail(`--params is not valid JSON: ${(e as Error).message}`); }
 
@@ -52,20 +53,7 @@ try {
   fail(`three / addons not available: ${(e as Error).message}`);
 }
 
-// Let external builders resolve their own modules first. For missing Three.js imports,
-// resolve against this skill without relocating the builder or changing NODE_PATH.
-const hooks = nodeModule.registerHooks?.({
-  resolve(specifier, context, nextResolve) {
-    if (specifier !== 'three' && !specifier.startsWith('three/')) return nextResolve(specifier, context);
-    try {
-      return nextResolve(specifier, context);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') throw error;
-      return nextResolve(import.meta.resolve(specifier), context);
-    }
-  },
-});
+const hooks = registerThreeHook();
 
 let asset: ReturnType<typeof unpackAsset>;
 try {
@@ -177,6 +165,28 @@ if (animations.length > 0) {
     value: motionIssues.length ? motionIssues.join('; ') : clipSummaries.join('; '),
     pass: motionIssues.length === 0,
     hint: 'ensure every non-static clip moves at least one bound pivot across timestamps before and after export, or pass intentionally static clip names via --static-clips',
+  });
+}
+
+try {
+  const reloadedParts = extractObjectParts(reloaded.scene, THREE);
+  const topo = qaGates(reloadedParts, { open: openList, grounding: false });
+  const topoGates = topo.gates.filter((g) => ['Q1 finite', 'Q2 degenerate', 'Q3 winding', 'Q4 closed'].includes(g.gate));
+  const topoFails = topoGates.filter((g) => !g.pass);
+  gates.push({
+    gate: 'RG8 topology',
+    value: topoFails.length
+      ? topoFails.map((g) => `${g.gate}: ${g.value}`).join(' | ')
+      : `${Object.keys(reloadedParts).length} mesh(es) clean (Q1–Q4 finite, valid winding, zero open/duplicated edges${openList?.length ? `; open: ${openList.join(',')}` : ''})`,
+    pass: topoFails.length === 0,
+    hint: topoFails[0]?.hint ?? 'keep exported meshes watertight without interior cuts or overlapping coplanar voxel segments (pass --open <names> for thin sheets)',
+  });
+} catch (e) {
+  gates.push({
+    gate: 'RG8 topology',
+    value: (e as Error).message,
+    pass: false,
+    hint: 'exported GLB contained no valid mesh geometry',
   });
 }
 

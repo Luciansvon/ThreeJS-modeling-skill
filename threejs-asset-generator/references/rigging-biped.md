@@ -31,7 +31,7 @@ Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-l
 | **Quadrupeds** *(wolves, cats, dinos)* | Sliding like a stiff table on 4 parallel straight legs | Break legs into asymmetric stride/cantilever gait with spine flex/extension, weight transfer, head bob, and tail counter-balance. |
 | **Serpentine & sky dragons** *(snakes, eels)* | Staying upright like a coiled cobra while "flying" | **Pitch/flatten the spine horizontally along the travel axis (`~~~>`)** for flying/swimming clips (back up `+Y`, belly down `-Y`, head level forward `+Z`, tail uncurled trailing `-Z`), driving a clear traveling sinusoidal wave from neck through torso to tail tip. |
 | **Winged flyers** *(birds, dragons, bats)* | Keeping stiff straight wings splayed flat | Fold wings cleanly in ground idle; pitch torso forward in flight with phase-delayed wingbeats (shoulder leads, wrist/tips trail) and opposing body lift. |
-| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Align along the horizontal swim axis with traveling lateral or undulating waves increasing in amplitude toward the tail or tentacle tips. |
+| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Pitch/align torso along the horizontal swim axis (`~1.3–1.55 rad` forward pitch on upright turnarounds, counter-pitching head/eyes forward) with traveling sinusoidal waves increasing in amplitude toward the tail or tentacle tips. |
 | **Multi-legged** *(spiders, crabs, insects)* | All legs swinging identically in robotic unison | Drive alternating tripod or metachronal stepping waves across opposite legs with opposing body bounce and subtle yaw/roll. |
 
 **Mandatory motion posture sanity check:** Inspect the mid-locomotion frame from a **side view** (and 3/4 view) in rendered studio preview (`references/studio-preview.md`). If the overall spine/body silhouette during flight, swim, walk, or run still matches the static reference sheet stance, fix the clip posture before delivery.
@@ -41,6 +41,16 @@ Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-l
 - For smooth procedural movement, start with 24–30 fps and shortest-path quaternion interpolation. Match timing to the brief, including held poses for a stop-motion look when requested.
 - Give actions a readable setup, peak, and recovery, and layer expressive micro-motion (breathing chest/shoulder heave, blinks, ear/tail/cloth/hair secondary sway, weight shift, and landing settle). Have no artificial limits on creative animation polish or complementary preview VFX (`references/studio-preview.md`).
 - Reuse the first pose at the end of a loop. For a one-shot or chained action, author the final pose to meet the next clip. Watch the transition during playback.
+
+### Creative animation choreography reference (inspiration, not hard rules)
+
+Treat these patterns as creative inspiration to spark character-appropriate motion—never as rigid templates to force onto every creature:
+
+- **Living `Idle` multi-beat arcs (~4.5–6 s):** Go beyond simple up-down static breathing. Layer calm base breathing with a brief in-character mid-clip fidget (`~45%–80%` — e.g., curious head look-around + ear/tentacle flick, ghost mischief chuckle/shiver, predatory wing stretch, or mechanical scan) paired with subtle synchronized idle VFX, then ease cleanly back to rest for a seamless loop.
+- **Dynamic locomotion variations (stay facing forward `+Z`):** Avoid stiff repetitive pistons when a showcase clip suits flair. Depending on the archetype, locomotion can blend forward propulsion with characteristic maneuvers—such as an agile swimmer/flyer performing a smooth mid-glide `360°` axial **barrel roll** (rolling sideways along its body axis while continuing forward, tentacles/tail trailing in a spiral), a flyer banking into a turn, or a sneaky brawler adding a low-gravity hop stride—before settling cleanly into the loop. Keep separate plain loops (`Walk` vs `WalkFidget`, `Swim` vs `SwimRoll`) whenever the user explicitly asks for strict game-controller cycles.
+- **Four-beat action arcs:** Author dramatic actions with **anticipation** (coil/draw back + gathered charge VFX) → **climax impact** → **follow-through recoil** → **grounded settle**, keeping facial landmarks and silhouette readable throughout.
+- **Continuous `360°` axial roll technical safeguard:** `THREE.QuaternionKeyframeTrack` takes shortest-path SLERP between consecutive keys; jumping `0° → 360°` yields zero motion and `0° → 180°` can flip backward. Whenever authoring a full `360°` spin or barrel roll, author `>= 4–5` sequential keys (`0° → 90° → 180° → 270° → 360°`, plus `±60°` steps when sampled at 30 fps) and keep adjacent quaternion dot products `>= 0` so rotation completes smoothly in one direction.
+
 - Put wheels and propellers on spin pivots, steering on a parent pivot, and doors on bounded hinges. Check clearances across the intended range.
 
 Code: `src/rig.ts`. API:

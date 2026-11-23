@@ -1,13 +1,16 @@
 // scripts/ref-intake.ts: reference image(s) or a multi-view turnaround sheet -> ref.json (silhouette masks, aspect, palette). Run ONCE per reference.
 //   Separate views:   npx tsx ref-intake.ts front=ref_front.png side=ref_side.png --out ref.json [--tol 40] [--w 1.2 --d 2.5] [--no-flood]
 //   Multi-view sheet: npx tsx ref-intake.ts --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34 --out ref.json [--tol 18]
+//   Uneven 3-view:    npx tsx ref-intake.ts --sheet sheet.png --grid auto --views front,side,back --out ref.json
 // Reads standard 8-bit PNGs without external dependencies; uses `sharp` when installed (required for JPEG/WebP).
 // Writes <out-stem>-<view>-mask.png beside --out. LOOK at it once; if the silhouette is wrong, adjust --tol.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, parse, resolve } from 'node:path';
 import { loadSharp } from './sharp';
 import { decodePngRgba, writePngRgba } from './png';
-import { maskFromRGBA, frameMask, dominantColors, maskToB64, splitGridSheet, fitRgba, type RefData, type View } from './refcheck';
+import { extractROIBoxStats, rgbToHex, type SemanticRegionRef } from './color-qc';
+import { maskFromRGBA, frameMask, dominantColors, maskToB64, splitGridSheet, splitAutoHorizontalBands, fitRgba, type RefData, type View } from './refcheck';
 import { emit } from './result';
 
 const args = process.argv.slice(2);
@@ -16,11 +19,12 @@ const flag = (k: string) => args.includes('--' + k);
 const fail = (error: string): never => { console.error(error); process.exit(emit({ tool: 'ref-intake', ok: false, error }, 1)); };
 const out = resolve(opt('out') ?? 'ref.json'), tol = Number(opt('tol') ?? 40), flood = !flag('no-flood');
 const sheetFile = opt('sheet'), gridStr = opt('grid') ?? '3x2', viewsStr = opt('views') ?? 'front,back,top,bottom,side,34';
+const regionsFile = opt('regions');
 const files = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--') && !['--no-flood'].includes(args[i - 1]))).map((a) => (a.includes('=') ? a.split('=') : ['front', a]) as [string, string]);
 
 if (flag('out') && !opt('out')) fail('--out needs a file path');
 if (!sheetFile && !files.length) {
-  fail('usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2 --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood]');
+  fail('usage: tsx ref-intake.ts ([front=]img.png [side=img.png] [top=img.png] | --sheet sheet.png --grid 3x2|auto --views front,back,top,bottom,side,34) --out ref.json [--tol 40] [--no-flood] [--regions regions.json]');
 }
 
 const sharp = await loadSharp();
@@ -37,20 +41,30 @@ async function loadImageRgba(file: string, maxDim = 512): Promise<{ rgba: Uint8A
 }
 
 const inputs: { view: View; rgba: Uint8Array; w: number; h: number }[] = [];
-const VALID_VIEWS = new Set<string>(['front', 'side', 'top', '34', '34_back']);
+const VALID_VIEWS = new Set<string>(['front', 'back', 'side', 'top', '34', '34_back']);
 if (sheetFile) {
-  const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
-  if (!gm) fail(`--grid must be COLSxROWS (e.g. 3x2), got "${gridStr}"`);
-  const cols = Number(gm[1]), rows = Number(gm[2]);
+  const names = viewsStr.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const isAuto = gridStr.trim().toLowerCase() === 'auto';
+  let cols: number, rows: number;
+  if (isAuto) {
+    if (names.length < 2) fail('--grid auto requires at least 2 view names in --views (e.g. front,side,back)');
+    cols = names.length;
+    rows = 1;
+  } else {
+    const gm = /^(\d+)x(\d+)$/i.exec(gridStr);
+    if (!gm) fail(`--grid must be COLSxROWS or "auto", got "${gridStr}"`);
+    cols = Number(gm[1]); rows = Number(gm[2]);
+  }
   const full = await loadImageRgba(sheetFile, Math.max(cols, rows) * 512);
-  const tiles = splitGridSheet(full.rgba, full.w, full.h, cols, rows);
-  const names = viewsStr.split(',').map((s) => s.trim().toLowerCase());
+  const tiles = rows === 1 && cols > 1
+    ? splitAutoHorizontalBands(full.rgba, full.w, full.h, cols, { tol, flood })
+    : splitGridSheet(full.rgba, full.w, full.h, cols, rows);
   names.forEach((v, idx) => {
     if (!VALID_VIEWS.has(v) || idx >= tiles.length) return;
     const tile = fitRgba(tiles[idx].rgba, tiles[idx].w, tiles[idx].h, 512);
     inputs.push({ view: v as View, ...tile });
   });
-  if (!inputs.length) fail(`--views "${viewsStr}" matched none of front, side, top, 34, 34_back in ${cols}x${rows} grid`);
+  if (!inputs.length) fail(`--views "${viewsStr}" matched none of front, back, side, top, 34, 34_back in ${cols}x${rows} grid`);
 } else {
   for (const [view, file] of files) {
     if (!/^[a-z0-9][a-z0-9_-]*$/i.test(view)) fail(`invalid view name "${view}"`);
@@ -65,7 +79,9 @@ if (opt('w') || opt('d')) ref.proportions = { w: opt('w') ? Number(opt('w')) : u
 try {
   if (statSync(out, { throwIfNoEntry: false })?.isDirectory()) throw new Error('--out points to a directory');
   mkdirSync(outDir, { recursive: true });
+  const rawViews = new Map<string, { rgba: Uint8Array; w: number; h: number }>();
   for (const { view, rgba, w, h } of inputs) {
+    rawViews.set(view, { rgba, w, h });
     const mask = maskFromRGBA(rgba, w, h, { tol, flood }), { mask: framed, aspect } = frameMask(mask);
     const maskFile = `${outStem}-${view}-mask.png`, maskPath = join(outDir, maskFile);
     ref.views[view] = { w: framed.w, h: framed.h, data: maskToB64(framed), aspect, mask: maskFile };
@@ -80,10 +96,28 @@ try {
     console.log(`${view}: aspect ${aspect.toFixed(2)} (w/h), foreground ${(fg * 100).toFixed(0)}% of the image${suspicious ? '  <- suspicious, inspect mask and adjust --tol' : ''}`);
     console.log('wrote', maskPath);
   }
+  if (regionsFile) {
+    const rawRegions = JSON.parse(readFileSync(resolve(regionsFile), 'utf8'));
+    const list: SemanticRegionRef[] = Array.isArray(rawRegions) ? rawRegions : Array.isArray(rawRegions?.regions) ? rawRegions.regions : [];
+    const fallbackView = rawViews.get('front') ?? [...rawViews.values()][0];
+    ref.regions = list.map((entry) => {
+      if (entry.status === 'uncertain' || entry.hex || !entry.roi) return entry;
+      const viewBuf = rawViews.get(entry.roi.view ?? 'front') ?? fallbackView;
+      if (!viewBuf) return { ...entry, status: 'uncertain' as const };
+      const stats = extractROIBoxStats(viewBuf.rgba, viewBuf.w, viewBuf.h, entry.roi);
+      if (!stats.pixelCount) return { ...entry, status: 'uncertain' as const };
+      return { ...entry, hex: rgbToHex(stats.meanRgb), status: entry.status ?? ('confident' as const) };
+    });
+    const hash = createHash('sha256').update(JSON.stringify(ref.regions)).digest('hex').slice(0, 12);
+    ref.regionCacheKey = `regions-${hash}`;
+  }
   writeFileSync(out, JSON.stringify(ref));
 } catch (e) {
   fail(`cannot write reference outputs beside ${out}: ${(e as Error).message}`);
 }
 console.log('palette:', ref.palette.map((c) => `${c.hex} ${(c.share * 100).toFixed(0)}%`).join('  '));
+if (ref.regions?.length) {
+  console.log('regions:', ref.regions.map((r) => `${r.region}=${r.status === 'uncertain' ? 'uncertain' : r.hex ?? 'uncertain'}`).join('  '));
+}
 console.log('wrote', out);
-process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palette, warnings }));
+process.exit(emit({ tool: 'ref-intake', ok: true, out, views, palette: ref.palette, regions: ref.regions ?? [], regionCacheKey: ref.regionCacheKey ?? null, warnings }));

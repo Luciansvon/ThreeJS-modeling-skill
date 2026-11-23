@@ -1,6 +1,7 @@
 // scripts/refcheck.ts: pure reference-vs-result measurements. No THREE, no DOM, no image library. Node-testable.
-// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
-export type View = 'front' | 'side' | 'top' | '34' | '34_back';
+// Views (creature/asset faces +Z, y up):  front = camera at +Z (u = x)  ·  back = camera at -Z (u = -x)  ·  side = camera at +X (u = -z, +Z faces LEFT)  ·  top = camera at +Y (u = x, v = -z, +Z faces DOWN)  ·  34 / 34_back = angled 3/4 front & rear projections (flipH auto-matched)
+import type { SemanticRegionRef } from './color-qc';
+export type View = 'front' | 'back' | 'side' | 'top' | '34' | '34_back';
 export type Mask = { w: number; h: number; data: Uint8Array };              // 1 = inside the shape
 export type Tris = number[];                                                // 9 numbers per triangle
 export const RES = 64;                                                      // masks are compared on a RES x RES grid
@@ -46,6 +47,7 @@ export function silhouette(t: Tris, view: View, res = RES, camera?: CameraAngles
   for (let i = 0; i < n; i++) {
     const x = t[i * 3], y = t[i * 3 + 1], z = t[i * 3 + 2];
     if (view === 'front') { U[i] = x; V[i] = y; }
+    else if (view === 'back') { U[i] = -x; V[i] = y; }
     else if (view === 'side') { U[i] = -z; V[i] = y; }
     else if (view === 'top') { U[i] = x; V[i] = -z; }
     else {
@@ -82,6 +84,77 @@ export function cropRgba(rgba: Uint8Array | Uint8ClampedArray, w: number, h: num
     }
   }
   return { rgba: out, w: cw, h: ch };
+}
+
+/** Splits a horizontal multi-view strip at vertical whitespace gaps, handling unevenly spaced panels. Falls back to uniform splitGridSheet when clean gaps cannot isolate expectedCount views. */
+export function splitAutoHorizontalBands(
+  rgba: Uint8Array | Uint8ClampedArray, w: number, h: number, expectedCount: number,
+  o: { tol?: number; alphaCut?: number; flood?: boolean } = {},
+) {
+  if (expectedCount < 2 || w < expectedCount * 4) return splitGridSheet(rgba, w, h, expectedCount, 1);
+  const tol = o.tol ?? 40, border: number[] = [];
+  for (let x = 0; x < w; x++) border.push(x, (h - 1) * w + x);
+  for (let y = 1; y < h - 1; y++) border.push(y * w, y * w + w - 1);
+  const med = (k: number) => { const v = border.map((p) => rgba[p * 4 + k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const transparent = med(3) < 250, bg = [med(0), med(1), med(2)];
+  const fg = new Uint8Array(w * h);
+  if (transparent || o.flood === false) {
+    for (let i = 0; i < w * h; i++) fg[i] = transparent ? (rgba[i * 4 + 3] >= (o.alphaCut ?? 128) ? 1 : 0) : dist([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]], bg) > tol ? 1 : 0;
+  } else {
+    const isBg = new Uint8Array(w * h), q = new Int32Array(w * h);
+    let head = 0, tail = 0;
+    const nearBg = (p: number) => dist([rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2]], bg) <= tol;
+    for (const p of border) if (!isBg[p] && nearBg(p)) { isBg[p] = 1; q[tail++] = p; }
+    while (head < tail) {
+      const p = q[head++], x = p % w, y = (p - x) / w;
+      if (x > 0 && !isBg[p - 1] && nearBg(p - 1)) { isBg[p - 1] = 1; q[tail++] = p - 1; }
+      if (x + 1 < w && !isBg[p + 1] && nearBg(p + 1)) { isBg[p + 1] = 1; q[tail++] = p + 1; }
+      if (y > 0 && !isBg[p - w] && nearBg(p - w)) { isBg[p - w] = 1; q[tail++] = p - w; }
+      if (y + 1 < h && !isBg[p + w] && nearBg(p + w)) { isBg[p + w] = 1; q[tail++] = p + w; }
+    }
+    for (let i = 0; i < w * h; i++) fg[i] = isBg[i] ? 0 : 1;
+  }
+
+  const colThresh = Math.max(1, Math.floor(h * 0.005));
+  const occupiedCols = new Uint8Array(w);
+  let totalOcc = 0;
+  for (let x = 0; x < w; x++) {
+    let col = 0;
+    for (let y = 0; y < h; y++) col += fg[y * w + x];
+    if (col > colThresh) { occupiedCols[x] = 1; totalOcc++; }
+  }
+  let minX = 0, maxX = w - 1;
+  while (minX < w && !occupiedCols[minX]) minX++;
+  while (maxX > minX && !occupiedCols[maxX]) maxX--;
+  const minSliceOcc = Math.max(4, Math.floor(totalOcc / (expectedCount * 6)));
+  if (totalOcc < expectedCount * 4) return splitGridSheet(rgba, w, h, expectedCount, 1);
+
+  const prefix = new Int32Array(w + 1);
+  for (let x = 0; x < w; x++) prefix[x + 1] = prefix[x] + occupiedCols[x];
+  const gaps: { mid: number; width: number }[] = [];
+  for (let x = minX; x <= maxX; x++) {
+    if (occupiedCols[x]) continue;
+    let end = x;
+    while (end + 1 <= maxX && !occupiedCols[end + 1]) end++;
+    gaps.push({ mid: Math.floor((x + end + 1) / 2), width: end - x + 1 });
+    x = end;
+  }
+  gaps.sort((a, b) => b.width - a.width || a.mid - b.mid);
+  const chosen: number[] = [];
+  for (const gap of gaps) {
+    if (chosen.length === expectedCount - 1) break;
+    const trial = [...chosen, gap.mid].sort((a, b) => a - b);
+    const bounds = [0, ...trial, w];
+    let ok = true;
+    for (let i = 0; i + 1 < bounds.length; i++) {
+      if (prefix[bounds[i + 1]] - prefix[bounds[i]] < minSliceOcc) { ok = false; break; }
+    }
+    if (ok) chosen.push(gap.mid);
+  }
+  if (chosen.length !== expectedCount - 1) return splitGridSheet(rgba, w, h, expectedCount, 1);
+  chosen.sort((a, b) => a - b);
+  const bounds = [0, ...chosen, w];
+  return Array.from({ length: expectedCount }, (_, i) => cropRgba(rgba, w, h, bounds[i], 0, bounds[i + 1] - bounds[i], h));
 }
 
 /** Splits an even cols x rows turnaround sheet into row-major RGBA tiles. */
@@ -219,7 +292,13 @@ export function paletteGap(refColors: { hex: string; share: number }[], used: st
   return worst;
 }
 
-export type RefData = { views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>; palette: { hex: string; share: number }[]; proportions?: { w?: number; d?: number } };
+export type RefData = {
+  views: Partial<Record<View, { w: number; h: number; data: string; aspect: number; mask?: string }>>;
+  palette: { hex: string; share: number }[];
+  proportions?: { w?: number; d?: number };
+  regions?: SemanticRegionRef[];
+  regionCacheKey?: string;
+};
 export const maskToB64 = (m: Mask) => Buffer.from(m.data).toString('base64');
 export const maskFromB64 = (s: string, res = RES): Mask => ({ w: res, h: res, data: new Uint8Array(Buffer.from(s, 'base64')) });
 
@@ -232,7 +311,7 @@ export function compareToRef(tris: Tris, ref: RefData, usedColors: string[] = []
   const p = proportions(tris);
   if (ref.proportions?.w) { const e = Math.abs(p.w / ref.proportions.w - 1); gates.push({ gate: 'G1 width/height', value: `${p.w.toFixed(2)} vs ${ref.proportions.w.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.w > ref.proportions.w ? 'too wide: narrow x or lengthen y' : 'too narrow: widen x or shorten y' }); }
   if (ref.proportions?.d) { const e = Math.abs(p.d / ref.proportions.d - 1); gates.push({ gate: 'G1 depth/height', value: `${p.d.toFixed(2)} vs ${ref.proportions.d.toFixed(2)} (${(e * 100).toFixed(0)}% off)`, pass: e <= th.prop, hint: p.d > ref.proportions.d ? 'too deep: shorten z' : 'too shallow: lengthen z' }); }
-  for (const view of ['front', 'side', 'top', '34', '34_back'] as View[]) {
+  for (const view of ['front', 'back', 'side', 'top', '34', '34_back'] as View[]) {
     const r = ref.views[view]; if (!r) continue;
     const angled = view === '34' || view === '34_back';
     const aspectLimit = angled ? (th.aspect34 ?? 0.14) : th.aspect;

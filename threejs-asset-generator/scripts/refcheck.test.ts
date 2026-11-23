@@ -138,7 +138,7 @@ const angledRef: RefData = {
   });
 }
 
-for (const view of ['front', 'side', 'top'] as const) {
+for (const view of ['front', 'back', 'side', 'top'] as const) {
   const fixed = silhouette(angledAsset, view);
   assert.deepEqual(fixed, silhouette(angledAsset, view, 64, frontCamera), `${view} is a fixed projection`);
   const reference = { views: { [view]: { w: 64, h: 64, data: maskToB64(fixed.mask), aspect: fixed.aspect } }, palette: [] };
@@ -237,6 +237,22 @@ for (const view of ['front', 'side', 'top'] as const) {
   const angled = run('ref-compare.ts', ['angled-ref.json', 'tris.json']);
   assert.equal(angled.status, 0, angled.stdout + angled.stderr);
   assert.deepEqual(parseResult(angled.stdout)?.angles, { '34': frontCamera, '34_back': rearCamera });
+
+  // Uneven 3-view sheet with `back` view + `--grid auto` gap-splitting
+  const uneven = rect(600, 120, 20, 20, 220, 100, [40, 80, 180, 255]); // front 200x80 (aspect 2.5)
+  for (let y = 20; y < 100; y++) {
+    for (let x = 260; x < 300; x++) uneven.set([40, 80, 180, 255], (y * 600 + x) * 4); // side 40x80 (aspect 0.5)
+    for (let x = 360; x < 560; x++) uneven.set([40, 80, 180, 255], (y * 600 + x) * 4); // back 200x80 (aspect 2.5)
+  }
+  writePngRgba(join(dir, 'uneven.png'), uneven, 600, 120);
+  const autoPath = join(dir, 'results', 'auto', 'turn3.json');
+  const autoRun = run('ref-intake.ts', ['--sheet', 'uneven.png', '--grid', 'auto', '--views', 'front,side,back', '--out', autoPath]);
+  assert.equal(autoRun.status, 0, autoRun.stderr + autoRun.stdout);
+  checkMasks(autoRun.stdout, autoPath, ['front', 'side', 'back'], 'turn3');
+  const autoViews = (parseResult(autoRun.stdout)!.views as Record<string, { aspect: number }>);
+  assert.ok(Math.abs(autoViews.front.aspect - 2.5) < 0.05);
+  assert.ok(Math.abs(autoViews.side.aspect - 0.5) < 0.05);
+  assert.ok(Math.abs(autoViews.back.aspect - 2.5) < 0.05);
   console.log('Reference CLI OK: nested single and sheet masks, shared triangle JSON, and both angled views');
 }
 console.log('REFCHECK OK');

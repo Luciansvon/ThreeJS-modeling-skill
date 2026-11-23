@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { emit } from './result';
 import type { StudioBackground, StudioConfig } from './studio/types';
 
-const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] --out index.html';
+const usage = 'Usage: tsx scripts/pack-studio.ts --module ./asset.ts [--export buildAsset] [--params json] [--vfx ./effect.ts] [--vfx-export createStudioVfx] [--margin 1.18] [--front-side left|right] [--background dark|light] [--initial-clip Clip] [--autoplay] --out index.html';
 const harness = fileURLToPath(new URL('../', import.meta.url));
 const scriptImport = (path: string) => JSON.stringify(process.platform === 'win32' ? path.replace(/\\/g, '/') : path);
 
@@ -15,6 +15,7 @@ async function main() {
     module: { type: 'string' }, export: { type: 'string' }, params: { type: 'string' },
     out: { type: 'string' }, vfx: { type: 'string' }, 'vfx-export': { type: 'string' },
     margin: { type: 'string' }, 'front-side': { type: 'string' }, background: { type: 'string' },
+    'initial-clip': { type: 'string' }, autoplay: { type: 'boolean' },
   } });
   if (!values.module || !values.out) throw new Error(usage);
   if (extname(values.out).toLowerCase() !== '.html') throw new Error('--out must end in .html');
@@ -39,6 +40,8 @@ async function main() {
   const out = resolve(values.out);
   const config: StudioConfig = {
     module: basename(modulePath), builder: values.export, params: params as Record<string, unknown>, margin, frontSide, background,
+    ...(values['initial-clip'] ? { initialClip: values['initial-clip'] } : {}),
+    ...(values.autoplay ? { autoplay: true } : {}),
   };
   const runtime = fileURLToPath(new URL('./studio/runtime.ts', import.meta.url));
   const configJson = JSON.stringify(config);
@@ -92,6 +95,7 @@ async function main() {
   return emit({
     tool: 'pack-studio', ok: true, out, bytes: Buffer.byteLength(html), module: modulePath,
     builder: config.builder ?? null, params: config.params, vfx: vfxPath || null, margin, frontSide, background,
+    initialClip: config.initialClip ?? null, autoplay: Boolean(config.autoplay),
     unverified,
   });
 }

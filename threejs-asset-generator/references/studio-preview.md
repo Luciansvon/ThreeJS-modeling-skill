@@ -19,11 +19,11 @@ When the model is still being built or the interactive viewer is unavailable, sh
 Use `pack-studio` to open a TS or JS builder in a self-contained HTML preview with all six turnaround presets (`34-front`, `34-back`, `front`, `side`, `back`, `top`), orbit and pan, clip selection, playback, scrubbing, dark/light backdrop toggle, and built-in rest-pose `.glb` export + in-RAM round-trip verification (`GLTFExporter` -> `GLTFLoader`). Both the preview and the rigged exporter call the same builder with `(params, THREE)` and accept an `Object3D` or `{ root, animations }`. Run both from the harness with the same resolved inputs and compatible Three.js versions. Use the injected `THREE` value so the model and viewer share the harness version. [Builder export contract](glb-export.md#threejs-export-route)
 
 ```bash
-npm run pack-studio -- --module ./asset.ts --export buildAsset --background dark --out ./index.html
+npm run pack-studio -- --module ./asset.ts --export buildAsset --background dark --initial-clip IdleFloat --autoplay --out ./index.html
 npm run export-rigged-glb -- --module ./asset.ts --export buildAsset --out ./asset.glb
 ```
 
-Pass the same `--params` JSON object to both commands for a specific seed or configuration. The packer bundles browser-compatible imports, and locally imported image files are embedded as data URLs. Await the texture loads inside an asynchronous builder before returning the model. A builder that requests external assets at runtime still depends on those URLs. Add parameter editors, rig gizmos, or expressions when the brief calls for them.
+Pass the same `--params` JSON object to both commands for a specific seed or configuration. Use `--initial-clip <Clip>` and `--autoplay` on showcase previews when the asset has animation clips so interactive opens begin alive rather than frozen in rest pose. The packer bundles browser-compatible imports, and locally imported image files are embedded as data URLs. Await the texture loads inside an asynchronous builder before returning the model. A builder that requests external assets at runtime still depends on those URLs. Add parameter editors, rig gizmos, or expressions when the brief calls for them.
 
 In Windows PowerShell 5, use the script directly with escaped JSON quotes, for example `node --import tsx scripts/pack-studio.ts --module ./asset.ts --out ./index.html --params '{\"seed\":1}'`. Use the same quoting with `scripts/export-rigged-glb.ts` for export.
 
@@ -43,9 +43,23 @@ Choose controls for the asset and the requested review.
 
 ## 3. Lighting and contrast
 
-- Use `THREE.WebGLRenderer` with `ACESFilmicToneMapping`, `THREE.PCFShadowMap` (never `PCFSoftShadowMap`), and `RoomEnvironment` PMREM so flat-shaded low-poly facets stay readable.
+- Use `THREE.WebGLRenderer` with `ACESFilmicToneMapping`, `THREE.PCFShadowMap` (never `PCFSoftShadowMap`), and balanced `RoomEnvironment` + key/rim lighting (`#0d1422` deep dark / `#eef2f6` crisp light studio) so shadows, dark recesses, and emissive contrast read sharply at first glance.
 - Support both dark and light studio backdrops. When using Tailwind CDN, stick to standard opacity utilities (`bg-zinc-900/90`, `bg-zinc-900/95` — avoid arbitrary steps like `/88` or `/92` without brackets) so dark HUD panels keep crisp contrast on light backdrops.
 - On light backdrops, give bright cream features (inner ears, white highlights) a clear dark outer border so they never blend into the background.
+
+### Universal VFX anchoring rule (mandatory)
+
+Static hardcoded world coordinates break whenever an animated creature lifts, leans horizontal (`Swim`/`Fly`), jumps, or lunges:
+- **Body, muzzle, weapon, and propulsion/trail VFX:** Inside `vfx.update({ clip, time })`, always read live world transforms (`bone.getWorldPosition(...)` / `bone.getWorldQuaternion(...)`, or `new THREE.Box3().setFromObject(root, true).getCenter(...)`) after pose updates—**never** hardcode fixed `Y`/`Z` offsets like `(0, 1.35, -0.5)` or sample an un-animated outer wrapper at `(0, 0, 0)`.
+- **Floor, dust, shadow-pool, and ground-impact VFX:** Lock height near the floor (`Y ≈ 0.015–0.03`) while tracking live world `X, Z` of the stepping foot, striking appendage, or body center so floor effects follow character movement without floating into mid-air during leaps.
+
+### Creative layered VFX & color grading reference (inspiration, not hard rules)
+
+Use these principles freely to make effects blend naturally into every asset style without obscuring faces:
+- **Match shape language to model style:** Author voxel VFX with crisp instanced/animated cubes, stepped streaks, and polygonal rings; low-poly VFX with sharp crystal/shard prisms and faceted cones; smooth/clay assets with soft ribbons, glow spheres, and billowy puffs.
+- **Three-tier palette value contrast:** Sample the asset's own palette into **50–60% deep dark anchor shades** (ensures sharp contrast on light backgrounds and depth on dark ones), **~30% bridge mid-tones** matching the body hue, and **10–15% crisp bright emissive cores** (`toneMapped: false`).
+- **Characterful `Idle` VFX (intermittent rhythm, not continuous overload):** Keep idle effects quiet and alive—such as occasional jagged static lightning arcs snapping briefly between a thunder dragon's horns/back, slow rising embers + dark charcoal puffs on fire monsters, sinking cold mist + frost flakes on ice creatures, gentle rising bubbles + seafloor caustics + synchronized idle glow pulses on aquatic creatures, or subtle foot dust wisps on grounded fighters.
+- **Breathing room around faces:** Frame swirling vortexes, sparks, and ribbons around shoulders, limbs, back, or floor while keeping a clean optical window around eyes and expressions.
 
 ### Optional VFX references
 
@@ -93,10 +107,10 @@ When a browser tool is available, open the delivered preview for the final model
 
 Open the captured views and record what was seen per panel, together with actual console or rendering errors. The geometry `review.png` stays useful for winding and shape. Visual checks require a rendered model, and smoothness requires observing playback. When the browser, clip, or requested effect cannot be inspected, report that check as `UNVERIFIED` and deliver the available results.
 
-For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--motion-view side` (or `top`, `back`, `front`, `34-back`) to inspect profile motion such as swimming tails, `--action-view <view>` for action silhouettes, `--background light` when verifying light-backdrop contrast, and `--vfx` when the action frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
+For a packaged preview, `capture-studio` uses an installed Chrome, Edge, or Chromium and the optional `playwright-core` dependency. Substitute your actual clip names and choose a representative action time in seconds. Add `--motion-view side` (or `top`, `back`, `front`, `34-back`) to inspect profile motion, `--motion-vfx` when locomotion clips (`Swim`, `Fly`, `Run`) also emit runtime VFX (without failing if a plain walk has none), `--action-view <view>` for action silhouettes, `--extra Clip@time[:view][:vfx]` or `--extras Clip1@t1:view:vfx,Clip2@t2` to inspect additional clips in an expanded multi-row sheet, `--background light` when verifying light-backdrop contrast, and `--vfx` when the action frame should show an effect. Use `--browser` if you need to point to a particular browser executable.
 
 ```bash
-npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion AirSwim --motion-view side --action LightningBurst --peak 0.53 --background light
+npm run capture-studio -- --studio ./index.html --out ./studio-contact-sheet.png --locomotion Swim --motion-view side --motion-vfx --action TentacleSlam --peak 1.0 --vfx --extras "InkMaelstrom@1.5:34-front:vfx,IdleFloat@2.2:34-front:vfx" --background dark
 ```
 
 Read the final `@@RESULT` for the actual clip times, browser errors, and any `UNVERIFIED` views. The VFX pixel comparison records whether the effect changed the action frame. Judge the effect's quality in playback at the intended delivery view. A static asset with no requested clips has two rendered views and two `NOT_APPLICABLE` panels. Open `studio-contact-sheet.png` when it was produced. If the local browser or driver is unavailable, use an available browser tool or viewer and record the evidence it can provide.

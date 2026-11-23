@@ -243,8 +243,29 @@ assert.throws(() => partsToGlb({ a: [...cube, NaN, 0, 0, 0, 0, 0, 0, 0, 0] }), /
     `);
     const js = runRigged(join('esm', 'asset.js'), join('results', 'sample-js.glb'));
     assert.deepEqual(js.before, { tris: 12, meshes: 1, skins: 0, bones: 0, vertexColorMeshes: 0 });
+    assert.equal(js.gates?.find((gate) => gate.gate === 'RG8 topology')?.pass, true);
     assert.ok(!js.gates?.some((gate) => gate.gate.startsWith('RG6') || gate.gate.startsWith('RG7')));
-    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS');
+
+    // RG8 catches overlapping/open edges after GLB reload and honors --open for intentional sheets
+    const openSheet = 'openSheet.ts';
+    writeFileSync(join(out, openSheet), `
+      export function buildSheet(_p: unknown, THREE: any) {
+        const root = new THREE.Group();
+        const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+        box.name = 'body';
+        const geo = new THREE.PlaneGeometry(0.5, 0.5);
+        const flag = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ side: THREE.DoubleSide }));
+        flag.name = 'flag_sheet';
+        root.add(box, flag);
+        return root;
+      }
+    `);
+    const rg8Fail = spawnTsx(rigCli, ['--module', openSheet, '--out', 'sheet-fail.glb'], { cwd: out, env });
+    assert.equal(rg8Fail.status, 2, rg8Fail.stdout + rg8Fail.stderr);
+    assert.equal(parseResult(rg8Fail.stdout)?.gates?.find((g) => g.gate === 'RG8 topology')?.pass, false);
+    const rg8OpenOk = runRigged(openSheet, 'sheet-open-ok.glb', '--open', 'flag_sheet');
+    assert.equal(rg8OpenOk.gates?.find((g) => g.gate === 'RG8 topology')?.pass, true);
+    console.log('External rigged export: injected TS, bare-import skinned TS, ESM JS, RG8 topology');
   } else {
     console.log('External rigged export: injected TS passed. Bare imports require Node 22.15+ or 24+ for the skill fallback.');
   }

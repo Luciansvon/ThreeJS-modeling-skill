@@ -22,7 +22,7 @@ const viewNames: Record<StudioView, string> = {
   back: 'Back',
   top: 'Top',
 };
-const backgrounds: Record<StudioBackground, string> = { dark: '#202b3a', light: '#c8ced8' };
+const backgrounds: Record<StudioBackground, string> = { dark: '#0d1422', light: '#eef2f6' };
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function disposeObjectTree(root: THREE.Object3D) {
@@ -117,17 +117,22 @@ export async function startStudio(
     scene.background = sceneBgColor;
     scene.add(root);
     // Three.js caches a skinned mesh's culling sphere. Its animated vertices can leave that sphere.
-    root.traverse((object) => { if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false; });
+    root.traverse((object) => {
+      if ((object as THREE.SkinnedMesh).isSkinnedMesh) object.frustumCulled = false;
+      if ((object as THREE.Mesh).isMesh) (object as THREE.Mesh).castShadow = true;
+    });
 
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       const room = new RoomEnvironment();
       const pmrem = new THREE.PMREMGenerator(renderer);
       scene.environment = pmrem.fromScene(room).texture;
-      scene.environmentIntensity = 0.65;
+      scene.environmentIntensity = 0.45;
       room.dispose();
       pmrem.dispose();
     } catch (error) {
@@ -135,16 +140,35 @@ export async function startStudio(
       return;
     }
 
-    const key = new THREE.DirectionalLight('#fff4df', 2.35);
-    key.position.set(-3, 6, 4);
-    scene.add(key, new THREE.HemisphereLight('#edf6ff', '#6c7480', 1.25));
     const width = Math.max(0.001, sampled.getSize(new THREE.Vector3()).length());
-    const darkGrid = new THREE.GridHelper(width * 1.8, 16, '#65778e', '#4a5b70');
-    const lightGrid = new THREE.GridHelper(width * 1.8, 16, '#7d8696', '#a1a9b8');
     const center = sampled.getCenter(new THREE.Vector3());
+    const span = Math.max(2, width * 0.85);
+    const key = new THREE.DirectionalLight('#fff5e6', 2.45);
+    key.position.set(center.x - span * 0.9, span * 1.8, center.z + span * 1.2);
+    key.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.bias = -0.0005;
+    key.shadow.camera.left = -span;
+    key.shadow.camera.right = span;
+    key.shadow.camera.top = span;
+    key.shadow.camera.bottom = -span;
+    key.shadow.camera.near = 0.2;
+    key.shadow.camera.far = Math.max(20, width * 6);
+    const rim = new THREE.DirectionalLight('#7cc8ff', 0.85);
+    rim.position.set(center.x + span, span * 1.2, center.z - span * 1.3);
+    rim.target.position.set(center.x, Math.max(0, center.y * 0.5), center.z);
+    scene.add(key, key.target, rim, rim.target, new THREE.HemisphereLight('#dceaff', '#2a3548', 0.68));
+    const darkGrid = new THREE.GridHelper(width * 1.8, 16, '#32445d', '#1e2c40');
+    const lightGrid = new THREE.GridHelper(width * 1.8, 16, '#9ca8ba', '#cbd3df');
     darkGrid.position.set(center.x, 0, center.z);
     lightGrid.position.set(center.x, 0, center.z);
-    scene.add(darkGrid, lightGrid);
+    const shadowGeo = new THREE.PlaneGeometry(width * 2.4, width * 2.4);
+    shadowGeo.rotateX(-Math.PI / 2);
+    const shadowPlane = new THREE.Mesh(shadowGeo, new THREE.ShadowMaterial({ opacity: 0.24 }));
+    shadowPlane.position.set(center.x, 0.001, center.z);
+    shadowPlane.receiveShadow = true;
+    scene.add(darkGrid, lightGrid, shadowPlane);
 
     const vfxGroup = new THREE.Group();
     vfxGroup.name = '_studio_vfx';
@@ -442,6 +466,17 @@ export async function startStudio(
     controls.addEventListener('change', () => { if (!fitting) draw(); });
 
     setEffectsEnabled(true);
+    const initialIndex = config.initialClip
+      ? clips.findIndex((clip) => clip.name === config.initialClip)
+      : (config.autoplay && clips.length ? Math.max(0, clips.findIndex((clip) => /idle/i.test(clip.name))) : -1);
+    if (config.initialClip && initialIndex < 0) {
+      throw new Error(`Unknown initial clip "${config.initialClip}"`);
+    }
+    if (initialIndex >= 0) {
+      selectClip(initialIndex);
+      applyPose(0);
+      clipSelect.value = String(initialIndex);
+    }
     syncAnimation();
     resize();
     checkRenderedFrame();
@@ -452,6 +487,10 @@ export async function startStudio(
       notice.hidden = true;
     }
     new ResizeObserver(resize).observe(stage);
+    if (config.autoplay && initialIndex >= 0 && (clips[initialIndex]?.duration ?? 0) > 0 && !ticking) {
+      ticking = requestAnimationFrame(tick);
+      syncAnimation();
+    }
   } catch (error) {
     fail('javascript', error);
   }

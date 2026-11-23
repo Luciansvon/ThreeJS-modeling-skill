@@ -20,10 +20,10 @@ Build every asset (single or composite) as a **pure, seeded function**. The live
 
 **Before modeling, confirm three things:** Before writing full 3D model code on a build, send **one concise numbered message** with recommended defaults. Skip choices already answered explicitly in the session, but **always confirm the brief summary** first:
 1. **Brief summary & reference check:** summarize asset, style, requested clips/VFX, and deliverables for confirmation. If a reference uses a static turnaround pose (T-pose/A-pose, upright cobra sit, stiff parallel legs, flat-spread wings), note it sets proportions and bind/rest pose only—animations start from natural creature locomotion posture (`references/rigging-biped.md`). Suggest re-uploading missing or cropped images.
-2. **Work mode:** `1) Quick`, `2) Balance` *(recommended default)*, or `3) Quality`—following `references/work-modes.md` for reference re-inspection rounds, QA gates, VFX depth, and visual polish loops.
+2. **Work mode:** `1) Quick` (`Fast`), `2) Balance` *(recommended default)*, or `3) Quality`—all modes keep full geometry, `new THREE.Color(hex)` accuracy, anchored VFX, and lively motion; `Fast` runs `G3` palette only (0 `G4` overhead), while `Balance`/`Quality` add `G4` CIEDE2000 regional color QC (`references/work-modes.md`).
 3. **Preview mode:** `A) Fast Preview` *(recommended default: orbit, zoom, clip scrub)* or `B) Full Preview` *(camera presets, backdrop/VFX toggles, rig/clip inspection, GLB verify)*. Do not build a heavy studio before the user chooses (`references/studio-preview.md`). Offer optional two-stage approval (blockout first) for complex assets.
 
-When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (articulated rig + micro-motion like breathing, blinks, follow-through; be **as creative as possible with zero creative limits** on layered particles, sparks, dust, debris, trails, glow, shockwaves, and small details—default to rich layered VFX unless minimal effects are requested; preview-only `_studio_vfx` does not count toward export polygon budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
+When requirements remain open, ask only what is missing in the same message: reference & style, surface & materials matched to viewing distance, animation & **unrestricted VFX creativity** (articulated rig + lively multi-beat choreography & VFX references in `references/rigging-biped.md` and `references/studio-preview.md` as creative inspiration, not hard limits—default to rich layered VFX anchored to live moving bones or `Y≈0` ground contacts; preview-only `_studio_vfx` is exempt from export budgets), and target platform/kind/deliverables (`web`, `mobile`, `roblox`, `desktop`; `prop`, `hero`, `creature`, `vehicle`, `building`; `.glb`, code, or both).
 
 **Target:** `three` ≥ r170 as ES modules, checked against the official migration notes through r187 (§12 in `references/export.md`).
 
@@ -35,8 +35,9 @@ When requirements remain open, ask only what is missing in the same message: ref
 
 | You are doing | Read | Code |
 |---|---|---|
-| Choosing `Quick` / `Balance` / `Quality`, polish loops, shape vs detail review | `references/work-modes.md` | |
-| Materials, flat shading, procedural or image-generated textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/jitter.ts` |
+| Choosing `Quick`/`Fast`/`Balance`/`Quality`, `G4` color QC policy, shape vs detail review | `references/work-modes.md` | |
+| Reference matching, Semantic ROI cache, `G1–G5` (`G4` CIEDE2000 ΔE00) | `references/reference-matching.md` | `scripts/color-qc.ts`, `scripts/ref-intake.ts`, `scripts/ref-compare.ts` |
+| Materials, flat shading, `VoxelGrid`, procedural/image textures, vertex jitter (§4, §5) | `references/look.md` | `src/lowpoly.ts`, `src/voxel.ts`, `src/jitter.ts` |
 | Custom geometry, winding, mirrored parts, overlays (§6, §7) | `references/geometry.md` | `src/geometry.ts`, `src/overlay.ts` |
 | Creature, multi-limb, vehicle, hull, wing, pure triangle kernel (§6.2, §6.3) | `references/creatures.md` | `src/tri.ts`, `src/organic.ts` |
 | Anything that animates, humanoid, SkinnedMesh, extrude, texture (§6.4 to §6.7) | `references/rigging-biped.md` | `src/skinnedRig.ts`, `src/rig.ts`, `src/biped.ts`, `src/texture.ts` |
@@ -117,7 +118,7 @@ Code: `src/params.ts`. API:
 
 ## 13. Checklist (tick per asset, do not ship pre-ticked)
 
-Run `qa-asset.ts --tris tris.json` on final grounded geometry, or pass `--module ./kernel.ts --export buildXTris` for a pure kernel. Add `--symmetric` for intended symmetry. Use `review.png` to inspect the geometry and the rendered preview to judge its appearance.
+Run `qa-asset.ts --module ./asset.ts --grounded` directly on pure kernels OR `(params, THREE)` builders (`tris.json` optional). Add `--symmetric` for intended symmetry. Never run inline `npx tsx -e` in Windows PowerShell (write a `.ts` script instead to prevent shell hangs). Inspect `review.png` for geometry and colored `capture-studio.ts` renders for appearance.
 
 On revision, check what changed using the least expensive evidence that can reveal a problem. Run applicable checks on the delivered build. Keep detailed logs with the asset and summarize the observed result and material gaps. If a tool is unavailable, continue independent work and report any unresolved requested check at handoff. See `references/qa-gates.md` and, for previews, `references/studio-preview.md`.
 
@@ -128,14 +129,13 @@ Determinism and parameters
 - [ ] Derived constraints prevent degenerate shapes; sub-seeds fit the seed range
 
 Reference (only when the user gave an image)
-- [ ] Reopen the reference alongside rendered studio views (never `review.png` alone) per `references/work-modes.md`; verify identity features (§15).
+- [ ] Cache semantic region colors in `ref.json` once at intake (`uncertain` if unclear); verify `G3` + `G4` CIEDE2000 (`Balance`/`Quality`, max 1 fix loop); reopen reference alongside studio views per `references/work-modes.md`.
 
 Geometry and look
 - [ ] Axes follow §0; faces described by axis; right = −X when forward = +Z
 - [ ] Custom geometry has positive `signedVolume`, also after mirroring; `DoubleSide` only on zero-thickness sheets
-- [ ] Mirrored parts go through `add()`/`addTris` or `mirrorTris`, never a bare negative-scale `applyMatrix4`
-- [ ] Check the custom builder for determinism, winding and stream isolation
-- [ ] Normals, color and surface detail reproduce the intended style in the reloaded asset. Use `bakeFlat` and `paint` for deliberately faceted parts.
+- [ ] Mirrored parts go through `add()`/`addTris`, `mirrorTris`, or `VoxelGrid.mirrorX()` (`src/voxel.ts`), never a bare negative-scale `applyMatrix4`
+- [ ] Normals and linear vertex colors (`new THREE.Color(hex)`, never `/ 255`) preserve contrast in the reloaded asset; use `bakeFlat` and `paint` for faceted parts.
 - [ ] Jitter is applied before `add()`, seam-welded, with bounding volumes recomputed
 - [ ] Metal parts have an environment map or a lowered `metalness`
 - [ ] Overlays use a constant-distance inset and a small lift against z-fighting
@@ -200,13 +200,11 @@ Promote it to the full schema form (§1) as soon as it gets sliders, presets, or
 
 ## 15. Reference matching (when the user gives an image, screenshot or sketch)
 
-Keep a short `ref-spec.md` with visible views, proportions, identifying features and material character. Reuse `ref.json` and its checked masks while the input stays the same. Compare blockout proportions and silhouette with `ref-compare.ts`, then compare the actual render with the source image. Reopen or crop the original whenever expression, seams or material need a closer look. Rerun the numeric checks affected by a revision. For the detailed procedure and thresholds see `references/reference-matching.md`.
+Write `ref-spec.md`, cache `ref.json` (`--grid auto` handles uneven turnarounds, supports `front`/`back`/`side`/`top`/`34`/`34_back`) plus optional semantic regions (`--regions`). Verify `G1–G3`, plus `G4 regional color` CIEDE2000 (`Balance`/`Quality` only; zero overhead in `Fast`/`Quick`), then inspect colored studio captures (`capture-studio.ts --vfx --motion-vfx`) against reopened reference crops (`references/reference-matching.md`).
 
 ## 16. GLB file (when the user wants a `.glb`)
 
-For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`). It reruns Q1 to Q5 and verifies the output with E1 to E6.
-
-When the GLB must retain vertex colors, materials, UVs, maps, rigging (`RigBuilder` or `SkinnedMesh`), or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--static-clips a,b]`. It runs `GLTFExporter` → disk → `GLTFLoader` and reports RG1–RG7 (`@@RESULT`), checking track binding and per-clip motion before and after export. See `references/glb-export.md`.
+For geometry-only GLB, run `qa-asset.ts`, then `npx tsx scripts/export-glb.ts --module ./kernel.ts --export buildXTris --out asset.glb` (or `--tris tris.json`) to verify Q1–Q5 and E1–E6. When retaining vertex colors, materials, UVs, skins, or clips, run `npx tsx scripts/export-rigged-glb.ts --module ./asset.ts --export buildXAsset --out asset.glb [--open a,b] [--static-clips a,b]` to verify `RG1–RG8` (including reloaded GLB Q1–Q4 topology and per-clip motion parity, `references/glb-export.md`).
 
 ## 17. Budget and LOD (when there is a target platform, or the asset may be too heavy)
 
@@ -742,7 +740,7 @@ Since r186 `Object3D` has its own `dispose()`; custom subclasses must call `supe
 
 Reference for `threejs-asset-generator`. Use it to choose geometry, normals, materials, and texture treatment from the brief or reference. Section numbers match `SKILL.md`.
 
-Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`)
+Contents: §4 Surface style, materials, and texture choices (`lowpoly.ts`) · §5 Vertex jitter (`jitter.ts`) · §5.1 Manifold voxel grid (`voxel.ts`)
 
 ## 4. Surface style and materials
 
@@ -829,6 +827,17 @@ Code: `src/jitter.ts`. API:
 
 
 The pinned base is measured from the geometry's own bounding box (primitives are centered on the origin, so a fixed `|y| < 0.02` test would pin the equator, not the bottom). Bounding volumes are recomputed after displacement, and normals are computed once, in `bakeFlat`. Express `amount` relative to the shape size (for example `0.12 * radius`), not as a global constant.
+
+## 5.1 Manifold voxel grid builder (`src/voxel.ts`)
+
+For stepped voxel assets, use `VoxelGrid` and `createVoxelMaterials` (`src/voxel.ts`) so interior faces are culled **only within the same material** (preventing open-edge holes where emissive eyes or markings meet the body), duplicate diagonal 2x2 pinches are bridged symmetrically, and vertices convert hex colors safely via `new THREE.Color(hex)` (never `/ 255`):
+
+- `createVoxelMaterials(THREE)` → `{ body, glow }` (`MeshStandardMaterial` flat matte body + unlit `MeshBasicMaterial({ vertexColors: true, toneMapped: false })` for vivid eyes/markings in 2 draw calls)
+- `new VoxelGrid({ voxelSize, origin, symAxis: 'even' | 'odd' })`
+- `.set(x, y, z, color, material?, group?)` / `.fillBox(...)` / `.fillEllipsoid(...)` / `.mirrorX()`
+- `.fixDiagonalPinches()` / `.ground(groundY?)` / `.buildParts()` / `.buildGeometries(THREE, { vertexT })` / `.buildMeshes(THREE, materials)`
+
+For skinned voxel limbs, emit **one** continuous `SkinnedMesh` per limb/material and pass `{ vertexT }` to `attachCurveSkinWeights` (`src/skinnedRig.ts`) rather than merging overlapping integer voxel bone segments into a single buffer.
 ~~~
 
 ## references/rigging-biped.md
@@ -867,7 +876,7 @@ Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-l
 | **Quadrupeds** *(wolves, cats, dinos)* | Sliding like a stiff table on 4 parallel straight legs | Break legs into asymmetric stride/cantilever gait with spine flex/extension, weight transfer, head bob, and tail counter-balance. |
 | **Serpentine & sky dragons** *(snakes, eels)* | Staying upright like a coiled cobra while "flying" | **Pitch/flatten the spine horizontally along the travel axis (`~~~>`)** for flying/swimming clips (back up `+Y`, belly down `-Y`, head level forward `+Z`, tail uncurled trailing `-Z`), driving a clear traveling sinusoidal wave from neck through torso to tail tip. |
 | **Winged flyers** *(birds, dragons, bats)* | Keeping stiff straight wings splayed flat | Fold wings cleanly in ground idle; pitch torso forward in flight with phase-delayed wingbeats (shoulder leads, wrist/tips trail) and opposing body lift. |
-| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Align along the horizontal swim axis with traveling lateral or undulating waves increasing in amplitude toward the tail or tentacle tips. |
+| **Aquatic & tentacled** *(fish, sharks, octopi)* | Rigid plank body or stiff symmetrical arms | Pitch/align torso along the horizontal swim axis (`~1.3–1.55 rad` forward pitch on upright turnarounds, counter-pitching head/eyes forward) with traveling sinusoidal waves increasing in amplitude toward the tail or tentacle tips. |
 | **Multi-legged** *(spiders, crabs, insects)* | All legs swinging identically in robotic unison | Drive alternating tripod or metachronal stepping waves across opposite legs with opposing body bounce and subtle yaw/roll. |
 
 **Mandatory motion posture sanity check:** Inspect the mid-locomotion frame from a **side view** (and 3/4 view) in rendered studio preview (`references/studio-preview.md`). If the overall spine/body silhouette during flight, swim, walk, or run still matches the static reference sheet stance, fix the clip posture before delivery.
@@ -877,6 +886,16 @@ Whatever neutral stance a turnaround sheet uses (T-pose, A-pose, upright cobra-l
 - For smooth procedural movement, start with 24–30 fps and shortest-path quaternion interpolation. Match timing to the brief, including held poses for a stop-motion look when requested.
 - Give actions a readable setup, peak, and recovery, and layer expressive micro-motion (breathing chest/shoulder heave, blinks, ear/tail/cloth/hair secondary sway, weight shift, and landing settle). Have no artificial limits on creative animation polish or complementary preview VFX (`references/studio-preview.md`).
 - Reuse the first pose at the end of a loop. For a one-shot or chained action, author the final pose to meet the next clip. Watch the transition during playback.
+
+### Creative animation choreography reference (inspiration, not hard rules)
+
+Treat these patterns as creative inspiration to spark character-appropriate motion—never as rigid templates to force onto every creature:
+
+- **Living `Idle` multi-beat arcs (~4.5–6 s):** Go beyond simple up-down static breathing. Layer calm base breathing with a brief in-character mid-clip fidget (`~45%–80%` — e.g., curious head look-around + ear/tentacle flick, ghost mischief chuckle/shiver, predatory wing stretch, or mechanical scan) paired with subtle synchronized idle VFX, then ease cleanly back to rest for a seamless loop.
+- **Dynamic locomotion variations (stay facing forward `+Z`):** Avoid stiff repetitive pistons when a showcase clip suits flair. Depending on the archetype, locomotion can blend forward propulsion with characteristic maneuvers—such as an agile swimmer/flyer performing a smooth mid-glide `360°` axial **barrel roll** (rolling sideways along its body axis while continuing forward, tentacles/tail trailing in a spiral), a flyer banking into a turn, or a sneaky brawler adding a low-gravity hop stride—before settling cleanly into the loop. Keep separate plain loops (`Walk` vs `WalkFidget`, `Swim` vs `SwimRoll`) whenever the user explicitly asks for strict game-controller cycles.
+- **Four-beat action arcs:** Author dramatic actions with **anticipation** (coil/draw back + gathered charge VFX) → **climax impact** → **follow-through recoil** → **grounded settle**, keeping facial landmarks and silhouette readable throughout.
+- **Continuous `360°` axial roll technical safeguard:** `THREE.QuaternionKeyframeTrack` takes shortest-path SLERP between consecutive keys; jumping `0° → 360°` yields zero motion and `0° → 180°` can flip backward. Whenever authoring a full `360°` spin or barrel roll, author `>= 4–5` sequential keys (`0° → 90° → 180° → 270° → 360°`, plus `±60°` steps when sampled at 30 fps) and keep adjacent quaternion dot products `>= 0` so rotation completes smoothly in one direction.
+
 - Put wheels and propellers on spin pivots, steering on a parent pivot, and doors on bounded hinges. Check clearances across the intended range.
 
 Code: `src/rig.ts`. API:
@@ -1078,54 +1097,52 @@ Add to a project's tests as well: `RigBuilder` builds the same bone names and me
 ## references/work-modes.md
 
 ~~~markdown source-excerpt
-# Work modes: Quick, Balance, and Quality
+# Work modes: Quick (Fast), Balance, and Quality
 
-Reference for `threejs-asset-generator`. Read this after the user selects a work mode at intake to apply the required reference re-inspection rounds, QA gates, VFX depth, and visual checks.
+Reference for `threejs-asset-generator`. Read this after the user selects a work mode at intake to apply the required reference re-inspection rounds, QA gates, G4 regional color QC policy, VFX depth, and visual checks.
 
-Contents: Mode comparison · Quick mode · Balance mode · Quality mode · Checking shape (`review.png`) vs checking detail (studio capture)
+Contents: Mode comparison · Quick (Fast) mode · Balance mode · Quality mode · Checking shape (`review.png`) vs checking detail (studio capture)
 
 ## Mode comparison
 
-| Requirement | `Quick` | `Balance` (Default) | `Quality` |
+| Requirement | `Quick` (`Fast`) | `Balance` (Default) | `Quality` |
 |---|---|---|---|
-| **Reference inspection** | Once at intake (`ref-spec.md`) | At intake + reopen side-by-side with studio capture | At intake + **reopen side-by-side on every polish round** |
-| **Build & detail** | Coarse blockout, primary silhouette, base colors | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
-| **Refinement rounds** | None (single build) or 1 quick fix if QA fails | 1 visual & geometry polish pass after first render | **At least 2 visual polish passes** until reference & pose read cleanly |
-| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` | `Q1–Q10` (`qa-asset.ts`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (including `--lods` when relevant) |
-| **Rig & GLB motion gates** | Basic `rig-check` if rigged; skip round-trip unless asked | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG7`) when GLB requested | Mandatory `R1–R7` + `RG1–RG7` per-clip motion evidence before & after export |
-| **Locomotion posture check** | Basic check that clips move (`R7`) | Side-view sanity check leaving static reference pose | Mandatory side + 3/4 check for all 6 archetypes (`references/rigging-biped.md`) |
-| **Runtime VFX & micro-motion** | Optional / simple preview cues | Rich layered VFX for requested actions + idle micro-motion | Full unrestricted multi-layered VFX + rich secondary motion across all clips |
-| **Preview & captures** | `review.png` or `Fast Preview` | `Fast` or `Full Preview` + 1 `capture-studio.ts` contact sheet | `Full Preview` / multi-clip captures across **both dark and light backdrops** |
+| **Reference inspection** | Once at intake (`ref-spec.md` + cache `regions` if provided) | Intake + `ref-compare` + **1 side-by-side reopen** with studio capture | Intake + `ref-compare` + **reopen side-by-side on every polish round** |
+| **Build & detail** | Full model, accurate proportions, bright emissive eyes/accents (`new THREE.Color(hex)`) | Full model, clean joins, targeted surface/material detail | High-craft proportions, facial landmarks, markings, crisp seams |
+| **Refinement rounds** | Single build + fix only if QA or colored render fails | **1** visual & geometry polish pass after first render | **>= 2** visual polish passes until reference & pose read cleanly |
+| **Geometry & budget gates** | `Q1–Q4`, `Q6`, `review.png` (`qa-asset.ts --module`) | `Q1–Q10` (`qa-asset.ts --module`) + `mesh-stats.ts` | `Q1–Q10` + `mesh-stats.ts` (with `--lods` when relevant) |
+| **Color QC (`G3` & `G4`)** | **`G3` palette only** (`0` `G4` overhead; `--mode fast`) | `G3` + **`G4` Regional Color once** after materials (max 1 fix round) | `G3` + **`G4` Regional Color** + verify once after fix (no infinite loop) |
+| **Rig & GLB motion gates** | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) when GLB asked | `rig-check.ts` (`R1–R7`) + `export-rigged-glb.ts` (`RG1–RG8`) | Full `R1–R7` + `RG1–RG8` evidence pre & post export |
+| **Locomotion posture check** | Side-view sanity check (`capture-studio.ts --motion-view side`) | Side-view + `--motion-vfx` / `--extras` across active clips | Dual dark+light multi-view checks for all 6 archetypes |
+| **Runtime VFX & choreography** | Style-matched layered VFX & lively clips (no deliberate throttling) | Rich layered VFX, anchored positions, lively idle & movement | Full multi-layered VFX, nuanced secondary follow-through & contrast |
+| **Preview & captures** | `Fast` or `Full Preview` + **1** colored `capture-studio.ts` check | `studio_preview.html` + `capture-studio.ts` (`--vfx --motion-vfx`) | `studio_preview.html` + **both dark and light** `capture-studio.ts` sheets |
 
-## Quick mode
+## Quick (Fast) mode
 
-Use **Quick** when the user wants rapid blockout exploration or an immediate silhouette prototype:
-1. Build the grounded, outward-wound asset with deterministic seed (`??`).
-2. Run `scripts/qa-asset.ts` (`Q1–Q4`, `Q6`, `review.png`) and fix any winding, open-edge, or grounding errors.
-3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`) and run `scripts/rig-check.ts` so clips are valid.
-4. Deliver the model and `Fast Preview` (or `review.png`), clearly marking unrun checks (`ref-compare`, multi-round visual polish, or GLB round-trip if not run) as `Unchecked`.
+Never deliberately degrade visuals into a crude blockout or weak dot VFX. **Quick** speeds up delivery by skipping multi-round polish loops and skipping `G4` regional color checks (`G3` only, zero `G4` overhead):
+1. Build the grounded, outward-wound asset with deterministic seed (`??`), clean manifold topology (`src/voxel.ts` for voxel builds), accurate `new THREE.Color(hex)` vertex/material colors, and natural creature locomotion posture (`references/rigging-biped.md`).
+2. Run `scripts/qa-asset.ts --module` (`Q1–Q4`, `Q6`, `review.png`) and fix any winding, open/duplicated edge, or grounding error.
+3. If animated, use `QuaternionKeyframeTrack` (`<node>.quaternion`) and run `scripts/rig-check.ts` + `scripts/export-rigged-glb.ts` (checks `RG1–RG8` including reloaded GLB topology).
+4. Pack the preview (`scripts/pack-studio.ts`) and run **1** colored `scripts/capture-studio.ts` check (never rely on `review.png` to judge real colors or VFX). Pass `--mode fast` if invoking `ref-compare.ts` so `G4` adds zero overhead.
 
 ## Balance mode (recommended default)
 
 Use **Balance** for normal production deliverables:
-1. Inspect the source reference at intake (`references/reference-matching.md`), record `ref-spec.md`, and note whether the reference uses a static turnaround pose (T-pose, upright cobra sit, stiff stance, flat-spread wings).
-2. Run geometry QA (`scripts/qa-asset.ts`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts` when clean orthographic or 3/4 reference masks apply.
-3. Author natural creature locomotion postures (`references/rigging-biped.md`) and unrestricted layered runtime VFX (`references/studio-preview.md`).
-4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG7`) when `.glb` is requested.
-5. Capture rendered views (`scripts/capture-studio.ts`), **reopen the source reference image side-by-side** with the studio contact sheet, perform at least 1 visual polish pass fixing any landmark, seam, or locomotion posture issues, and re-run affected gates.
+1. Inspect the source reference once at intake (`references/reference-matching.md`), record `ref-spec.md`, note static turnaround poses, and extract/cache `ref.json` (including optional Semantic Color Mapping regions — never re-analyze unchanged references).
+2. Run geometry QA (`scripts/qa-asset.ts --module`), budgets (`scripts/mesh-stats.ts`), and `scripts/ref-compare.ts --mode balance` (`G1`, `G2`, `G3`, plus **one** `G4` CIEDE2000 regional color check after materials are applied; fix only failing regions once).
+3. Author natural creature locomotion postures (`references/rigging-biped.md`) and anchored layered VFX matching the asset's visual style (`references/studio-preview.md`).
+4. Run `scripts/rig-check.ts` (`R1–R7`) and `scripts/export-rigged-glb.ts` (`RG1–RG8`) when `.glb` is requested.
+5. Capture rendered studio views (`scripts/capture-studio.ts --vfx --motion-vfx --extras ...`), **reopen the source reference image side-by-side** with the sheet, execute 1 visual polish pass fixing any landmark, seam, posture, or VFX anchoring mismatch, and re-run affected gates.
 
 ## Quality mode
 
-Use **Quality** when visual fidelity, expressive animation, and polish matter most:
-1. Execute every step of **Balance**, plus **at least 2 deliberate visual polish rounds**.
-2. On **every** polish round, reopen the original reference image directly via image inspection (never rely on text memory or `review.png` alone), place it mentally or visually alongside the rendered studio captures, and list concrete mismatches (eye shape/placement, horns/ears, snout, markings, color warmth, joint seams, silhouette curves, and VFX timing) before editing.
-3. Explicitly inspect the **side view** and **3/4 view** of every locomotion clip (`Walk`, `Run`, `FlySlither`, `Swim`, `DragonAscent`) to confirm the whole body spine, limbs, wings, and tail adopt natural creature posture instead of remaining locked to the reference sheet pose.
-4. Capture `studio-contact-sheet.png` across both `--background dark` and `--background light` (plus extra sheets when multiple action VFX clips exist), ensuring HUD controls stay clear and zero console/WebGL errors occur.
+Use **Quality** when maximum visual fidelity, expressive animation, and verified multi-backdrop contrast matter most:
+1. Execute every step of **Balance**, plus **>= 2 deliberate visual polish rounds** reopening the original reference side-by-side on every round.
+2. Run `G4` regional color checks (`--mode quality`) after final materials and verify once after any correction (capped at one automatic correction pass per check — never loop indefinitely).
+3. Inspect **side view** and **3/4 views** across locomotion and action clips, verifying natural creature posture (`references/rigging-biped.md`), VFX anchoring (`references/studio-preview.md`), and contrast across both `--background dark` and `--background light` `capture-studio.ts` sheets.
 
 ## Checking shape (`review.png`) vs checking detail (studio capture)
 
-Do not confuse geometry QA renders with final appearance review:
-
-- **`review.png` (`scripts/qa-asset.ts`) checks shape and topology only:** It renders an orthographic 2×2 view with **arbitrary flat colors per part** and magenta highlights for back-facing triangles. Use it to verify coarse silhouette, part proportions, grounding (`Y = 0` grey line), winding, and watertightness (`Q10`). **Never** use `review.png` to judge real colors, surface markings, facial detail, materials, VFX, or animation realism.
-- **Studio renders (`scripts/capture-studio.ts` / `studio_preview.html`) check real detail and motion:** Always inspect actual rendered frames (with real materials, vertex/texture colors, lighting, animations, and `_studio_vfx`) alongside the **reopened source reference** to sign off on likeness, joint gaps during bending, natural locomotion posture, and VFX quality (`references/studio-preview.md`, `references/reference-matching.md`).
+- **`review.png` (`scripts/qa-asset.ts`) checks shape and topology only:** Arbitrary per-part pastel colors + magenta back faces. Never judge real colors, materials, or VFX from `review.png`.
+- **Studio renders (`scripts/capture-studio.ts` / `studio_preview.html`) check real colors, motion, and VFX:** Every mode (including `Quick`) must inspect at least one real studio capture before finishing.
 ~~~

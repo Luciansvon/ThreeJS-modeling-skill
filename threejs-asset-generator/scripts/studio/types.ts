@@ -11,6 +11,8 @@ export type StudioConfig = {
   margin: number;
   frontSide: 'left' | 'right';
   background: StudioBackground;
+  initialClip?: string;
+  autoplay?: boolean;
 };
 
 export type StudioVfxContext = {
